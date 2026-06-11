@@ -116,7 +116,7 @@ def _validate_manifest_row(row: dict) -> None:
     missing = REQUIRED_MANIFEST_FIELDS - set(row)
     if missing:
         raise ValueError(f"Manifest row missing fields: {sorted(missing)}")
-    if not isinstance(row.get("token_count"), int) or not isinstance(row.get("byte_count"), int):
+    if type(row.get("token_count")) is not int or type(row.get("byte_count")) is not int:
         raise ValueError("Manifest counts must be integers")
     if row["token_count"] < 0 or row["byte_count"] < 0:
         raise ValueError("Manifest counts must be non-negative")

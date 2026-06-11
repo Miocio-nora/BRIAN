@@ -52,6 +52,18 @@ def test_read_manifest_rejects_invalid_counts_and_split(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="Unsupported split"):
         read_manifest(path)
 
+    invalid = row.__dict__ | {"token_count": True}
+    path.write_text(json.dumps(invalid) + "\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="Manifest counts must be integers"):
+        read_manifest(path)
+
+    invalid = row.__dict__ | {"byte_count": False}
+    path.write_text(json.dumps(invalid) + "\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="Manifest counts must be integers"):
+        read_manifest(path)
+
     path.write_text(json.dumps(["not", "an", "object"]) + "\n", encoding="utf-8")
 
     with pytest.raises(ValueError, match="Manifest row must be a JSON object"):
