@@ -85,6 +85,13 @@ Generate a routing report:
 python scripts/eval.py --config configs/eval/routing_eval.yaml --run <run_dir>
 ```
 
+Generate a stage gate report across multiple runs:
+
+```bash
+python scripts/make_stage_gate_report.py \
+  --runs <stage0_run> <stage1_run> <stage2_run> <stage3_run> <stage4_run> <stage5_run> <stage6_run>
+```
+
 Run tests:
 
 ```bash

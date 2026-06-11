@@ -1,0 +1,286 @@
+from __future__ import annotations
+
+import json
+import math
+from pathlib import Path
+from typing import Any
+
+from brian_sphere_llm.eval.routing_report import make_routing_report
+from brian_sphere_llm.utils.logging import write_json
+
+
+DEFAULT_THRESHOLDS = {
+    "fixed_route_loss_ratio_max": 1.03,
+    "stage3_loss_ratio_max": 1.20,
+    "route_imitation_fixed_min": 0.98,
+    "route_imitation_mixed_min": 0.90,
+    "route_entropy_min": 0.05,
+    "global_attention_mass_min": 1e-6,
+    "global_read_gate_min": 1e-6,
+}
+
+
+def make_stage_gate_report(
+    run_dirs: list[str | Path],
+    *,
+    output_path: str | Path | None = None,
+    thresholds: dict[str, float] | None = None,
+) -> Path:
+    thresholds = {**DEFAULT_THRESHOLDS, **(thresholds or {})}
+    summaries = [_summarize_run(Path(run_dir)) for run_dir in run_dirs]
+    by_stage = {summary["stage"]: summary for summary in summaries if summary["stage"]}
+    gates = {
+        "stage0_to_1": _gate_stage0(by_stage.get("stage0_baseline")),
+        "stage1_to_2": _gate_stage1(by_stage.get("stage1_fixed_route"), by_stage.get("stage0_baseline"), thresholds),
+        "stage2_to_3": _gate_stage2(by_stage.get("stage2_router_imitation"), thresholds),
+        "stage3_to_4": _gate_stage3(by_stage.get("stage3_scheduled_free_routing"), by_stage.get("stage1_fixed_route"), thresholds),
+        "stage4_to_5": _gate_stage4(by_stage.get("stage4_output_action")),
+        "stage5_to_6": _gate_stage5(by_stage.get("stage5_global_kv"), thresholds),
+        "stage6_to_scale": _gate_stage6(by_stage.get("stage6_parallel_passing")),
+    }
+    report = {
+        "run_count": len(summaries),
+        "runs": summaries,
+        "gates": gates,
+        "overall_status": _overall_status(gates),
+        "thresholds": thresholds,
+    }
+    if output_path is None:
+        output_path = Path("reports") / "stage_gate_report.json"
+    output_path = Path(output_path)
+    write_json(report, output_path)
+    return output_path
+
+
+def pearson_correlation(x_values: list[float], y_values: list[float]) -> float | None:
+    if len(x_values) != len(y_values) or len(x_values) < 2:
+        return None
+    x_mean = sum(x_values) / len(x_values)
+    y_mean = sum(y_values) / len(y_values)
+    x_dev = [x - x_mean for x in x_values]
+    y_dev = [y - y_mean for y in y_values]
+    denom_x = math.sqrt(sum(value * value for value in x_dev))
+    denom_y = math.sqrt(sum(value * value for value in y_dev))
+    if denom_x == 0.0 or denom_y == 0.0:
+        return None
+    return sum(x * y for x, y in zip(x_dev, y_dev)) / (denom_x * denom_y)
+
+
+def _summarize_run(run_dir: Path) -> dict[str, Any]:
+    if not (run_dir / "routing_report.json").exists() and (run_dir / "train_log.jsonl").exists():
+        make_routing_report(run_dir)
+    config = _read_yaml_if_exists(run_dir / "config_resolved.yaml")
+    model_stats = _read_json_if_exists(run_dir / "model_stats.json")
+    routing_report = _read_json_if_exists(run_dir / "routing_report.json")
+    eval_rows = _read_jsonl(run_dir / "eval_log.jsonl")
+    train_rows = _read_jsonl(run_dir / "train_log.jsonl")
+    stage = str(config.get("stage", "")) if config else _stage_from_name(run_dir.name)
+    final_eval = eval_rows[-1] if eval_rows else {}
+    final_train = train_rows[-1] if train_rows else {}
+    difficulty_corr = _difficulty_step_corr(train_rows)
+    summary = {
+        "run_dir": str(run_dir),
+        "stage": stage,
+        "model_name": model_stats.get("model_name", ""),
+        "has_checkpoint_latest": (run_dir / "checkpoint_latest" / "state.pt").exists(),
+        "has_checkpoint_best": (run_dir / "checkpoint_best" / "state.pt").exists(),
+        "has_eval_log": bool(eval_rows),
+        "has_train_log": bool(train_rows),
+        "validation_loss": _num(final_eval.get("validation_loss")),
+        "perplexity": _num(final_eval.get("perplexity")),
+        "train_loss": _num(final_train.get("loss")),
+        "routing": routing_report.get("summary", {}),
+        "latest_eval": final_eval,
+        "difficulty_step_correlation": difficulty_corr,
+    }
+    return summary
+
+
+def _gate_stage0(stage0: dict[str, Any] | None) -> dict[str, Any]:
+    checks = {
+        "checkpoint_resume_artifact": bool(stage0 and stage0["has_checkpoint_latest"]),
+        "eval_log_present": bool(stage0 and stage0["has_eval_log"]),
+        "validation_loss_finite": _finite(stage0.get("validation_loss") if stage0 else None),
+    }
+    return _gate("Stage 0 baseline trains, checkpoints, and evaluates deterministically", checks)
+
+
+def _gate_stage1(stage1: dict[str, Any] | None, stage0: dict[str, Any] | None, thresholds: dict[str, float]) -> dict[str, Any]:
+    ratio = None
+    if stage1 and stage0 and _finite(stage1.get("validation_loss")) and _finite(stage0.get("validation_loss")):
+        ratio = stage1["validation_loss"] / max(1e-9, stage0["validation_loss"])
+    checks = {
+        "loss_within_1_to_3_percent": ratio is not None and ratio <= thresholds["fixed_route_loss_ratio_max"],
+        "route_imitation_accuracy": _metric_at_least(stage1, "route_imitation_accuracy", thresholds["route_imitation_fixed_min"]),
+        "position_state_finite": _finite(_routing_metric(stage1, "position_norm_mean")),
+        "checkpoint_present": bool(stage1 and stage1["has_checkpoint_latest"]),
+    }
+    return _gate("Stage 1 fixed route wrapper matches baseline and router imitates fixed path", checks, {"loss_ratio": ratio})
+
+
+def _gate_stage2(stage2: dict[str, Any] | None, thresholds: dict[str, float]) -> dict[str, Any]:
+    checks = {
+        "route_imitation_accuracy": _metric_at_least(stage2, "route_imitation_accuracy", thresholds["route_imitation_mixed_min"]),
+        "lm_loss_finite": _finite(stage2.get("validation_loss") if stage2 else None),
+        "block_usage_non_degenerate": _block_usage_non_degenerate(stage2),
+        "checkpoint_present": bool(stage2 and stage2["has_checkpoint_latest"]),
+    }
+    return _gate("Stage 2 mixed pseudo routing is stable and non-degenerate", checks)
+
+
+def _gate_stage3(stage3: dict[str, Any] | None, stage1: dict[str, Any] | None, thresholds: dict[str, float]) -> dict[str, Any]:
+    ratio = None
+    if stage3 and stage1 and _finite(stage3.get("validation_loss")) and _finite(stage1.get("validation_loss")):
+        ratio = stage3["validation_loss"] / max(1e-9, stage1["validation_loss"])
+    checks = {
+        "validation_loss_not_collapsed": ratio is None or ratio <= thresholds["stage3_loss_ratio_max"],
+        "route_entropy_present": _metric_at_least(stage3, "route_entropy", thresholds["route_entropy_min"]),
+        "average_route_steps_present": _finite(_routing_metric(stage3, "average_route_steps")),
+        "checkpoint_present": bool(stage3 and stage3["has_checkpoint_latest"]),
+    }
+    return _gate("Stage 3 scheduled free routing remains stable", checks, {"loss_ratio_vs_stage1": ratio})
+
+
+def _gate_stage4(stage4: dict[str, Any] | None) -> dict[str, Any]:
+    exit_hist = _latest_exit_hist(stage4)
+    total_exits = sum(exit_hist.values()) if exit_hist else 0
+    immediate = exit_hist.get("1", 0) if exit_hist else 0
+    checks = {
+        "exit_distribution_present": bool(exit_hist),
+        "not_all_immediate_exit": bool(exit_hist) and immediate < total_exits,
+        "average_route_steps_present": _finite(_routing_metric(stage4, "average_route_steps")),
+        "checkpoint_present": bool(stage4 and stage4["has_checkpoint_latest"]),
+    }
+    return _gate("Stage 4 hard OUT produces a controllable exit distribution", checks, {"first_exit_step_histogram": exit_hist})
+
+
+def _gate_stage5(stage5: dict[str, Any] | None, thresholds: dict[str, float]) -> dict[str, Any]:
+    checks = {
+        "global_attention_mass_nonzero": _metric_at_least(stage5, "global_attention_mass", thresholds["global_attention_mass_min"]),
+        "global_read_gate_nonzero": _metric_at_least(stage5, "global_read_gate_mean", thresholds["global_read_gate_min"]),
+        "global_cache_slots_present": _metric_at_least(stage5, "global_cache_slots_mean", 1.0),
+        "checkpoint_present": bool(stage5 and stage5["has_checkpoint_latest"]),
+    }
+    return _gate("Stage 5 Global KV is active and measurable", checks)
+
+
+def _gate_stage6(stage6: dict[str, Any] | None) -> dict[str, Any]:
+    checks = {
+        "parallel_branch_count_present": _metric_at_least(stage6, "parallel_branch_count_mean", 1.0),
+        "parallel_score_margin_present": _finite(_routing_metric(stage6, "parallel_score_margin_mean")),
+        "global_cache_or_local_route_present": _finite(_routing_metric(stage6, "global_cache_slots_mean"))
+        or _finite(_routing_metric(stage6, "average_route_steps")),
+        "checkpoint_present": bool(stage6 and stage6["has_checkpoint_latest"]),
+    }
+    return _gate("Stage 6 parallel passing is bounded and measurable", checks)
+
+
+def _gate(description: str, checks: dict[str, bool], extras: dict[str, Any] | None = None) -> dict[str, Any]:
+    if not checks:
+        status = "unknown"
+    elif all(checks.values()):
+        status = "pass"
+    elif any(checks.values()):
+        status = "warn"
+    else:
+        status = "fail"
+    return {"status": status, "description": description, "checks": checks, **(extras or {})}
+
+
+def _overall_status(gates: dict[str, dict[str, Any]]) -> str:
+    statuses = [gate["status"] for gate in gates.values()]
+    if all(status == "pass" for status in statuses):
+        return "pass"
+    if any(status == "fail" for status in statuses):
+        return "fail"
+    return "warn"
+
+
+def _difficulty_step_corr(rows: list[dict[str, Any]]) -> float | None:
+    difficulty = []
+    steps = []
+    for row in rows:
+        if isinstance(row.get("baseline_sample_loss"), (int, float)) and isinstance(row.get("average_route_steps"), (int, float)):
+            difficulty.append(float(row["baseline_sample_loss"]))
+            steps.append(float(row["average_route_steps"]))
+    return pearson_correlation(difficulty, steps)
+
+
+def _routing_metric(summary: dict[str, Any] | None, key: str) -> float | None:
+    if not summary:
+        return None
+    value = summary.get("routing", {}).get(key)
+    return _num(value)
+
+
+def _metric_at_least(summary: dict[str, Any] | None, key: str, minimum: float) -> bool:
+    value = _routing_metric(summary, key)
+    return value is not None and value >= minimum
+
+
+def _block_usage_non_degenerate(summary: dict[str, Any] | None) -> bool:
+    if not summary:
+        return False
+    report = _read_json_if_exists(Path(summary["run_dir"]) / "routing_report.json")
+    hist = report.get("latest_block_histogram", {})
+    if not hist:
+        return False
+    out_action = max(int(action) for action in hist)
+    internal_counts = [int(count) for action, count in hist.items() if int(action) != out_action]
+    total = sum(internal_counts)
+    if total <= 0:
+        return False
+    return max(internal_counts) / total < 0.95
+
+
+def _latest_exit_hist(summary: dict[str, Any] | None) -> dict[str, int]:
+    if not summary:
+        return {}
+    rows = _read_jsonl(Path(summary["run_dir"]) / "train_log.jsonl")
+    for row in reversed(rows):
+        hist = row.get("first_exit_step_histogram")
+        if isinstance(hist, dict):
+            return {str(key): int(value) for key, value in hist.items()}
+    return {}
+
+
+def _finite(value: Any) -> bool:
+    numeric = _num(value)
+    return numeric is not None and math.isfinite(numeric)
+
+
+def _num(value: Any) -> float | None:
+    if isinstance(value, (int, float)):
+        return float(value)
+    return None
+
+
+def _read_jsonl(path: Path) -> list[dict[str, Any]]:
+    if not path.exists():
+        return []
+    with path.open("r", encoding="utf-8") as handle:
+        return [json.loads(line) for line in handle if line.strip()]
+
+
+def _read_json_if_exists(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {}
+    with path.open("r", encoding="utf-8") as handle:
+        return json.load(handle)
+
+
+def _read_yaml_if_exists(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {}
+    import yaml
+
+    with path.open("r", encoding="utf-8") as handle:
+        data = yaml.safe_load(handle) or {}
+    return data if isinstance(data, dict) else {}
+
+
+def _stage_from_name(name: str) -> str:
+    for part in name.split("_"):
+        if part.startswith("stage"):
+            return part
+    return ""

@@ -1,0 +1,10 @@
+eval_name: stage_gate_eval
+output_path: reports/stage_gate_report.json
+thresholds:
+  fixed_route_loss_ratio_max: 1.03
+  stage3_loss_ratio_max: 1.20
+  route_imitation_fixed_min: 0.98
+  route_imitation_mixed_min: 0.90
+  route_entropy_min: 0.05
+  global_attention_mass_min: 0.000001
+  global_read_gate_min: 0.000001

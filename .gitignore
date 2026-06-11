@@ -17,6 +17,8 @@ data/manifests/*.json
 runs/*
 !runs/.gitkeep
 reports/generated/
+reports/*.json
+!reports/.gitkeep
 experiments/generated/
 
 # Checkpoints and model artifacts
