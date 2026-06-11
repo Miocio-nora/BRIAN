@@ -689,6 +689,9 @@ def _data_manifest_ref_checks(ref: Any) -> dict[str, bool]:
         "num_tokens_val_positive": _positive_number(ref.get("num_tokens_val")),
         "sha256_manifest_present": _nonempty_string(ref.get("sha256_manifest")),
         "sha256_manifest_verified": ref.get("sha256_manifest_verified") is True,
+        "manifest_row_count_positive": _positive_number(ref.get("manifest_row_count")),
+        "manifest_source_text_hashes_verified": ref.get("manifest_source_text_hashes_verified") is True,
+        "manifest_token_hashes_verified": ref.get("manifest_token_hashes_verified") is True,
         "stats_recipe_name_matches_config": ref.get("stats_recipe_name_matches_config") is True,
         "stats_sequence_length_matches_config": ref.get("stats_sequence_length_matches_config") is True,
         "source_mixture_present": isinstance(ref.get("source_mixture_realized"), dict)

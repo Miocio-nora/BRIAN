@@ -402,6 +402,11 @@ def test_train_from_config_writes_routing_report_on_checkpoint(tmp_path: Path) -
                 "source_mixture_realized": {"unit": 32},
                 "source_mixture_realized_share": {"unit": 1.0},
                 "sha256_manifest": sha256_text(manifest_text),
+                "manifest_row_count": 1,
+                "manifest_source_text_hashes_verified": True,
+                "manifest_token_hashes_verified": True,
+                "manifest_source_text_hash_failure_count": 0,
+                "manifest_token_hash_failure_count": 0,
                 "tokenizer": {
                     "name": "unit-tokenizer",
                     "revision": "local",
@@ -482,6 +487,11 @@ def test_train_from_config_writes_routing_report_on_checkpoint(tmp_path: Path) -
     assert manifest_ref["tokenized_artifacts_present"] is True
     assert manifest_ref["sha256_manifest"] == sha256_text(manifest_text)
     assert manifest_ref["sha256_manifest_verified"] is True
+    assert manifest_ref["manifest_row_count"] == 1
+    assert manifest_ref["manifest_source_text_hashes_verified"] is True
+    assert manifest_ref["manifest_token_hashes_verified"] is True
+    assert manifest_ref["manifest_source_text_hash_failure_count"] == 0
+    assert manifest_ref["manifest_token_hash_failure_count"] == 0
     assert manifest_ref["stats_recipe_name_matches_config"] is True
     assert manifest_ref["stats_sequence_length_matches_config"] is True
     assert manifest_ref["source_mixture_expected"] == {"unit": 1.0}

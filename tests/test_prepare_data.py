@@ -6,7 +6,8 @@ from pathlib import Path
 import pytest
 
 from brian_sphere_llm.data.manifest import REQUIRED_MANIFEST_FIELDS, sha256_text
-from brian_sphere_llm.data.prepare import DEFAULT_MANIFEST_CREATED_AT, _bool_config, _mixture_rows, prepare_data
+from brian_sphere_llm.data.prepare import DEFAULT_MANIFEST_CREATED_AT, _audit_prepared_manifest, _bool_config, _mixture_rows, prepare_data
+from brian_sphere_llm.data.tokenize import load_tokenizer
 from brian_sphere_llm.utils.config import load_yaml, save_yaml
 
 
@@ -51,10 +52,20 @@ def test_prepare_tiny_synthetic_data(tmp_path: Path) -> None:
         "source_mixture_realized",
         "source_mixture_realized_share",
         "sha256_manifest",
+        "manifest_row_count",
+        "manifest_source_text_hashes_verified",
+        "manifest_token_hashes_verified",
+        "manifest_source_text_hash_failure_count",
+        "manifest_token_hash_failure_count",
     ]:
         assert key in stats
     assert stats["sha256_manifest"]
     assert stats["sha256_manifest"] == sha256_text(manifest_text)
+    assert stats["manifest_row_count"] == len(manifest_rows)
+    assert stats["manifest_source_text_hashes_verified"] is True
+    assert stats["manifest_token_hashes_verified"] is True
+    assert stats["manifest_source_text_hash_failure_count"] == 0
+    assert stats["manifest_token_hash_failure_count"] == 0
     assert stats["source_mixture_realized"]
     assert stats["source_mixture_expected"] == stats["source_mixture_realized_share"]
     assert math.isclose(sum(stats["source_mixture_expected"].values()), 1.0)
@@ -73,6 +84,27 @@ def test_prepare_tiny_synthetic_data(tmp_path: Path) -> None:
     rerun_stats = json.loads((output_dir / "stats.json").read_text(encoding="utf-8"))
     assert (output_dir / "manifest.jsonl").read_text(encoding="utf-8") == manifest_text
     assert rerun_stats["sha256_manifest"] == stats["sha256_manifest"]
+
+
+def test_prepared_manifest_audit_detects_source_text_drift(tmp_path: Path) -> None:
+    cfg = load_yaml("configs/data/r125_tiny_debug.yaml")
+    cfg["output_dir"] = str(tmp_path / "tokenized")
+    cfg["manifest_path"] = str(tmp_path / "manifest.jsonl")
+    cfg["target_tokens"] = 1000
+    cfg["validation_tokens"] = 100
+    cfg["synthetic_only"]["sample_count"] = 16
+    config_path = tmp_path / "data.yaml"
+    save_yaml(cfg, config_path)
+    output_dir = prepare_data(config_path)
+    manifest_row = json.loads((output_dir / "manifest.jsonl").read_text(encoding="utf-8").splitlines()[0])
+    Path(manifest_row["path"]).write_text("tampered text", encoding="utf-8")
+
+    audit = _audit_prepared_manifest(output_dir / "manifest.jsonl", load_tokenizer("simple-byte-tokenizer"))
+
+    assert audit["manifest_source_text_hashes_verified"] is False
+    assert audit["manifest_token_hashes_verified"] is False
+    assert audit["manifest_source_text_hash_failure_count"] == 1
+    assert audit["manifest_token_hash_failure_count"] == 1
 
 
 def test_prepare_data_rejects_boolean_numeric_config(tmp_path: Path) -> None:

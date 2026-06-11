@@ -8,7 +8,7 @@ from typing import Any
 
 from brian_sphere_llm.data.download import iter_hf_text_dataset
 from brian_sphere_llm.data.filter import keep_text, normalize_text
-from brian_sphere_llm.data.manifest import ManifestRow, sha256_text, write_manifest
+from brian_sphere_llm.data.manifest import ManifestRow, read_manifest, sha256_text, sha256_tokens, write_manifest
 from brian_sphere_llm.data.pack import pack_fixed_length, write_index, write_token_bin
 from brian_sphere_llm.data.synthetic_routing import generate_synthetic_samples
 from brian_sphere_llm.data.tokenize import load_tokenizer, tokenizer_metadata
@@ -107,6 +107,7 @@ def prepare_data(config_path: str | Path) -> Path:
     manifest_path = Path(config.get("manifest_path", output_dir / "manifest.jsonl"))
     write_manifest(manifest_rows, manifest_path)
     manifest_text = output_manifest_path.read_text(encoding="utf-8")
+    manifest_audit = _audit_prepared_manifest(output_manifest_path, tokenizer)
     source_mixture_realized = _realized_mixture(manifest_rows)
     source_mixture_realized_share = _normalize_mixture(source_mixture_realized)
     source_mixture_expected = _expected_mixture(config, source_mixture_realized)
@@ -122,10 +123,36 @@ def prepare_data(config_path: str | Path) -> Path:
         "source_mixture_realized": source_mixture_realized,
         "source_mixture_realized_share": source_mixture_realized_share,
         "sha256_manifest": sha256_text(manifest_text),
+        **manifest_audit,
         "tokenizer": asdict(metadata),
     }
     write_json(stats, output_dir / "stats.json")
     return output_dir
+
+
+def _audit_prepared_manifest(manifest_path: Path, tokenizer: Any) -> dict[str, Any]:
+    rows = read_manifest(manifest_path)
+    source_text_failures = 0
+    token_failures = 0
+    for row in rows:
+        source_path = Path(str(row["path"]))
+        if not source_path.exists():
+            source_text_failures += 1
+            token_failures += 1
+            continue
+        text = source_path.read_text(encoding="utf-8")
+        if len(text.encode("utf-8")) != row["byte_count"] or sha256_text(text) != row["sha256_text"]:
+            source_text_failures += 1
+        tokens = tokenizer.encode(text, add_special_tokens=True)
+        if len(tokens) != row["token_count"] or sha256_tokens(tokens) != row["sha256_tokens"]:
+            token_failures += 1
+    return {
+        "manifest_row_count": len(rows),
+        "manifest_source_text_hashes_verified": bool(rows) and source_text_failures == 0,
+        "manifest_token_hashes_verified": bool(rows) and token_failures == 0,
+        "manifest_source_text_hash_failure_count": source_text_failures,
+        "manifest_token_hash_failure_count": token_failures,
+    }
 
 
 def _synthetic_rows(config: dict[str, Any]):

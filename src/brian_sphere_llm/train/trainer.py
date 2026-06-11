@@ -759,6 +759,11 @@ def _data_manifest_ref(data_config: dict[str, Any], tokenized_dir: Path) -> dict
         "source_mixture_realized",
         "source_mixture_realized_share",
         "sha256_manifest",
+        "manifest_row_count",
+        "manifest_source_text_hashes_verified",
+        "manifest_token_hashes_verified",
+        "manifest_source_text_hash_failure_count",
+        "manifest_token_hash_failure_count",
     ]:
         if key in stats:
             ref[key] = stats[key]

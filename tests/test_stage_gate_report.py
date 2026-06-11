@@ -147,6 +147,11 @@ def _data_manifest_ref() -> dict:
         "num_tokens_val": 8,
         "sha256_manifest": "abc123",
         "sha256_manifest_verified": True,
+        "manifest_row_count": 4,
+        "manifest_source_text_hashes_verified": True,
+        "manifest_token_hashes_verified": True,
+        "manifest_source_text_hash_failure_count": 0,
+        "manifest_token_hash_failure_count": 0,
         "stats_recipe_name_matches_config": True,
         "stats_sequence_length_matches_config": True,
         "source_mixture_expected": {"unit": 1.0},
@@ -517,6 +522,9 @@ def test_stage0_gate_requires_valid_data_manifest_ref(tmp_path: Path) -> None:
     assert gate["data_manifest_ref_checks"]["tokenized_artifacts_present"] is False
     assert gate["data_manifest_ref_checks"]["sha256_manifest_present"] is False
     assert gate["data_manifest_ref_checks"]["sha256_manifest_verified"] is False
+    assert gate["data_manifest_ref_checks"]["manifest_row_count_positive"] is False
+    assert gate["data_manifest_ref_checks"]["manifest_source_text_hashes_verified"] is False
+    assert gate["data_manifest_ref_checks"]["manifest_token_hashes_verified"] is False
     assert gate["data_manifest_ref_checks"]["stats_recipe_name_matches_config"] is False
     assert gate["data_manifest_ref_checks"]["stats_sequence_length_matches_config"] is False
     assert gate["data_manifest_ref_checks"]["source_mixture_present"] is False
