@@ -87,6 +87,8 @@ python scripts/eval.py --config configs/eval/routing_eval.yaml --run <run_dir>
 
 Training writes `routing_report.json` at checkpoint saves by default (`write_routing_report_on_checkpoint: true`). Routing reports include `route_entropy`, `block_load_entropy`, `route_path_diversity`, path examples, block histograms, exit distributions, active block evals, cost-quality curve points, and position/global/parallel diagnostics when available.
 
+When `resume: true` loads `checkpoint_latest`, training appends `resume_events.jsonl`. Stage 0 gates use this file as explicit checkpoint-resume evidence.
+
 Generate a stage gate report across multiple runs:
 
 ```bash

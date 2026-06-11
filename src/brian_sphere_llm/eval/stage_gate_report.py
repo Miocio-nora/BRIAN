@@ -91,6 +91,7 @@ def _summarize_run(run_dir: Path) -> dict[str, Any]:
     determinism_report = _read_json_if_exists(run_dir / "eval_determinism_report.json")
     eval_rows = _read_jsonl(run_dir / "eval_log.jsonl")
     train_rows = _read_jsonl(run_dir / "train_log.jsonl")
+    resume_rows = _read_jsonl(run_dir / "resume_events.jsonl")
     stage = str(config.get("stage", "")) if config else _stage_from_name(run_dir.name)
     final_eval = eval_rows[-1] if eval_rows else {}
     final_train = train_rows[-1] if train_rows else {}
@@ -105,6 +106,8 @@ def _summarize_run(run_dir: Path) -> dict[str, Any]:
         "has_checkpoint_best": (run_dir / "checkpoint_best" / "state.pt").exists(),
         "has_eval_log": bool(eval_rows),
         "has_train_log": bool(train_rows),
+        "has_resume_event": bool(resume_rows),
+        "latest_resume_event": resume_rows[-1] if resume_rows else {},
         "validation_loss": _num(final_eval.get("validation_loss")),
         "perplexity": _num(final_eval.get("perplexity")),
         "train_loss": _num(final_train.get("loss")),
@@ -121,6 +124,7 @@ def _summarize_run(run_dir: Path) -> dict[str, Any]:
 def _gate_stage0(stage0: dict[str, Any] | None) -> dict[str, Any]:
     checks = {
         "checkpoint_resume_artifact": bool(stage0 and stage0["has_checkpoint_latest"]),
+        "checkpoint_resume_event": bool(stage0 and stage0.get("has_resume_event")),
         "eval_log_present": bool(stage0 and stage0["has_eval_log"]),
         "validation_loss_finite": _finite(stage0.get("validation_loss") if stage0 else None),
         "eval_determinism_report_present": bool(stage0 and stage0.get("eval_determinism_report_present")),
@@ -129,7 +133,10 @@ def _gate_stage0(stage0: dict[str, Any] | None) -> dict[str, Any]:
     return _gate(
         "Stage 0 baseline trains, checkpoints, and evaluates deterministically",
         checks,
-        {"eval_determinism_status": stage0.get("eval_determinism_status") if stage0 else None},
+        {
+            "eval_determinism_status": stage0.get("eval_determinism_status") if stage0 else None,
+            "latest_resume_event": stage0.get("latest_resume_event") if stage0 else {},
+        },
     )
 
 

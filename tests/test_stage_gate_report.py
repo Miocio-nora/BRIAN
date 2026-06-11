@@ -16,6 +16,7 @@ def _write_run(
     val_loss: float,
     train_row: dict,
     determinism_status: str | None = None,
+    resume_event: dict | None = None,
 ) -> Path:
     run_dir = root / name
     run_dir.mkdir(parents=True)
@@ -32,6 +33,8 @@ def _write_run(
             json.dumps({"overall_status": determinism_status, "checks": {"numeric_metrics_within_tolerance": True}}),
             encoding="utf-8",
         )
+    if resume_event is not None:
+        (run_dir / "resume_events.jsonl").write_text(json.dumps(resume_event) + "\n", encoding="utf-8")
     return run_dir
 
 
@@ -49,6 +52,7 @@ def test_stage_gate_report_writes_json(tmp_path: Path) -> None:
         val_loss=10.0,
         train_row={},
         determinism_status="pass",
+        resume_event={"resumed_from_step": 1, "target_max_steps": 2, "optimizer_state_loaded": True},
     )
     fixed = _write_run(
         tmp_path,
@@ -94,6 +98,7 @@ def test_stage_gate_report_writes_json(tmp_path: Path) -> None:
     report = json.loads(report_path.read_text(encoding="utf-8"))
     assert report["run_count"] == 3
     assert report["gates"]["stage0_to_1"]["status"] == "pass"
+    assert report["gates"]["stage0_to_1"]["checks"]["checkpoint_resume_event"] is True
     assert report["gates"]["stage1_to_2"]["status"] == "pass"
     assert report["gates"]["stage5_to_6"]["status"] == "pass"
     assert report["supplemental_reports"]["long_context_compare_report"] == str(long_context_compare)

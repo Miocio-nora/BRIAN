@@ -93,6 +93,15 @@ def train_from_config(config_path: str | Path) -> Path:
         payload = load_checkpoint(latest, model=model, optimizer=optimizer)
         start_step = int(payload.get("step", 0))
         best_eval_loss = payload.get("best_eval_loss")
+        JsonlLogger(run_dir / "resume_events.jsonl").write(
+            {
+                "checkpoint": str(latest),
+                "resumed_from_step": start_step,
+                "target_max_steps": int(config["max_steps"]),
+                "optimizer_state_loaded": "optimizer" in payload,
+                "best_eval_loss": best_eval_loss,
+            }
+        )
 
     train_log = JsonlLogger(run_dir / "train_log.jsonl")
     eval_log = JsonlLogger(run_dir / "eval_log.jsonl")
