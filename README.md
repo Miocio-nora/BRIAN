@@ -369,7 +369,7 @@ python scripts/eval.py \
   --parallel-compare-report reports/parallel_compare.json
 ```
 
-This maps the project plan's R125/R350 Go/No-Go criteria to existing evidence. Missing evidence stays explicit as `missing`, and failed criteria produce a `stop` recommendation.
+This maps the project plan's R125/R350 Go/No-Go criteria to existing evidence. Missing evidence stays explicit as `missing`, failed criteria produce a `stop` recommendation, and supplied parallel-compare evidence is retained as optional evidence without changing the decision.
 
 Run the Stage 6 parallel-passing packages:
 

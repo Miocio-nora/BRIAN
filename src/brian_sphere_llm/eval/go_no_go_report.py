@@ -74,6 +74,9 @@ def make_go_no_go_report(
             "min_difficulty_step_correlation": min_difficulty_step_correlation,
             "min_reasoning_delta": min_reasoning_delta,
         },
+        "optional_evidence": {
+            "parallel_compare": _parallel_compare_evidence(parallel_compare_report),
+        },
     }
     if output_path is None:
         output_path = Path("reports") / "go_no_go_report.json"
@@ -375,6 +378,29 @@ def _compute_report_evidence(report: dict[str, Any]) -> dict[str, Any]:
                 }
             )
     return {"run_count": report.get("run_count"), "baseline_run": report.get("baseline_run"), "comparisons": rows}
+
+
+def _parallel_compare_evidence(report: dict[str, Any]) -> dict[str, Any]:
+    if not report:
+        return {}
+    comparisons = []
+    for row in report.get("comparisons", []):
+        if not isinstance(row, dict):
+            continue
+        comparisons.append(
+            {
+                "candidate_run": row.get("candidate_run"),
+                "status": row.get("status"),
+                "checks": row.get("checks"),
+                "parallel": row.get("parallel"),
+                "baseline_comparison": row.get("baseline_comparison"),
+            }
+        )
+    return {
+        "overall_status": report.get("overall_status"),
+        "candidate_count": report.get("candidate_count"),
+        "comparisons": comparisons,
+    }
 
 
 def _reasoning_improved(

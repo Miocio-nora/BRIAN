@@ -191,3 +191,36 @@ def test_go_no_go_r350_accepts_global_kv_ablation_memory_quality_evidence(tmp_pa
     assert criteria["global_kv_long_context_benefit_if_tested"]["evidence"]["global_kv_ablation"][
         "benefit_candidates"
     ][0]["passes_memory_quality_proxy"] is True
+
+
+def test_go_no_go_includes_parallel_compare_as_optional_evidence(tmp_path: Path) -> None:
+    stage_gate = _write_json(tmp_path / "stage_gate.json", _passing_stage_gate())
+    parallel = _write_json(
+        tmp_path / "parallel.json",
+        {
+            "overall_status": "pass",
+            "candidate_count": 1,
+            "comparisons": [
+                {
+                    "candidate_run": "parallel",
+                    "status": "pass",
+                    "checks": {"parallel_branch_benefit_proxy": True},
+                    "parallel": {"parallel_branch_count_mean": 2.0},
+                    "baseline_comparison": {"validation_loss_delta": -0.1},
+                }
+            ],
+        },
+    )
+
+    output = make_go_no_go_report(
+        stage_gate_report_path=stage_gate,
+        parallel_compare_report_path=parallel,
+        phase="r125_to_r350",
+        output_path=tmp_path / "go.json",
+    )
+    report = json.loads(output.read_text(encoding="utf-8"))
+
+    evidence = report["optional_evidence"]["parallel_compare"]
+    assert evidence["overall_status"] == "pass"
+    assert evidence["candidate_count"] == 1
+    assert evidence["comparisons"][0]["checks"]["parallel_branch_benefit_proxy"] is True
