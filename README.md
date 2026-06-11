@@ -25,7 +25,7 @@ Implemented v0.1 pieces:
 - hard `OUT` terminal behavior for Stage 4;
 - minimal canonical Global KV path with sink + sliding window retention for Stage 5;
 - experimental Stage 6 parallel passing with beam scoring, pruning, shared base Global KV, and per-branch delta memory;
-- JSONL train/eval logs with throughput, latency, and CUDA memory diagnostics, model stats, checkpoint save/resume, and routing report generation;
+- JSONL train/eval logs with throughput, latency, CUDA memory diagnostics, model stats, data manifest references, checkpoint save/resume, and routing report generation;
 - B200-compatible conda environment using PyTorch CUDA 12.8 wheels.
 
 The immediate priority is **BRIAN-R125 route-core validation**:

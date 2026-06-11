@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import math
 import time
 from datetime import datetime
@@ -66,7 +67,7 @@ def train_from_config(config_path: str | Path) -> Path:
     save_yaml({**config, "model_config_resolved": model_config, "data_config_resolved": data_config}, run_dir / "config_resolved.yaml")
     if hasattr(model, "model_stats"):
         write_json(model.model_stats(), run_dir / "model_stats.json")
-    write_json({"path": str(data_config.get("manifest_path", ""))}, run_dir / "data_manifest_ref.json")
+    write_json(_data_manifest_ref(data_config, tokenized_dir), run_dir / "data_manifest_ref.json")
 
     train_loader = build_dataloader(
         tokenized_dir=tokenized_dir,
@@ -271,3 +272,39 @@ def _cuda_memory_metrics(device: "torch.device") -> dict[str, float]:
         "cuda_memory_allocated_mb": torch.cuda.memory_allocated(device) / (1024.0 * 1024.0),
         "cuda_max_memory_allocated_mb": torch.cuda.max_memory_allocated(device) / (1024.0 * 1024.0),
     }
+
+
+def _data_manifest_ref(data_config: dict[str, Any], tokenized_dir: Path) -> dict[str, Any]:
+    manifest_value = data_config.get("manifest_path")
+    manifest_path = Path(str(manifest_value)) if manifest_value else tokenized_dir / "manifest.jsonl"
+    stats_path = tokenized_dir / "stats.json"
+    ref: dict[str, Any] = {
+        "recipe_name": data_config.get("recipe_name"),
+        "path": str(manifest_path),
+        "tokenized_dir": str(tokenized_dir),
+        "stats_path": str(stats_path),
+        "sequence_length": data_config.get("sequence_length"),
+    }
+    if not stats_path.exists():
+        return ref
+    with stats_path.open("r", encoding="utf-8") as handle:
+        stats = json.load(handle)
+    for key in [
+        "num_documents",
+        "num_tokens_train",
+        "num_tokens_val",
+        "avg_tokens_per_doc",
+        "vocab_size",
+        "source_mixture_realized",
+        "sha256_manifest",
+    ]:
+        if key in stats:
+            ref[key] = stats[key]
+    tokenizer = stats.get("tokenizer")
+    if isinstance(tokenizer, dict):
+        ref["tokenizer"] = {
+            key: tokenizer.get(key)
+            for key in ["name", "revision", "license", "vocab_size", "special_tokens"]
+            if key in tokenizer
+        }
+    return ref

@@ -47,6 +47,29 @@ def test_train_from_config_writes_routing_report_on_checkpoint(tmp_path: Path) -
     write_index(tokenized / "train.idx", sequence_length=4, num_sequences=len(sequences))
     write_token_bin(sequences, tokenized / "val.bin")
     write_index(tokenized / "val.idx", sequence_length=4, num_sequences=len(sequences))
+    (tokenized / "stats.json").write_text(
+        json.dumps(
+            {
+                "recipe_name": "unit_data",
+                "num_documents": 4,
+                "num_tokens_train": 16,
+                "num_tokens_val": 16,
+                "avg_tokens_per_doc": 8.0,
+                "sequence_length": 4,
+                "vocab_size": 32,
+                "source_mixture_realized": {"unit": 32},
+                "sha256_manifest": "abc123",
+                "tokenizer": {
+                    "name": "unit-tokenizer",
+                    "revision": "local",
+                    "license": "test",
+                    "vocab_size": 32,
+                    "special_tokens": {"bos": None, "eos": None, "pad": 0, "unk": None},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
 
     model_config = tmp_path / "model.yaml"
     save_yaml(
@@ -99,6 +122,11 @@ def test_train_from_config_writes_routing_report_on_checkpoint(tmp_path: Path) -
     assert (run_dir / "checkpoint_latest" / "state.pt").exists()
     assert (run_dir / "checkpoint_best" / "state.pt").exists()
     assert (run_dir / "routing_report.json").exists()
+    manifest_ref = json.loads((run_dir / "data_manifest_ref.json").read_text(encoding="utf-8"))
+    assert manifest_ref["path"] == str(tmp_path / "manifest.jsonl")
+    assert manifest_ref["sha256_manifest"] == "abc123"
+    assert manifest_ref["source_mixture_realized"] == {"unit": 32}
+    assert manifest_ref["tokenizer"]["name"] == "unit-tokenizer"
     report = json.loads((run_dir / "routing_report.json").read_text(encoding="utf-8"))
     assert report["latest_eval"]["validation_loss"] >= 0.0
     assert report["cost_quality_curve"]["summary"]["train_point_count"] == 1
