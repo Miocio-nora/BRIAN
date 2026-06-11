@@ -1,0 +1,5 @@
+eval_name: experiment_coverage_report
+output_path: reports/route_core_r1b_pilot_coverage.json
+experiment_manifest: configs/experiments/route_core_r1b_pilot.yaml
+profile: route_core_r1b_pilot
+include_baseline: false

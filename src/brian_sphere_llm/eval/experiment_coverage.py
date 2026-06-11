@@ -31,6 +31,9 @@ PROFILE_ALIASES = {
     "route_core_parallel_passing": "parallel_passing_beta",
     "tiny_parallel_passing": "parallel_passing_beta",
     "parallel_passing_beta": "parallel_passing_beta",
+    "route_core_r1b_pilot": "package_d_r1b_pilot",
+    "package_d": "package_d_r1b_pilot",
+    "package_d_r1b_pilot": "package_d_r1b_pilot",
 }
 
 
@@ -153,6 +156,31 @@ def _requirements(profile: str, plan: ExperimentPlan, entries: list[dict[str, An
         return _global_kv_requirements(plan, entries)
     if profile == "parallel_passing_beta":
         return _parallel_requirements(entries)
+    if profile == "package_d_r1b_pilot":
+        return _exact_id_requirements(
+            entries,
+            [
+                _req(
+                    "D0",
+                    "1B fixed decoder-only baseline",
+                    stage="stage0_baseline",
+                    mode="baseline",
+                    model_flags={"model_name": "baseline_1b"},
+                ),
+                _req(
+                    "D1",
+                    "1B Global KV routed pilot",
+                    stage="stage5_global_kv",
+                    mode="scheduled",
+                    model_flags={
+                        "model_name": "brian_r1b",
+                        "global_kv": True,
+                        "parallel_passing": False,
+                        "top_k": 2,
+                    },
+                ),
+            ],
+        )
     return []
 
 

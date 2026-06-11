@@ -504,6 +504,16 @@ python scripts/run_experiment.py \
 
 This manifest covers the Package B scaffold from the project plan: B0 fixed 350M baseline, B1 routed main, B2 no-position ablation, B3 no hard output-action ablation, and B4 current `mixed_skip_recur` difficulty-pattern pseudo-route curriculum. It uses `configs/data/r350_main_10b.yaml` and B200-compatible bf16 training configs.
 
+Resolve the gated BRIAN-R1B pilot package after R350 evidence justifies scale-up:
+
+```bash
+python scripts/eval.py \
+  --config configs/eval/r1b_pilot_coverage.yaml \
+  --output reports/route_core_r1b_pilot_coverage.json
+```
+
+This manifest defines D0 fixed 1B baseline and D1 routed 1B Global KV pilot on `configs/data/r1b_pilot.yaml`. It keeps `parallel_passing: false`; parallel remains an experimental follow-up rather than part of the R1B pilot default.
+
 Run tests:
 
 ```bash

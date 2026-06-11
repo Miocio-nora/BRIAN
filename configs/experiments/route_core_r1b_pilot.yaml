@@ -1,0 +1,12 @@
+experiment_name: route_core_r1b_pilot
+description: BRIAN-R1B pilot package, gated on R350 route-core and Global KV evidence.
+baseline_train_config: configs/train/stage0_r1b_baseline.yaml
+ablations:
+  - id: D0
+    name: r1b_fixed_baseline
+    train_config: configs/train/stage0_r1b_baseline.yaml
+    purpose: 1B fixed decoder-only baseline on the R1B pilot data recipe.
+  - id: D1
+    name: r1b_global_kv_pilot
+    train_config: configs/train/stage5_r1b_global_kv_pilot.yaml
+    purpose: 1B routed pilot with Global KV enabled and parallel passing disabled.

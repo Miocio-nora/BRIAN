@@ -55,6 +55,21 @@ def test_r350_scaling_package_coverage_passes(tmp_path: Path) -> None:
     assert _requirement(report, "B2")["checks"]["model_flags_match"] is True
 
 
+def test_r1b_pilot_package_coverage_passes(tmp_path: Path) -> None:
+    output = make_experiment_coverage_report(
+        "configs/experiments/route_core_r1b_pilot.yaml",
+        output_path=tmp_path / "coverage.json",
+    )
+    report = json.loads(output.read_text(encoding="utf-8"))
+
+    assert report["overall_status"] == "pass"
+    assert report["profile"] == "package_d_r1b_pilot"
+    assert [row["id"] for row in report["requirements"]] == ["D0", "D1"]
+    assert _requirement(report, "D0")["checks"]["model_flags_match"] is True
+    assert _requirement(report, "D1")["checks"]["model_flags_match"] is True
+    assert report["checks"]["baseline_data_config_consistent"] is True
+
+
 def test_position_ablation_coverage_passes_geometry_requirements(tmp_path: Path) -> None:
     output = make_experiment_coverage_report(
         "configs/experiments/route_core_position_ablations.yaml",

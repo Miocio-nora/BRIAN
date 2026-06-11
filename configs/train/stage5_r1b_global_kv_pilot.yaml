@@ -1,0 +1,18 @@
+extends: stage5_global_kv.yaml
+stage: stage5_global_kv
+model_config: ../model/brian_r1b.yaml
+data_config: ../data/r1b_pilot.yaml
+batch_size: 1
+max_steps: 10000
+eval_interval: 500
+save_interval: 1000
+learning_rate: 0.00015
+routing:
+  mode: scheduled
+  pseudo_policy: mixed_skip_recur
+  hard_exit: true
+loss_weights:
+  route: 0.05
+  balance: 0.01
+  cost: 0.01
+  location: 0.02
