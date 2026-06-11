@@ -17,6 +17,7 @@ def main() -> None:
     parser.add_argument("--output", default=None, help="Optional output path override.")
     parser.add_argument("--cost-control-report", default=None, help="Optional cost-control report path.")
     parser.add_argument("--long-context-compare-report", default=None, help="Optional long-context comparison report path.")
+    parser.add_argument("--parallel-compare-report", default=None, help="Optional parallel comparison report path.")
     args = parser.parse_args()
     config = load_config(args.config)
     output_path = args.output or config.get("output_path")
@@ -27,6 +28,7 @@ def main() -> None:
         cost_control_report_path=args.cost_control_report or config.get("cost_control_report_path"),
         long_context_compare_report_path=args.long_context_compare_report
         or config.get("long_context_compare_report_path"),
+        parallel_compare_report_path=args.parallel_compare_report or config.get("parallel_compare_report_path"),
     )
     print(report)
 

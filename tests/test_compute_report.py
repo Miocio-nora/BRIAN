@@ -66,6 +66,7 @@ def test_summarize_run_estimates_active_route_compute(tmp_path: Path) -> None:
             "average_route_steps": 3.0,
             "active_block_evals_per_token": 0.5,
             "weighted_fusion_ratio": 1.0,
+            "parallel_score_margin_mean": 0.25,
         },
     )
     summary = summarize_run(run, tflops_per_gpu=1.0, utilization=1.0)
@@ -74,6 +75,7 @@ def test_summarize_run_estimates_active_route_compute(tmp_path: Path) -> None:
     assert summary["active_layer_ratio"] == pytest.approx(1.25)
     assert summary["trained_tokens_estimate"] == 32
     assert summary["estimated_flops_per_token"] == pytest.approx(1500.0)
+    assert summary["routing"]["parallel_score_margin_mean"] == 0.25
 
 
 def test_make_compute_report_compares_to_baseline(tmp_path: Path) -> None:

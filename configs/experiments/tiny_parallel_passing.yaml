@@ -1,0 +1,12 @@
+experiment_name: tiny_parallel_passing
+description: Fast Stage 6 parallel-passing smoke package against the top-k Global KV baseline.
+baseline_train_config: configs/train/stage5_tiny_debug.yaml
+ablations:
+  - id: PP0
+    name: topk_weighted_fusion
+    train_config: configs/train/stage5_tiny_debug.yaml
+    purpose: Single-state top-k weighted fusion baseline before independent branches.
+  - id: PP1
+    name: beam2_parallel_passing
+    train_config: configs/train/stage6_tiny_debug.yaml
+    purpose: First independent branch latent beam-search path.

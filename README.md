@@ -224,6 +224,35 @@ python scripts/run_experiment.py \
 
 The fast smoke manifest is `configs/experiments/tiny_global_kv.yaml`; the BRIAN-R125 sweep manifest is `configs/experiments/route_core_global_kv.yaml`. These cover the local-KV baseline, no-sink Global KV, default sink+window Global KV, and a small cache-window sweep.
 
+Compare top-k weighted fusion against parallel passing:
+
+```bash
+python scripts/eval.py \
+  --config configs/eval/parallel_compare.yaml \
+  --baseline-run <stage5_topk_global_kv_run> \
+  --runs <stage6_parallel_run> \
+  --output reports/parallel_compare.json
+```
+
+The comparison report checks that parallel branches are active, branch score margins are logged, validation loss is not worse than the baseline beyond `max_validation_loss_delta`, and active compute / estimated FLOPs stay under the configured ratios. Pass it into the Stage 6 gate:
+
+```bash
+python scripts/eval.py \
+  --config configs/eval/stage_gate_eval.yaml \
+  --runs <stage0_run> <stage1_run> <stage2_run> <stage3_run> <stage4_run> <stage5_run> <stage6_run> \
+  --parallel-compare-report reports/parallel_compare.json
+```
+
+Run the Stage 6 parallel-passing packages:
+
+```bash
+python scripts/run_experiment.py \
+  --config configs/experiments/tiny_parallel_passing.yaml \
+  --dry-run
+```
+
+The fast smoke manifest is `configs/experiments/tiny_parallel_passing.yaml`; the BRIAN-R125 sweep manifest is `configs/experiments/route_core_parallel_passing.yaml`. These cover PP0 top-k weighted fusion and PP1 beam-2 independent branch passing.
+
 Run tests:
 
 ```bash

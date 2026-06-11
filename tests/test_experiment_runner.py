@@ -24,6 +24,15 @@ def test_global_kv_experiment_manifest_resolves_repo_paths() -> None:
     assert plan.entries[3].train_config.name == "stage5_tiny_debug.yaml"
 
 
+def test_parallel_experiment_manifest_resolves_repo_paths() -> None:
+    plan = build_experiment_plan("configs/experiments/tiny_parallel_passing.yaml", include_baseline=True)
+    assert plan.experiment_name == "tiny_parallel_passing"
+    assert plan.entries[0].role == "baseline"
+    assert plan.entries[0].train_config.name == "stage5_tiny_debug.yaml"
+    assert [entry.id for entry in plan.entries[1:]] == ["PP0", "PP1"]
+    assert plan.entries[2].train_config.name == "stage6_tiny_debug.yaml"
+
+
 def test_run_experiment_dry_run_writes_resolved_plan(tmp_path: Path) -> None:
     output = run_experiment(
         "configs/experiments/tiny_position_ablations.yaml",

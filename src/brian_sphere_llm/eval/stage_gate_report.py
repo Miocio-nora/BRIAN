@@ -29,6 +29,7 @@ def make_stage_gate_report(
     thresholds: dict[str, float] | None = None,
     cost_control_report_path: str | Path | None = None,
     long_context_compare_report_path: str | Path | None = None,
+    parallel_compare_report_path: str | Path | None = None,
 ) -> Path:
     thresholds = {**DEFAULT_THRESHOLDS, **(thresholds or {})}
     summaries = [_summarize_run(Path(run_dir)) for run_dir in run_dirs]
@@ -37,6 +38,7 @@ def make_stage_gate_report(
     long_context_compare_report = (
         _read_json_if_exists(Path(long_context_compare_report_path)) if long_context_compare_report_path else {}
     )
+    parallel_compare_report = _read_json_if_exists(Path(parallel_compare_report_path)) if parallel_compare_report_path else {}
     gates = {
         "stage0_to_1": _gate_stage0(by_stage.get("stage0_baseline")),
         "stage1_to_2": _gate_stage1(by_stage.get("stage1_fixed_route"), by_stage.get("stage0_baseline"), thresholds),
@@ -44,7 +46,7 @@ def make_stage_gate_report(
         "stage3_to_4": _gate_stage3(by_stage.get("stage3_scheduled_free_routing"), by_stage.get("stage1_fixed_route"), thresholds),
         "stage4_to_5": _gate_stage4(by_stage.get("stage4_output_action"), cost_control_report),
         "stage5_to_6": _gate_stage5(by_stage.get("stage5_global_kv"), thresholds, long_context_compare_report),
-        "stage6_to_scale": _gate_stage6(by_stage.get("stage6_parallel_passing")),
+        "stage6_to_scale": _gate_stage6(by_stage.get("stage6_parallel_passing"), parallel_compare_report),
     }
     report = {
         "run_count": len(summaries),
@@ -55,6 +57,7 @@ def make_stage_gate_report(
         "supplemental_reports": {
             "cost_control_report": str(cost_control_report_path) if cost_control_report_path else None,
             "long_context_compare_report": str(long_context_compare_report_path) if long_context_compare_report_path else None,
+            "parallel_compare_report": str(parallel_compare_report_path) if parallel_compare_report_path else None,
         },
     }
     if output_path is None:
@@ -218,15 +221,28 @@ def _gate_stage5(
     )
 
 
-def _gate_stage6(stage6: dict[str, Any] | None) -> dict[str, Any]:
+def _gate_stage6(stage6: dict[str, Any] | None, parallel_compare_report: dict[str, Any] | None = None) -> dict[str, Any]:
+    comparisons = parallel_compare_report.get("comparisons", []) if parallel_compare_report else []
+    any_parallel_pass = any(item.get("status") == "pass" for item in comparisons if isinstance(item, dict))
     checks = {
         "parallel_branch_count_present": _metric_at_least(stage6, "parallel_branch_count_mean", 1.0),
         "parallel_score_margin_present": _finite(_routing_metric(stage6, "parallel_score_margin_mean")),
         "global_cache_or_local_route_present": _finite(_routing_metric(stage6, "global_cache_slots_mean"))
         or _finite(_routing_metric(stage6, "average_route_steps")),
+        "parallel_compare_report_present": bool(parallel_compare_report),
+        "parallel_branch_benefit_proxy": any_parallel_pass,
         "checkpoint_present": bool(stage6 and stage6["has_checkpoint_latest"]),
     }
-    return _gate("Stage 6 parallel passing is bounded and measurable", checks)
+    return _gate(
+        "Stage 6 parallel passing is bounded and has comparison evidence",
+        checks,
+        {
+            "parallel_compare_status": parallel_compare_report.get("overall_status") if parallel_compare_report else None,
+            "parallel_compare_candidate_count": parallel_compare_report.get("candidate_count")
+            if parallel_compare_report
+            else None,
+        },
+    )
 
 
 def _gate(description: str, checks: dict[str, bool], extras: dict[str, Any] | None = None) -> dict[str, Any]:

@@ -1,0 +1,12 @@
+experiment_name: route_core_parallel_passing
+description: BRIAN-R125 Stage 6 parallel-passing comparison against the top-k Global KV baseline.
+baseline_train_config: configs/train/stage5_global_kv.yaml
+ablations:
+  - id: PP0
+    name: topk_weighted_fusion
+    train_config: configs/train/stage5_global_kv.yaml
+    purpose: Single-state top-k weighted fusion baseline before independent branches.
+  - id: PP1
+    name: beam2_parallel_passing
+    train_config: configs/train/stage6_parallel_passing.yaml
+    purpose: First independent branch latent beam-search path.

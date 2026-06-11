@@ -1,0 +1,9 @@
+eval_name: parallel_compare
+output_path: reports/parallel_compare.json
+baseline_run: null
+runs: []
+max_validation_loss_delta: 0.0
+max_active_layer_eval_ratio: 2.0
+max_estimated_flops_ratio: 2.0
+min_throughput_ratio: 0.0
+min_parallel_branch_count: 1.5

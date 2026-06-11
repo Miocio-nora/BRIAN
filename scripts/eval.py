@@ -11,6 +11,7 @@ from brian_sphere_llm.eval.cost_control_report import make_cost_control_report
 from brian_sphere_llm.eval.difficulty_report import make_difficulty_report
 from brian_sphere_llm.eval.long_context import make_long_context_report
 from brian_sphere_llm.eval.long_context_compare import make_long_context_comparison_report
+from brian_sphere_llm.eval.parallel_compare import make_parallel_comparison_report
 from brian_sphere_llm.eval.reasoning import make_reasoning_report
 from brian_sphere_llm.eval.routing_report import make_routing_report
 from brian_sphere_llm.eval.stage_gate_report import make_stage_gate_report
@@ -33,6 +34,7 @@ def main() -> None:
     parser.add_argument("--min-active-compute-range", type=float, default=None, help="Minimum active compute range for cost reports.")
     parser.add_argument("--cost-control-report", default=None, help="Cost-control report path for stage gate eval.")
     parser.add_argument("--long-context-compare-report", default=None, help="Long-context comparison report path for stage gate eval.")
+    parser.add_argument("--parallel-compare-report", default=None, help="Parallel comparison report path for stage gate eval.")
     parser.add_argument("--checkpoint", default=None, help="Checkpoint name for model-based evals.")
     parser.add_argument("--sample-count", type=int, default=None, help="Sample count for synthetic evals.")
     parser.add_argument("--baseline-report", default=None, help="Baseline report path for comparison evals.")
@@ -51,6 +53,7 @@ def main() -> None:
             cost_control_report_path=args.cost_control_report or config.get("cost_control_report_path"),
             long_context_compare_report_path=args.long_context_compare_report
             or config.get("long_context_compare_report_path"),
+            parallel_compare_report_path=args.parallel_compare_report or config.get("parallel_compare_report_path"),
         )
     elif eval_name == "difficulty_step_eval":
         baseline_run = args.baseline_run or config.get("baseline_run")
@@ -127,6 +130,21 @@ def main() -> None:
             min_global_attention_mass=float(config.get("min_global_attention_mass", 1e-6)),
             min_global_read_gate=float(config.get("min_global_read_gate", 1e-6)),
             quality_tolerance=float(config.get("quality_tolerance", 0.0)),
+        )
+    elif eval_name == "parallel_compare":
+        baseline_run = args.baseline_run or config.get("baseline_run")
+        runs = args.runs or ([args.run] if args.run else config.get("runs", []))
+        if not baseline_run or not runs:
+            raise SystemExit("parallel_compare requires --baseline-run and --runs/--run")
+        report = make_parallel_comparison_report(
+            baseline_run,
+            runs,
+            output_path=args.output or config.get("output_path"),
+            max_validation_loss_delta=float(config.get("max_validation_loss_delta", 0.0)),
+            max_active_layer_eval_ratio=float(config.get("max_active_layer_eval_ratio", 2.0)),
+            max_estimated_flops_ratio=float(config.get("max_estimated_flops_ratio", 2.0)),
+            min_throughput_ratio=float(config.get("min_throughput_ratio", 0.0)),
+            min_parallel_branch_count=float(config.get("min_parallel_branch_count", 1.5)),
         )
     else:
         if not args.run:

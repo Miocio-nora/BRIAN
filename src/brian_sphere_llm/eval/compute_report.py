@@ -109,6 +109,7 @@ def summarize_run(
             "active_internal_decision_fraction": _num(routing_summary.get("active_block_evals_per_token")),
             "weighted_fusion_ratio": _num(routing_summary.get("weighted_fusion_ratio")),
             "parallel_branch_count_mean": _num(routing_summary.get("parallel_branch_count_mean")),
+            "parallel_score_margin_mean": _num(routing_summary.get("parallel_score_margin_mean")),
         },
     }
     if baseline:
