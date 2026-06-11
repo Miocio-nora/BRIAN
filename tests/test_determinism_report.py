@@ -6,7 +6,7 @@ import pytest
 torch = pytest.importorskip("torch")
 
 from brian_sphere_llm.data.pack import write_index, write_token_bin
-from brian_sphere_llm.eval.determinism_report import make_eval_determinism_report
+from brian_sphere_llm.eval.determinism_report import _compare_numeric_metrics, make_eval_determinism_report
 from brian_sphere_llm.train.trainer import train_from_config
 from brian_sphere_llm.utils.config import save_yaml
 
@@ -28,6 +28,33 @@ def test_eval_determinism_report_passes_for_repeated_baseline_eval(tmp_path: Pat
     assert not report["comparison"]["mismatched_metrics"]
     metric_names = {item["metric"] for item in report["comparison"]["metrics"]}
     assert "validation_loss" in metric_names
+
+
+def test_eval_determinism_comparison_rejects_boolean_numeric_metrics() -> None:
+    comparison = _compare_numeric_metrics(
+        {
+            "validation_loss": 2.0,
+            "route_entropy": True,
+            "average_route_steps": False,
+        },
+        {
+            "validation_loss": 2.0,
+            "route_entropy": True,
+            "average_route_steps": False,
+        },
+        tolerance=1e-8,
+    )
+
+    assert comparison["compared_metric_count"] == 1
+    assert comparison["metrics"] == [
+        {
+            "metric": "validation_loss",
+            "first": 2.0,
+            "second": 2.0,
+            "abs_delta": 0.0,
+            "within_tolerance": True,
+        }
+    ]
 
 
 def _train_tiny_baseline(tmp_path: Path) -> Path:

@@ -142,6 +142,8 @@ def _compare_numeric_metrics(first: dict[str, Any], second: dict[str, Any], *, t
 
 
 def _num(value: Any) -> float | None:
+    if isinstance(value, bool):
+        return None
     if isinstance(value, (int, float)) and math.isfinite(float(value)):
         return float(value)
     return None

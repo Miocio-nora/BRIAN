@@ -752,6 +752,8 @@ def _overall_status(checks: dict[str, bool], requirements: list[dict[str, Any]])
 
 
 def _num(value: Any) -> float | None:
+    if isinstance(value, bool):
+        return None
     if isinstance(value, (int, float)):
         return float(value)
     return None

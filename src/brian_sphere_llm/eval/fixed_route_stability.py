@@ -132,7 +132,7 @@ def _mean_numeric_summaries(rows: list[dict[str, Any]]) -> dict[str, float]:
     values: dict[str, list[float]] = {}
     for row in rows:
         for key, value in row.items():
-            if isinstance(value, (int, float)) and math.isfinite(float(value)):
+            if _finite(value):
                 values.setdefault(key, []).append(float(value))
     return {key: sum(items) / len(items) for key, items in values.items() if items}
 
@@ -156,6 +156,8 @@ def _all_finite(values: dict[str, float]) -> bool:
 
 
 def _finite(value: Any) -> bool:
+    if isinstance(value, bool):
+        return False
     return isinstance(value, (int, float)) and math.isfinite(float(value))
 
 

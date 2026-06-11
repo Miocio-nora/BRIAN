@@ -268,6 +268,48 @@ def test_experiment_coverage_fails_missing_required_entry(tmp_path: Path) -> Non
     assert _requirement(report, "A7")["checks"]["entry_present"] is False
 
 
+def test_experiment_coverage_rejects_boolean_numeric_model_flags(tmp_path: Path) -> None:
+    manifest = tmp_path / "boolean_top_k.yaml"
+    source = load_config("configs/experiments/route_core_r125_package.yaml")
+    bool_model = tmp_path / "bool_top_k_model.yaml"
+    bool_model.write_text(
+        yaml.safe_dump(
+            {
+                "extends": str(Path("configs/model/brian_r125.yaml").resolve()),
+                "top_k": True,
+            }
+        ),
+        encoding="utf-8",
+    )
+    bool_train = tmp_path / "bool_top_k_train.yaml"
+    bool_train.write_text(
+        yaml.safe_dump(
+            {
+                "extends": str(Path("configs/train/stage3_scheduled_free_routing.yaml").resolve()),
+                "model_config": str(bool_model),
+            }
+        ),
+        encoding="utf-8",
+    )
+    for row in source["ablations"]:
+        if row["id"] == "A8":
+            row["train_config"] = str(bool_train)
+    manifest.write_text(yaml.safe_dump(source), encoding="utf-8")
+
+    output = make_experiment_coverage_report(
+        manifest,
+        output_path=tmp_path / "coverage.json",
+        profile="package_a",
+    )
+    report = json.loads(output.read_text(encoding="utf-8"))
+    requirement = _requirement(report, "A8")
+
+    assert report["overall_status"] == "fail"
+    assert requirement["checks"]["entry_present"] is True
+    assert requirement["checks"]["model_flags_match"] is False
+    assert next(entry for entry in report["entries"] if entry["id"] == "A8")["model"]["top_k"] is True
+
+
 def test_experiment_coverage_fails_missing_baseline_train_config(tmp_path: Path) -> None:
     manifest = tmp_path / "missing_baseline.yaml"
     source = load_config("configs/experiments/route_core_r125_package.yaml")

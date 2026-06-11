@@ -280,6 +280,39 @@ def test_risk_audit_flags_never_exit_from_stage_gate_check(tmp_path: Path) -> No
     assert never_exits["evidence"]["stage4_not_never_exit"] is False
 
 
+def test_risk_audit_rejects_boolean_numeric_evidence(tmp_path: Path) -> None:
+    routing = _write_json(
+        tmp_path / "routing.json",
+        {
+            "summary": {
+                "block_load_entropy_normalized": True,
+                "route_path_diversity": True,
+                "p_output_mean": False,
+                "location_distance_mean": True,
+            },
+            "latest_position_norm_trajectory": [True, False],
+            "latest_location_distance_trajectory": [True, False],
+        },
+    )
+
+    output = make_risk_audit_report(output_path=tmp_path / "risk.json", routing_report_path=routing)
+    report = json.loads(output.read_text(encoding="utf-8"))
+
+    same_block = _symptom(report, "router_collapse", "always_selects_same_block")
+    never_exits = _symptom(report, "router_collapse", "never_exits")
+    constant_position = _symptom(report, "block_position_state_no_effect", "position_state_becomes_constant")
+    location_structure = _symptom(report, "block_position_state_no_effect", "location_distance_has_no_structure")
+
+    assert same_block["status"] == "missing"
+    assert same_block["evidence"]["block_load_entropy_normalized"] is None
+    assert never_exits["status"] == "missing"
+    assert never_exits["evidence"]["p_output_mean"] is None
+    assert constant_position["status"] == "missing"
+    assert constant_position["evidence"]["position_norm_trajectory_count"] == 0
+    assert location_structure["status"] == "missing"
+    assert location_structure["evidence"]["location_distance_mean"] is None
+
+
 def test_risk_audit_eval_config_resolves() -> None:
     config = load_config("configs/eval/risk_audit.yaml")
     assert config["eval_name"] == "risk_audit_report"

@@ -55,6 +55,22 @@ def test_summarize_difficulty_samples() -> None:
     assert summary["difficulty_step_correlation"] == pytest.approx(1.0)
 
 
+def test_summarize_difficulty_samples_rejects_boolean_numeric_metrics() -> None:
+    summary = summarize_difficulty_samples(
+        [
+            {"baseline_cross_entropy": True, "routed_cross_entropy": 1.2, "route_steps": 1},
+            {"baseline_cross_entropy": 2.0, "routed_cross_entropy": False, "route_steps": 2},
+            {"baseline_cross_entropy": 3.0, "routed_cross_entropy": 3.2, "route_steps": True},
+        ]
+    )
+
+    assert summary["sample_count"] == 0
+    assert summary["mean_baseline_cross_entropy"] is None
+    assert summary["mean_routed_cross_entropy"] is None
+    assert summary["mean_route_steps"] is None
+    assert summary["difficulty_step_correlation"] is None
+
+
 def test_baseline_difficulty_bins_are_ce_ordered() -> None:
     samples = [
         {"sample_id": 0, "baseline_cross_entropy": 3.0},
