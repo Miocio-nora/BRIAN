@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 import json
+import math
 import random
 from dataclasses import dataclass
 from pathlib import Path
@@ -234,13 +236,22 @@ def _prompt_ids(tokenizer: Any, prompt: str) -> list[int]:
 
 
 def _load_tokenizer_from_run_config(config: dict[str, Any]) -> Any:
-    data_config = config.get("data_config_resolved", {})
-    tokenizer_config = data_config.get("tokenizer", {}) if isinstance(data_config, dict) else {}
+    tokenizer_config = _tokenizer_config(config)
     return load_tokenizer(
         str(tokenizer_config.get("name", "simple-byte-tokenizer")),
         revision=str(tokenizer_config.get("revision", "main")),
-        local_files_only=bool(tokenizer_config.get("local_files_only", True)),
-        fallback_to_byte=bool(tokenizer_config.get("fallback_to_byte", True)),
+        local_files_only=_bool_mapping_value(
+            tokenizer_config,
+            "local_files_only",
+            default=True,
+            name="tokenizer.local_files_only",
+        ),
+        fallback_to_byte=_bool_mapping_value(
+            tokenizer_config,
+            "fallback_to_byte",
+            default=True,
+            name="tokenizer.fallback_to_byte",
+        ),
     )
 
 
@@ -256,13 +267,14 @@ def _decode(tokenizer: Any, ids: list[int]) -> str:
 
 def _context_length(config: dict[str, Any]) -> int:
     data_config = config.get("data_config_resolved", {})
-    if isinstance(data_config, dict) and data_config.get("sequence_length"):
-        return int(data_config["sequence_length"])
+    if isinstance(data_config, Mapping) and data_config.get("sequence_length") is not None:
+        return _int_value(data_config["sequence_length"], "data_config_resolved.sequence_length", minimum=1)
     model_config = config.get("model_config_resolved", {})
-    if isinstance(model_config, dict) and model_config.get("context_length"):
-        return int(model_config["context_length"])
-    if isinstance(model_config, dict) and isinstance(model_config.get("base"), dict):
-        return int(model_config["base"].get("context_length", 128))
+    if isinstance(model_config, Mapping) and model_config.get("context_length") is not None:
+        return _int_value(model_config["context_length"], "model_config_resolved.context_length", minimum=1)
+    if isinstance(model_config, Mapping) and isinstance(model_config.get("base"), Mapping):
+        base_config = model_config["base"]
+        return _int_value(base_config.get("context_length", 128), "model_config_resolved.base.context_length", minimum=1)
     return 128
 
 
@@ -313,6 +325,47 @@ def _num(value: Any) -> float | None:
     if isinstance(value, (int, float)):
         return float(value)
     return None
+
+
+def _tokenizer_config(config: dict[str, Any]) -> Mapping[str, Any]:
+    data_config = config.get("data_config_resolved", {})
+    if data_config is None:
+        return {}
+    if not isinstance(data_config, Mapping):
+        raise ValueError("data_config_resolved must be a mapping.")
+    tokenizer_config = data_config.get("tokenizer", {})
+    if tokenizer_config is None:
+        return {}
+    if not isinstance(tokenizer_config, Mapping):
+        raise ValueError("data_config_resolved.tokenizer must be a mapping.")
+    return tokenizer_config
+
+
+def _bool_mapping_value(mapping: Mapping[str, Any], key: str, *, default: bool, name: str) -> bool:
+    value = mapping.get(key, default)
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "off"}:
+            return False
+    raise ValueError(f"{name} must be a boolean.")
+
+
+def _int_value(value: Any, name: str, *, minimum: int | None = None) -> int:
+    if isinstance(value, bool):
+        raise ValueError(f"{name} must be an integer, not a boolean.")
+    if isinstance(value, int):
+        number = value
+    elif isinstance(value, float) and math.isfinite(value) and value.is_integer():
+        number = int(value)
+    else:
+        raise ValueError(f"{name} must be an integer.")
+    if minimum is not None and number < minimum:
+        raise ValueError(f"{name} must be >= {minimum}.")
+    return number
 
 
 def _device(name: str) -> "torch.device":

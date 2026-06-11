@@ -2,9 +2,12 @@ import pytest
 
 torch = pytest.importorskip("torch")
 
+import brian_sphere_llm.eval.reasoning as reasoning_eval
 from brian_sphere_llm.data.tokenize import SimpleByteTokenizer
 from brian_sphere_llm.eval.reasoning import (
     ReasoningSample,
+    _context_length,
+    _load_tokenizer_from_run_config,
     _routing_summary,
     _visible_cot_token_count,
     evaluate_reasoning_sample,
@@ -88,6 +91,48 @@ def test_reasoning_summary_rejects_boolean_numeric_metrics() -> None:
     assert summary["generated_tokens_mean"] is None
     assert routing["average_route_steps"] is None
     assert routing["route_entropy"] == 0.375
+
+
+def test_reasoning_tokenizer_config_parses_string_booleans(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured = {}
+
+    def fake_load_tokenizer(name, *, revision, local_files_only, fallback_to_byte):
+        captured.update(
+            {
+                "name": name,
+                "revision": revision,
+                "local_files_only": local_files_only,
+                "fallback_to_byte": fallback_to_byte,
+            }
+        )
+        return object()
+
+    monkeypatch.setattr(reasoning_eval, "load_tokenizer", fake_load_tokenizer)
+
+    _load_tokenizer_from_run_config(
+        {
+            "data_config_resolved": {
+                "tokenizer": {
+                    "name": "unit-tokenizer",
+                    "revision": "abc123",
+                    "local_files_only": "false",
+                    "fallback_to_byte": "true",
+                }
+            }
+        }
+    )
+
+    assert captured == {
+        "name": "unit-tokenizer",
+        "revision": "abc123",
+        "local_files_only": False,
+        "fallback_to_byte": True,
+    }
+
+
+def test_reasoning_context_length_rejects_boolean_sequence_length() -> None:
+    with pytest.raises(ValueError, match="sequence_length"):
+        _context_length({"data_config_resolved": {"sequence_length": True}})
 
 
 def test_visible_cot_token_count_uses_answer_suffix() -> None:

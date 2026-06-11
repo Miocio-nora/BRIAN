@@ -2,11 +2,15 @@ import pytest
 
 torch = pytest.importorskip("torch")
 
+import brian_sphere_llm.eval.long_context as long_context_eval
 from brian_sphere_llm.data.tokenize import SimpleByteTokenizer
 from brian_sphere_llm.eval.long_context import (
     LongContextSample,
+    _as_bool,
+    _context_length,
     _coverage_summary,
     _global_kv_summary,
+    _load_tokenizer_from_run_config,
     _memory_budget_summary,
     evaluate_long_context_sample,
     generate_long_context_samples,
@@ -143,6 +147,54 @@ def test_long_context_summary_rejects_boolean_numeric_metrics() -> None:
     assert memory["base_layer_count"] is None
     assert memory["global_code_dim"] is None
     assert memory["estimated_global_cache_capacity_bytes_fp16"] is None
+
+
+def test_long_context_tokenizer_config_parses_string_booleans(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured = {}
+
+    def fake_load_tokenizer(name, *, revision, local_files_only, fallback_to_byte):
+        captured.update(
+            {
+                "name": name,
+                "revision": revision,
+                "local_files_only": local_files_only,
+                "fallback_to_byte": fallback_to_byte,
+            }
+        )
+        return object()
+
+    monkeypatch.setattr(long_context_eval, "load_tokenizer", fake_load_tokenizer)
+
+    _load_tokenizer_from_run_config(
+        {
+            "data_config_resolved": {
+                "tokenizer": {
+                    "name": "unit-tokenizer",
+                    "revision": "abc123",
+                    "local_files_only": "false",
+                    "fallback_to_byte": "true",
+                }
+            }
+        }
+    )
+
+    assert captured == {
+        "name": "unit-tokenizer",
+        "revision": "abc123",
+        "local_files_only": False,
+        "fallback_to_byte": True,
+    }
+
+
+def test_long_context_context_length_rejects_boolean_sequence_length() -> None:
+    with pytest.raises(ValueError, match="sequence_length"):
+        _context_length({"data_config_resolved": {"sequence_length": True}})
+
+
+def test_long_context_bool_config_rejects_non_boolean_values() -> None:
+    assert _as_bool("false") is False
+    with pytest.raises(ValueError, match="Boolean config"):
+        _as_bool(1)
 
 
 def test_long_context_coverage_summary_reports_missing_families_and_difficulties() -> None:

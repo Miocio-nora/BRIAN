@@ -8,7 +8,15 @@ from typing import Any
 
 from brian_sphere_llm.data.tokenize import load_tokenizer
 from brian_sphere_llm.eval.difficulty_report import _checkpoint_step, _forward_routed_for_eval, _load_model_for_run
-from brian_sphere_llm.eval.reasoning import _decode, _device, _mean, normalize_answer
+from brian_sphere_llm.eval.reasoning import (
+    _bool_mapping_value,
+    _decode,
+    _device,
+    _int_value,
+    _mean,
+    _tokenizer_config,
+    normalize_answer,
+)
 from brian_sphere_llm.train.stage_runner import train_mode_for_stage
 from brian_sphere_llm.utils.config import load_config
 from brian_sphere_llm.utils.logging import write_json
@@ -283,25 +291,38 @@ def _prompt_ids(tokenizer: Any, prompt: str) -> list[int]:
 
 
 def _load_tokenizer_from_run_config(config: dict[str, Any]) -> Any:
-    data_config = config.get("data_config_resolved", {})
-    tokenizer_config = data_config.get("tokenizer", {}) if isinstance(data_config, dict) else {}
+    tokenizer_config = _tokenizer_config(config)
     return load_tokenizer(
         str(tokenizer_config.get("name", "simple-byte-tokenizer")),
         revision=str(tokenizer_config.get("revision", "main")),
-        local_files_only=bool(tokenizer_config.get("local_files_only", True)),
-        fallback_to_byte=bool(tokenizer_config.get("fallback_to_byte", True)),
+        local_files_only=_bool_mapping_value(
+            tokenizer_config,
+            "local_files_only",
+            default=True,
+            name="tokenizer.local_files_only",
+        ),
+        fallback_to_byte=_bool_mapping_value(
+            tokenizer_config,
+            "fallback_to_byte",
+            default=True,
+            name="tokenizer.fallback_to_byte",
+        ),
     )
 
 
 def _context_length(config: dict[str, Any]) -> int:
     data_config = config.get("data_config_resolved", {})
-    if isinstance(data_config, dict) and data_config.get("sequence_length"):
-        return int(data_config["sequence_length"])
+    if isinstance(data_config, dict) and data_config.get("sequence_length") is not None:
+        return _int_value(data_config["sequence_length"], "data_config_resolved.sequence_length", minimum=1)
     model_config = config.get("model_config_resolved", {})
-    if isinstance(model_config, dict) and model_config.get("context_length"):
-        return int(model_config["context_length"])
+    if isinstance(model_config, dict) and model_config.get("context_length") is not None:
+        return _int_value(model_config["context_length"], "model_config_resolved.context_length", minimum=1)
     if isinstance(model_config, dict) and isinstance(model_config.get("base"), dict):
-        return int(model_config["base"].get("context_length", 128))
+        return _int_value(
+            model_config["base"].get("context_length", 128),
+            "model_config_resolved.base.context_length",
+            minimum=1,
+        )
     return 128
 
 
@@ -453,8 +474,12 @@ def _as_bool(value: Any) -> bool:
     if isinstance(value, bool):
         return value
     if isinstance(value, str):
-        return value.lower() in {"1", "true", "yes", "on", "enabled"}
-    return bool(value)
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "on", "enabled"}:
+            return True
+        if normalized in {"0", "false", "no", "off", "disabled"}:
+            return False
+    raise ValueError("Boolean config values must be booleans or boolean strings.")
 
 
 def _num(value: Any) -> float | None:
