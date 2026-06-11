@@ -66,6 +66,8 @@ def make_long_context_report(
         task_families=task_families,
         difficulties=difficulties,
     )
+    expected_task_families = task_families or ["needle_retrieval", "two_hop_tracing"]
+    expected_difficulties = difficulties or ["near", "middle", "far"]
     rows: list[dict[str, Any]] = []
     with torch.no_grad():
         for index, sample in enumerate(samples):
@@ -98,6 +100,7 @@ def make_long_context_report(
         "context_length": context_length,
         "samples_path": str(sample_output_path),
         "overall": summarize_long_context_rows(rows),
+        "coverage": _coverage_summary(rows, expected_task_families, expected_difficulties),
         "by_task_family": _group_summary(rows, "task_family"),
         "by_difficulty": _group_summary(rows, "difficulty"),
         "routing": _routing_summary(rows),
@@ -311,6 +314,27 @@ def _group_summary(rows: list[dict[str, Any]], key: str) -> dict[str, dict[str, 
     for row in rows:
         groups.setdefault(str(row[key]), []).append(row)
     return {name: summarize_long_context_rows(group_rows) for name, group_rows in sorted(groups.items())}
+
+
+def _coverage_summary(
+    rows: list[dict[str, Any]],
+    expected_task_families: list[str],
+    expected_difficulties: list[str],
+) -> dict[str, Any]:
+    observed_task_families = sorted({str(row.get("task_family")) for row in rows})
+    observed_difficulties = sorted({str(row.get("difficulty")) for row in rows})
+    missing_task_families = [family for family in expected_task_families if family not in observed_task_families]
+    missing_difficulties = [difficulty for difficulty in expected_difficulties if difficulty not in observed_difficulties]
+    return {
+        "expected_task_families": expected_task_families,
+        "observed_task_families": observed_task_families,
+        "missing_task_families": missing_task_families,
+        "task_family_coverage_passed": not missing_task_families,
+        "expected_difficulties": expected_difficulties,
+        "observed_difficulties": observed_difficulties,
+        "missing_difficulties": missing_difficulties,
+        "difficulty_coverage_passed": not missing_difficulties,
+    }
 
 
 def _routing_summary(rows: list[dict[str, Any]]) -> dict[str, float | None]:

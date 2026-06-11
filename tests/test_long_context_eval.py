@@ -5,6 +5,7 @@ torch = pytest.importorskip("torch")
 from brian_sphere_llm.data.tokenize import SimpleByteTokenizer
 from brian_sphere_llm.eval.long_context import (
     LongContextSample,
+    _coverage_summary,
     _global_kv_summary,
     _memory_budget_summary,
     evaluate_long_context_sample,
@@ -97,6 +98,24 @@ def test_summarize_long_context_rows() -> None:
     assert summary["exact_match_accuracy"] == 0.5
     assert summary["teacher_forced_token_accuracy"] == 0.75
     assert summary["truncation_rate"] == 0.5
+
+
+def test_long_context_coverage_summary_reports_missing_families_and_difficulties() -> None:
+    rows = [
+        {"task_family": "needle_retrieval", "difficulty": "near"},
+        {"task_family": "ruler_subset", "difficulty": "middle"},
+    ]
+    summary = _coverage_summary(
+        rows,
+        ["needle_retrieval", "ruler_subset", "longbench_subset"],
+        ["near", "middle", "far"],
+    )
+
+    assert summary["observed_task_families"] == ["needle_retrieval", "ruler_subset"]
+    assert summary["missing_task_families"] == ["longbench_subset"]
+    assert summary["task_family_coverage_passed"] is False
+    assert summary["missing_difficulties"] == ["far"]
+    assert summary["difficulty_coverage_passed"] is False
 
 
 def test_memory_budget_summary_estimates_global_cache_ratio() -> None:
