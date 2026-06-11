@@ -210,29 +210,55 @@ def _trained_tokens(config: dict[str, Any], final_train: dict[str, Any], final_e
 
 def _hard_exit_enabled(config: dict[str, Any]) -> bool | None:
     routing_config = config.get("routing", {})
-    if isinstance(routing_config, dict) and isinstance(routing_config.get("hard_exit"), bool):
-        return bool(routing_config["hard_exit"])
+    if isinstance(routing_config, dict) and "hard_exit" in routing_config:
+        return _bool_value(routing_config["hard_exit"], "routing.hard_exit")
     stage = config.get("stage")
     if isinstance(stage, str) and stage == "stage4_output_action":
         return True
     model_config = config.get("model_config_resolved", {})
-    if isinstance(model_config, dict) and isinstance(model_config.get("hard_exit"), bool):
-        return bool(model_config["hard_exit"])
+    if isinstance(model_config, dict) and "hard_exit" in model_config:
+        return _bool_value(model_config["hard_exit"], "model_config_resolved.hard_exit")
     return None
 
 
 def _sequence_length(config: dict[str, Any]) -> int:
     data_config = config.get("data_config_resolved", {})
-    if isinstance(data_config, dict) and _num(data_config.get("sequence_length")) is not None:
-        return int(data_config["sequence_length"])
+    if isinstance(data_config, dict) and data_config.get("sequence_length") is not None:
+        return _int_value(data_config["sequence_length"], "data_config_resolved.sequence_length", minimum=1)
     model_config = config.get("model_config_resolved", {})
-    if isinstance(model_config, dict) and _num(model_config.get("context_length")) is not None:
-        return int(model_config["context_length"])
+    if isinstance(model_config, dict) and model_config.get("context_length") is not None:
+        return _int_value(model_config["context_length"], "model_config_resolved.context_length", minimum=1)
     if isinstance(model_config, dict) and isinstance(model_config.get("base"), dict):
         base = model_config["base"]
-        if _num(base.get("context_length")) is not None:
-            return int(base["context_length"])
+        if base.get("context_length") is not None:
+            return _int_value(base["context_length"], "model_config_resolved.base.context_length", minimum=1)
     return 0
+
+
+def _bool_value(value: Any, name: str) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "off"}:
+            return False
+    raise ValueError(f"{name} must be a boolean.")
+
+
+def _int_value(value: Any, name: str, *, minimum: int | None = None) -> int:
+    if isinstance(value, bool):
+        raise ValueError(f"{name} must be an integer, not a boolean.")
+    if isinstance(value, int):
+        number = value
+    elif isinstance(value, float) and math.isfinite(value) and value.is_integer():
+        number = int(value)
+    else:
+        raise ValueError(f"{name} must be an integer.")
+    if minimum is not None and number < minimum:
+        raise ValueError(f"{name} must be >= {minimum}.")
+    return number
 
 
 def _stage_from_name(name: str) -> str:

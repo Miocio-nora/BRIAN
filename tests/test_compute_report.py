@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from brian_sphere_llm.eval.compute_report import estimate_gpu_hours, make_compute_report, summarize_run
+from brian_sphere_llm.eval.compute_report import _sequence_length, estimate_gpu_hours, make_compute_report, summarize_run
 
 
 def _write_json(path: Path, data: dict) -> None:
@@ -153,6 +153,30 @@ def test_summarize_run_marks_stage4_output_action_as_hard_exit_by_default(tmp_pa
     )
     summary = summarize_run(run)
     assert summary["hard_exit_enabled"] is True
+
+
+def test_summarize_run_honors_explicit_string_false_hard_exit(tmp_path: Path) -> None:
+    run = _write_run(
+        tmp_path,
+        "stage4_string_false",
+        config={
+            "stage": "stage4_output_action",
+            "batch_size": 2,
+            "data_config_resolved": {"sequence_length": 8},
+            "routing": {"mode": "scheduled", "hard_exit": "false"},
+            "model_config_resolved": {"hard_exit": True},
+        },
+        model_stats={"model_name": "stage4_string_false", "parameter_count": 100, "layers": 4},
+    )
+
+    summary = summarize_run(run)
+
+    assert summary["hard_exit_enabled"] is False
+
+
+def test_compute_report_rejects_boolean_sequence_length() -> None:
+    with pytest.raises(ValueError, match="sequence_length"):
+        _sequence_length({"data_config_resolved": {"sequence_length": True}})
 
 
 def test_summarize_run_rejects_boolean_numeric_metrics(tmp_path: Path) -> None:
