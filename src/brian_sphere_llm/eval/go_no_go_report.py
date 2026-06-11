@@ -165,7 +165,7 @@ def _r125_decision(stage_gate_report: dict[str, Any], *, position_ablation_repor
         ),
         _criterion(
             "output_action_not_always_early_or_never_used",
-            _all_gate_checks(gates, "stage4_to_5", ["exit_distribution_present", "not_all_immediate_exit"]),
+            _all_gate_checks(gates, "stage4_to_5", ["exit_distribution_present", "not_all_immediate_exit", "not_never_exit"]),
             _gate_evidence(gates, "stage4_to_5", ["status", "first_exit_step_histogram"]),
         ),
     ]

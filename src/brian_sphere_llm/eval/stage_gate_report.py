@@ -291,12 +291,14 @@ def _gate_stage4(
     exit_hist = _latest_exit_hist(stage4)
     total_exits = sum(exit_hist.values()) if exit_hist else 0
     immediate = exit_hist.get("1", 0) if exit_hist else 0
+    nonzero_exits = sum(count for step, count in exit_hist.items() if step != "0") if exit_hist else 0
     cost_analysis = cost_control_report.get("analysis", {}) if cost_control_report else {}
     cost_checks = cost_analysis.get("checks", {}) if isinstance(cost_analysis.get("checks"), dict) else {}
     out_checks = out_by_difficulty_report.get("checks", {}) if isinstance(out_by_difficulty_report.get("checks"), dict) else {}
     checks = {
         "exit_distribution_present": bool(exit_hist),
         "not_all_immediate_exit": bool(exit_hist) and immediate < total_exits,
+        "not_never_exit": bool(exit_hist) and nonzero_exits > 0,
         "average_route_steps_present": _finite(_routing_metric(stage4, "average_route_steps")),
         "cost_control_report_present": bool(cost_control_report),
         "cost_control_active_range_present": bool(cost_checks.get("active_compute_range_present", False)),
