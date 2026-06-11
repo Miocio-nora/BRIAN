@@ -1,0 +1,4 @@
+extends: brian_r125.yaml
+model_name: brian_r125_direct_position_add
+block_position_dim: 768
+block_position_injection: direct_add

@@ -56,9 +56,22 @@ def test_position_ablation_coverage_passes_geometry_requirements(tmp_path: Path)
 
     assert report["overall_status"] == "pass"
     assert report["profile"] == "block_position_ablation"
-    assert [row["id"] for row in report["requirements"]] == ["P0", "P1", "P2", "P3", "P4", "P5", "P6", "P7"]
+    assert [row["id"] for row in report["requirements"]] == [
+        "P0",
+        "P1",
+        "P2",
+        "P3",
+        "P4",
+        "P5",
+        "P6",
+        "P7",
+        "P8",
+        "P9",
+    ]
     assert _requirement(report, "P6")["checks"]["model_flags_match"] is True
     assert _requirement(report, "P7")["checks"]["loss_weights_match"] is True
+    assert _requirement(report, "P8")["checks"]["model_flags_match"] is True
+    assert _requirement(report, "P9")["checks"]["model_flags_match"] is True
 
 
 def test_global_kv_package_coverage_passes_window_and_sink_requirements(tmp_path: Path) -> None:

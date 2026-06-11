@@ -6,6 +6,7 @@ route_pool_blocks: 8
 post_blocks: 2
 block_position_dim: 64
 block_position_mode: open_arc
+block_position_injection: adapter
 position_to_router: true
 position_to_blocks: true
 max_route_steps: 4

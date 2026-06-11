@@ -34,3 +34,11 @@ ablations:
     name: no_location_loss
     train_config: configs/train/ablation_p7_no_location_loss.yaml
     purpose: Disable location regularization while keeping the geometric router bias.
+  - id: P8
+    name: direct_position_hidden_addition
+    train_config: configs/train/ablation_p8_direct_position_add.yaml
+    purpose: Test whether directly adding position to hidden state pollutes content representations.
+  - id: P9
+    name: separate_position_state
+    train_config: configs/train/ablation_p9_separate_position_state.yaml
+    purpose: Main proposal with position kept in a separate adapter side channel.

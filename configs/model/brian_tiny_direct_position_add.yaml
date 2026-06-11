@@ -1,0 +1,4 @@
+extends: brian_tiny.yaml
+model_name: brian_tiny_direct_position_add
+block_position_dim: 64
+block_position_injection: direct_add

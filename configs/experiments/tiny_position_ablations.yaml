@@ -34,3 +34,11 @@ ablations:
     name: no_location_loss
     train_config: configs/train/stage3_position_no_location_loss_tiny_debug.yaml
     purpose: Tiny smoke ablation with location regularization disabled.
+  - id: P8
+    name: direct_position_hidden_addition
+    train_config: configs/train/stage3_position_direct_add_tiny_debug.yaml
+    purpose: Tiny smoke ablation for direct position-hidden addition.
+  - id: P9
+    name: separate_position_state
+    train_config: configs/train/stage3_position_separate_state_tiny_debug.yaml
+    purpose: Tiny smoke path for the separate adapter position state.

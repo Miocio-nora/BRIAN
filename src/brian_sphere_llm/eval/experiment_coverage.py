@@ -276,6 +276,22 @@ def _position_requirements(entries: list[dict[str, Any]]) -> list[dict[str, Any]
             ),
             _req("P6", "no location bias", mode="scheduled", model_flags={"location_bias_weight": 0.0}),
             _req("P7", "no location loss", mode="scheduled", loss_weights={"location": 0.0}),
+            _req(
+                "P8",
+                "direct position-hidden addition",
+                mode="scheduled",
+                model_flags={"block_position_injection": "direct_add"},
+            ),
+            _req(
+                "P9",
+                "separate position state",
+                mode="scheduled",
+                model_flags={
+                    "block_position_injection": "adapter",
+                    "position_to_router": True,
+                    "position_to_blocks": True,
+                },
+            ),
         ],
     )
 
@@ -479,6 +495,7 @@ def _model_summary(config: dict[str, Any], model_config_path: Path | None) -> di
         "post_blocks",
         "block_position_dim",
         "block_position_mode",
+        "block_position_injection",
         "position_to_router",
         "position_to_blocks",
         "location_bias_weight",

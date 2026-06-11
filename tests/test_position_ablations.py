@@ -51,6 +51,20 @@ def test_position_router_only_ablation_keeps_state_but_masks_blocks() -> None:
     assert torch.count_nonzero(model._block_position(position)) == 0
 
 
+def test_direct_position_addition_uses_hidden_dim_position_state() -> None:
+    model = BrianRouteCore(_config(block_position_dim=32, block_position_injection="direct_add"))
+    input_ids = torch.randint(0, 64, (2, 8))
+    output = model(input_ids, targets=input_ids, route_mode="fixed")
+
+    assert output["logits"].shape == (2, 8, 64)
+    assert model.model_stats()["block_position_injection"] == "direct_add"
+
+
+def test_direct_position_addition_requires_matching_hidden_dim() -> None:
+    with pytest.raises(ValueError, match="direct_add position_dim must equal d_model"):
+        BrianRouteCore(_config(block_position_injection="direct_add"))
+
+
 def test_location_bias_penalizes_distant_action_logits() -> None:
     model = BrianRouteCore(_config(location_bias_weight=0.5))
     position = model.position_table.by_action(torch.tensor([0, 1]))
@@ -70,6 +84,8 @@ def test_position_ablation_configs_resolve() -> None:
         "configs/train/stage3_position_random_tiny_debug.yaml",
         "configs/train/stage3_position_no_location_bias_tiny_debug.yaml",
         "configs/train/stage3_position_no_location_loss_tiny_debug.yaml",
+        "configs/train/stage3_position_direct_add_tiny_debug.yaml",
+        "configs/train/stage3_position_separate_state_tiny_debug.yaml",
         "configs/train/ablation_p0_no_position.yaml",
         "configs/train/ablation_p1_position_random.yaml",
         "configs/train/ablation_p3_position_circular.yaml",
@@ -77,6 +93,8 @@ def test_position_ablation_configs_resolve() -> None:
         "configs/train/ablation_p5_position_router_and_blocks.yaml",
         "configs/train/ablation_p6_no_location_bias.yaml",
         "configs/train/ablation_p7_no_location_loss.yaml",
+        "configs/train/ablation_p8_direct_position_add.yaml",
+        "configs/train/ablation_p9_separate_position_state.yaml",
     ]:
         cfg = load_config(path)
         model_config_path = (Path(path).parent / cfg["model_config"]).resolve()

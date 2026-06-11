@@ -60,6 +60,7 @@ class BrianRouteConfig:
     branch_cost: float = 0.01
     parallel_exit_policy: str = "branch"
     block_position_mode: str = "open_arc"
+    block_position_injection: str = "adapter"
     position_to_router: bool = True
     position_to_blocks: bool = True
     location_bias_weight: float = 0.0
@@ -100,6 +101,7 @@ class BrianRouteConfig:
             branch_cost=float(data.get("branch_cost", 0.01)),
             parallel_exit_policy=str(data.get("parallel_exit_policy", "branch")),
             block_position_mode=str(data.get("block_position_mode", "open_arc")),
+            block_position_injection=str(data.get("block_position_injection", "adapter")),
             position_to_router=_as_bool(data.get("position_to_router", True)),
             position_to_blocks=_as_bool(data.get("position_to_blocks", True)),
             location_bias_weight=float(data.get("location_bias_weight", 0.0)),
@@ -117,9 +119,12 @@ class BrianRouteCore(ModuleBase):
         self.token_embedding = nn.Embedding(config.base.vocab_size, config.base.d_model)
         self.pre_blocks = nn.ModuleList([TransformerBlock(backbone) for _ in range(config.pre_blocks)])
         self.route_blocks = nn.ModuleList(
-            [RouteBlock(backbone, config.block_position_dim) for _ in range(config.route_pool_blocks)]
+            [
+                RouteBlock(backbone, config.block_position_dim, config.block_position_injection)
+                for _ in range(config.route_pool_blocks)
+            ]
         )
-        self.exit_block = ExitBlock(config.base.d_model, config.block_position_dim)
+        self.exit_block = ExitBlock(config.base.d_model, config.block_position_dim, config.block_position_injection)
         self.post_blocks = nn.ModuleList([TransformerBlock(backbone) for _ in range(config.post_blocks)])
         self.position_table = BlockPositionTable(
             config.route_pool_blocks,
@@ -702,6 +707,7 @@ class BrianRouteCore(ModuleBase):
             "top_k": self.config.top_k,
             "later_top_k": self.config.later_top_k,
             "block_position_mode": self.config.block_position_mode,
+            "block_position_injection": self.config.block_position_injection,
             "position_to_router": str(self.config.position_to_router),
             "position_to_blocks": str(self.config.position_to_blocks),
             "location_bias_weight": str(self.config.location_bias_weight),

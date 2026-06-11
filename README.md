@@ -287,11 +287,14 @@ python scripts/train.py --config configs/train/stage3_position_circular_tiny_deb
 python scripts/train.py --config configs/train/stage3_position_random_tiny_debug.yaml
 python scripts/train.py --config configs/train/stage3_position_no_location_bias_tiny_debug.yaml
 python scripts/train.py --config configs/train/stage3_position_no_location_loss_tiny_debug.yaml
+python scripts/train.py --config configs/train/stage3_position_direct_add_tiny_debug.yaml
+python scripts/train.py --config configs/train/stage3_position_separate_state_tiny_debug.yaml
 ```
 
 The formal BRIAN-R125 position ablation manifest is `configs/experiments/route_core_position_ablations.yaml`.
-It covers P0-P7: no-position, random/open-arc/circular geometry, router-only position,
-router+block position, no location bias, and no location loss.
+It covers P0-P9: no-position, random/open-arc/circular geometry, router-only position,
+router+block position, no location bias, no location loss, direct position-hidden addition,
+and separate adapter position state.
 
 Generate a position-ablation evidence report:
 

@@ -15,10 +15,12 @@ def test_build_experiment_plan_resolves_repo_paths() -> None:
     assert plan.entries[0].train_config.name == "stage0_tiny_debug.yaml"
     assert plan.entries[1].id == "P0"
     assert plan.entries[1].train_config.name == "stage3_no_position_tiny_debug.yaml"
-    assert [entry.id for entry in plan.entries[1:]] == ["P0", "P1", "P2", "P3", "P4", "P5", "P6", "P7"]
+    assert [entry.id for entry in plan.entries[1:]] == ["P0", "P1", "P2", "P3", "P4", "P5", "P6", "P7", "P8", "P9"]
     assert plan.entries[2].train_config.name == "stage3_position_random_tiny_debug.yaml"
     assert plan.entries[7].train_config.name == "stage3_position_no_location_bias_tiny_debug.yaml"
     assert plan.entries[8].train_config.name == "stage3_position_no_location_loss_tiny_debug.yaml"
+    assert plan.entries[9].train_config.name == "stage3_position_direct_add_tiny_debug.yaml"
+    assert plan.entries[10].train_config.name == "stage3_position_separate_state_tiny_debug.yaml"
 
 
 def test_r125_package_experiment_manifest_resolves_repo_paths() -> None:
