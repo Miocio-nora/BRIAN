@@ -24,6 +24,7 @@ def _write_run(
     difficulty_report: dict | None = None,
     global_kv_retention_report: dict | None = None,
     parallel_passing_report: dict | None = None,
+    model_stats: dict | None = None,
     data_manifest_ref: dict | None = None,
     write_data_manifest_ref: bool = True,
 ) -> Path:
@@ -33,7 +34,8 @@ def _write_run(
     (run_dir / "checkpoint_latest" / "state.pt").write_bytes(b"stub")
     (run_dir / "checkpoint_best").mkdir()
     (run_dir / "checkpoint_best" / "state.pt").write_bytes(b"stub")
-    (run_dir / "model_stats.json").write_text(json.dumps({"model_name": name}), encoding="utf-8")
+    stats = _model_stats(name) if model_stats is None else model_stats
+    (run_dir / "model_stats.json").write_text(json.dumps(stats), encoding="utf-8")
     if write_data_manifest_ref:
         manifest_ref = _data_manifest_ref() if data_manifest_ref is None else data_manifest_ref
         (run_dir / "data_manifest_ref.json").write_text(json.dumps(manifest_ref), encoding="utf-8")
@@ -125,6 +127,10 @@ def _data_manifest_ref() -> dict:
         "sha256_manifest": "abc123",
         "source_mixture_realized": {"unit": 32},
     }
+
+
+def _model_stats(name: str) -> dict:
+    return {"model_name": name, "parameter_count": 100}
 
 
 def test_stage_gate_report_writes_json(tmp_path: Path) -> None:
@@ -302,6 +308,7 @@ def test_stage_gate_report_writes_json(tmp_path: Path) -> None:
     assert report["gates"]["stage0_to_1"]["checks"]["checkpoint_resume_event_valid"] is True
     assert report["gates"]["stage0_to_1"]["checks"]["checkpoint_best_artifact"] is True
     assert report["gates"]["stage0_to_1"]["checks"]["eval_determinism_checks_passed"] is True
+    assert report["gates"]["stage0_to_1"]["checks"]["model_stats_valid"] is True
     assert report["gates"]["stage0_to_1"]["checks"]["data_manifest_ref_valid"] is True
     assert report["gates"]["stage0_to_1"]["checks"]["baseline_difficulty_bins_present"] is True
     assert report["gates"]["stage1_to_2"]["status"] == "pass"
@@ -407,6 +414,34 @@ def test_stage0_gate_requires_valid_data_manifest_ref(tmp_path: Path) -> None:
     assert gate["data_manifest_ref_checks"]["path_present"] is False
     assert gate["data_manifest_ref_checks"]["sha256_manifest_present"] is False
     assert gate["data_manifest_ref_checks"]["source_mixture_present"] is False
+
+
+def test_stage0_gate_requires_valid_model_stats(tmp_path: Path) -> None:
+    baseline = _write_run(
+        tmp_path,
+        "baseline",
+        stage="stage0_baseline",
+        val_loss=10.0,
+        train_row={},
+        determinism_status="pass",
+        resume_event={
+            "checkpoint": "checkpoint_latest",
+            "resumed_from_step": 1,
+            "target_max_steps": 2,
+            "optimizer_state_loaded": True,
+        },
+        baseline_difficulty_report=_baseline_difficulty_report(),
+        model_stats={"model_name": "baseline"},
+    )
+
+    report_path = make_stage_gate_report([baseline], output_path=tmp_path / "gate.json")
+    gate = json.loads(report_path.read_text(encoding="utf-8"))["gates"]["stage0_to_1"]
+
+    assert gate["status"] == "warn"
+    assert gate["checks"]["model_stats_present"] is True
+    assert gate["checks"]["model_stats_valid"] is False
+    assert gate["model_stats_checks"]["model_name_present"] is True
+    assert gate["model_stats_checks"]["parameter_count_positive_integer"] is False
 
 
 def test_stage_gate_report_uses_cost_control_report(tmp_path: Path) -> None:

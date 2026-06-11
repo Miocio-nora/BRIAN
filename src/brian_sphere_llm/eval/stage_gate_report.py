@@ -134,6 +134,10 @@ def _summarize_run(run_dir: Path) -> dict[str, Any]:
         "run_dir": str(run_dir),
         "stage": stage,
         "model_name": model_stats.get("model_name", ""),
+        "parameter_count": model_stats.get("parameter_count"),
+        "model_stats": model_stats,
+        "model_stats_present": bool(model_stats),
+        "model_stats_checks": _model_stats_checks(model_stats),
         "has_checkpoint_latest": (run_dir / "checkpoint_latest" / "state.pt").exists(),
         "has_checkpoint_best": (run_dir / "checkpoint_best" / "state.pt").exists(),
         "has_eval_log": bool(eval_rows),
@@ -209,6 +213,7 @@ def _gate_stage0(stage0: dict[str, Any] | None) -> dict[str, Any]:
         "eval_determinism_report_present": bool(stage0 and stage0.get("eval_determinism_report_present")),
         "eval_deterministic": bool(stage0 and stage0.get("eval_determinism_status") == "pass"),
         "eval_determinism_checks_passed": _eval_determinism_checks_passed(determinism_checks),
+        **_model_stats_gate_checks(stage0),
         **_data_manifest_gate_checks(stage0),
     }
     return _gate(
@@ -219,6 +224,7 @@ def _gate_stage0(stage0: dict[str, Any] | None) -> dict[str, Any]:
             "eval_determinism_checks": determinism_checks,
             "latest_resume_event": stage0.get("latest_resume_event") if stage0 else {},
             "resume_event_checks": resume_event_checks,
+            **_model_stats_gate_extras(stage0),
             **_data_manifest_gate_extras(stage0),
             "baseline_difficulty_by_bin": stage0.get("baseline_difficulty_by_bin") if stage0 else {},
         },
@@ -236,6 +242,7 @@ def _gate_stage1(stage1: dict[str, Any] | None, stage0: dict[str, Any] | None, t
         "fixed_route_stability_report_present": bool(stage1 and stage1.get("fixed_route_stability_report_present")),
         "fixed_route_stability_passed": bool(stage1 and stage1.get("fixed_route_stability_status") == "pass"),
         "checkpoint_present": bool(stage1 and stage1["has_checkpoint_latest"]),
+        **_model_stats_gate_checks(stage1),
         **_data_manifest_gate_checks(stage1),
     }
     return _gate(
@@ -245,6 +252,7 @@ def _gate_stage1(stage1: dict[str, Any] | None, stage0: dict[str, Any] | None, t
             "loss_ratio": ratio,
             "fixed_route_stability_status": stage1.get("fixed_route_stability_status") if stage1 else None,
             "fixed_route_stability_checks": stage1.get("fixed_route_stability_checks") if stage1 else {},
+            **_model_stats_gate_extras(stage1),
             **_data_manifest_gate_extras(stage1),
         },
     )
@@ -259,6 +267,7 @@ def _gate_stage2(stage2: dict[str, Any] | None, thresholds: dict[str, float]) ->
         "pseudo_route_curriculum_report_present": bool(stage2 and stage2.get("pseudo_route_curriculum_report_present")),
         "pseudo_route_curriculum_passed": bool(stage2 and stage2.get("pseudo_route_curriculum_status") == "pass"),
         "checkpoint_present": bool(stage2 and stage2["has_checkpoint_latest"]),
+        **_model_stats_gate_checks(stage2),
         **_data_manifest_gate_checks(stage2),
     }
     return _gate(
@@ -268,6 +277,7 @@ def _gate_stage2(stage2: dict[str, Any] | None, thresholds: dict[str, float]) ->
             "pseudo_route_curriculum_status": stage2.get("pseudo_route_curriculum_status") if stage2 else None,
             "pseudo_route_curriculum_checks": stage2.get("pseudo_route_curriculum_checks") if stage2 else {},
             "pseudo_route_curriculum_by_difficulty": stage2.get("pseudo_route_curriculum_by_difficulty") if stage2 else {},
+            **_model_stats_gate_extras(stage2),
             **_data_manifest_gate_extras(stage2),
         },
     )
@@ -289,6 +299,7 @@ def _gate_stage3(stage3: dict[str, Any] | None, stage1: dict[str, Any] | None, t
         "scheduled_routing_report_present": bool(stage3 and stage3.get("scheduled_routing_report_present")),
         "scheduled_routing_passed": bool(stage3 and stage3.get("scheduled_routing_status") == "pass"),
         "checkpoint_present": bool(stage3 and stage3["has_checkpoint_latest"]),
+        **_model_stats_gate_checks(stage3),
         **_data_manifest_gate_checks(stage3),
     }
     return _gate(
@@ -299,6 +310,7 @@ def _gate_stage3(stage3: dict[str, Any] | None, stage1: dict[str, Any] | None, t
             "scheduled_routing_status": stage3.get("scheduled_routing_status") if stage3 else None,
             "scheduled_routing_checks": stage3.get("scheduled_routing_checks") if stage3 else {},
             "scheduled_routing_logged_values": stage3.get("scheduled_routing_logged_values") if stage3 else [],
+            **_model_stats_gate_extras(stage3),
             **_data_manifest_gate_extras(stage3),
         },
     )
@@ -331,6 +343,7 @@ def _gate_stage4(
         and bool(out_checks.get("active_compute_non_decreasing_with_difficulty", False)),
         "easy_output_probability_not_below_hard": bool(out_checks.get("easy_output_probability_at_least_hard", False)),
         "checkpoint_present": bool(stage4 and stage4["has_checkpoint_latest"]),
+        **_model_stats_gate_checks(stage4),
         **_data_manifest_gate_checks(stage4),
     }
     return _gate(
@@ -344,6 +357,7 @@ def _gate_stage4(
             "out_by_difficulty_status": out_by_difficulty_report.get("overall_status") if out_by_difficulty_report else None,
             "out_by_difficulty_checks": out_checks,
             "out_by_difficulty_deltas": out_by_difficulty_report.get("deltas", {}) if out_by_difficulty_report else {},
+            **_model_stats_gate_extras(stage4),
             **_data_manifest_gate_extras(stage4),
         },
     )
@@ -382,6 +396,7 @@ def _gate_stage5(
         ),
         "long_context_global_kv_benefit_proxy": any_long_context_pass,
         "checkpoint_present": bool(stage5 and stage5["has_checkpoint_latest"]),
+        **_model_stats_gate_checks(stage5),
         **_data_manifest_gate_checks(stage5),
     }
     return _gate(
@@ -396,6 +411,7 @@ def _gate_stage5(
             "long_context_compare_candidate_count": long_context_compare_report.get("candidate_count")
             if long_context_compare_report
             else None,
+            **_model_stats_gate_extras(stage5),
             **_data_manifest_gate_extras(stage5),
         },
     )
@@ -435,6 +451,7 @@ def _gate_stage6(
         ),
         "parallel_branch_benefit_proxy": any_parallel_pass,
         "checkpoint_present": bool(stage6 and stage6["has_checkpoint_latest"]),
+        **_model_stats_gate_checks(stage6),
         **_data_manifest_gate_checks(stage6),
     }
     return _gate(
@@ -449,6 +466,7 @@ def _gate_stage6(
             "parallel_compare_candidate_count": parallel_compare_report.get("candidate_count")
             if parallel_compare_report
             else None,
+            **_model_stats_gate_extras(stage6),
             **_data_manifest_gate_extras(stage6),
         },
     )
@@ -502,6 +520,30 @@ def _resume_event_checks(event: Any) -> dict[str, bool]:
         and target_max_steps is not None
         and target_max_steps > resumed_from_step,
         "optimizer_state_loaded": event.get("optimizer_state_loaded") is True,
+    }
+
+
+def _model_stats_checks(stats: Any) -> dict[str, bool]:
+    if not isinstance(stats, dict):
+        stats = {}
+    return {
+        "model_name_present": _nonempty_string(stats.get("model_name")),
+        "parameter_count_positive_integer": _positive_int(stats.get("parameter_count")),
+    }
+
+
+def _model_stats_gate_checks(summary: dict[str, Any] | None) -> dict[str, bool]:
+    checks = summary.get("model_stats_checks", {}) if summary else {}
+    return {
+        "model_stats_present": bool(summary and summary.get("model_stats_present")),
+        "model_stats_valid": isinstance(checks, dict) and all(checks.values()),
+    }
+
+
+def _model_stats_gate_extras(summary: dict[str, Any] | None) -> dict[str, Any]:
+    return {
+        "model_stats": summary.get("model_stats") if summary else {},
+        "model_stats_checks": summary.get("model_stats_checks") if summary else {},
     }
 
 
@@ -608,6 +650,10 @@ def _int_like(value: Any) -> int | None:
     if isinstance(value, float) and math.isfinite(value) and value.is_integer():
         return int(value)
     return None
+
+
+def _positive_int(value: Any) -> bool:
+    return type(value) is int and value > 0
 
 
 def _positive_number(value: Any) -> bool:
