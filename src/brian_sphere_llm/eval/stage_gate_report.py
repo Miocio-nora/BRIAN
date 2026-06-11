@@ -391,6 +391,9 @@ def _gate_stage4(
         "cost_control_report_present": bool(cost_control_report),
         "cost_control_active_range_present": bool(cost_checks.get("active_compute_range_present", False)),
         "cost_control_active_not_increasing": bool(cost_checks.get("active_compute_not_increasing_with_cost", False)),
+        "cost_control_average_steps_not_increasing": bool(
+            cost_checks.get("average_steps_not_increasing_with_cost", False)
+        ),
         "cost_control_output_not_decreasing": bool(cost_checks.get("output_probability_not_decreasing_with_cost", False)),
         "out_by_difficulty_report_present": bool(out_by_difficulty_report),
         "out_by_difficulty_passed": bool(out_by_difficulty_report.get("overall_status") == "pass"),
@@ -410,7 +413,14 @@ def _gate_stage4(
         {
             "first_exit_step_histogram": exit_hist,
             "cost_control_status": cost_analysis.get("status") if cost_analysis else None,
+            "cost_control_average_route_steps_range": cost_analysis.get("average_route_steps_range") if cost_analysis else None,
             "cost_control_active_block_evals_range": cost_analysis.get("active_block_evals_range") if cost_analysis else None,
+            "cost_control_step_correlation": cost_analysis.get("cost_vs_average_route_steps_correlation")
+            if cost_analysis
+            else None,
+            "cost_control_active_correlation": cost_analysis.get("cost_vs_active_block_evals_correlation")
+            if cost_analysis
+            else None,
             "cost_control_report_run_count": cost_control_report.get("run_count") if cost_control_report else None,
             "out_by_difficulty_status": out_by_difficulty_report.get("overall_status") if out_by_difficulty_report else None,
             "out_by_difficulty_checks": out_checks,

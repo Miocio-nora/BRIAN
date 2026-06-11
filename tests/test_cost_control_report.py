@@ -52,6 +52,8 @@ def test_make_cost_control_report_orders_and_scores_sweep(tmp_path: Path) -> Non
     assert report["analysis"]["status"] == "pass"
     assert report["analysis"]["active_block_evals_range"] == 0.6000000000000001
     assert report["analysis"]["cost_vs_active_block_evals_correlation"] < 0.0
+    assert report["analysis"]["checks"]["average_steps_not_increasing_with_cost"] is True
+    assert report["analysis"]["average_route_steps_monotonic_nonincreasing"] is True
     assert report["analysis"]["cost_vs_p_output_correlation"] > 0.0
 
 

@@ -43,6 +43,7 @@ def _passing_stage_gate() -> dict:
                     "cost_control_report_present": True,
                     "cost_control_active_range_present": True,
                     "cost_control_active_not_increasing": True,
+                    "cost_control_average_steps_not_increasing": True,
                     "cost_control_output_not_decreasing": True,
                     "exit_distribution_present": True,
                     "not_all_immediate_exit": True,
@@ -145,6 +146,28 @@ def test_go_no_go_r125_fails_and_marks_missing_evidence(tmp_path: Path) -> None:
     assert report["recommendation"] == "stop"
     assert criteria["output_action_not_always_early_or_never_used"]["status"] == "fail"
     assert criteria["block_position_ablation_measurable_difference"]["status"] == "missing"
+
+
+def test_go_no_go_r125_requires_average_steps_cost_control(tmp_path: Path) -> None:
+    data = _passing_stage_gate()
+    data["gates"]["stage4_to_5"]["checks"]["cost_control_average_steps_not_increasing"] = False
+    stage_gate = _write_json(tmp_path / "stage_gate.json", data)
+    position = _write_json(tmp_path / "position.json", _passing_position_ablation())
+
+    output = make_go_no_go_report(
+        stage_gate_report_path=stage_gate,
+        position_ablation_report_path=position,
+        output_path=tmp_path / "go_no_go.json",
+        phase="r125_to_r350",
+    )
+    report = json.loads(output.read_text(encoding="utf-8"))
+    criteria = {item["name"]: item for item in report["phases"]["r125_to_r350"]["criteria"]}
+
+    assert report["overall_status"] == "fail"
+    assert criteria["route_steps_controlled_by_cost_loss"]["status"] == "fail"
+    assert criteria["route_steps_controlled_by_cost_loss"]["evidence"]["checks"][
+        "cost_control_average_steps_not_increasing"
+    ] is False
 
 
 def test_go_no_go_r125_fails_when_output_action_never_exits(tmp_path: Path) -> None:
