@@ -24,6 +24,7 @@ def make_scheduled_routing_report(
     eval_rows = _read_jsonl(run_dir / "eval_log.jsonl")
     schedule_points = _schedule_points(schedule)
     logged_rows = [row for row in rows if _has_logged_schedule(row)]
+    logged_eval_rows = [row for row in eval_rows if _has_logged_schedule(row)]
     checks = {
         "scheduled_stage": str(config.get("stage", "")).startswith("stage3") or routing_config.get("mode") == "scheduled",
         "schedule_present": bool(schedule),
@@ -57,6 +58,23 @@ def make_scheduled_routing_report(
             default=_default_lambda_route(config),
             tolerance=tolerance,
         ),
+        "logged_eval_schedule_values_present": bool(logged_eval_rows),
+        "logged_eval_router_probability_matches_schedule": _logged_matches(
+            logged_eval_rows,
+            schedule_points,
+            key="scheduled_router_probability",
+            schedule_key="router_probability",
+            default=0.0,
+            tolerance=tolerance,
+        ),
+        "logged_eval_lambda_route_matches_schedule": _logged_matches(
+            logged_eval_rows,
+            schedule_points,
+            key="scheduled_lambda_route",
+            schedule_key="lambda_route",
+            default=_default_lambda_route(config),
+            tolerance=tolerance,
+        ),
     }
     report = {
         "run_dir": str(run_dir),
@@ -64,7 +82,10 @@ def make_scheduled_routing_report(
         "schedule": schedule_points,
         "train_step_count": len(rows),
         "logged_schedule_step_count": len(logged_rows),
+        "eval_step_count": len(eval_rows),
+        "logged_eval_schedule_step_count": len(logged_eval_rows),
         "logged_schedule_values": _logged_schedule_values(logged_rows),
+        "logged_eval_schedule_values": _logged_schedule_values(logged_eval_rows),
         "latest_eval_schedule_values": _latest_eval_schedule_values(eval_rows),
         "thresholds": {
             "min_final_router_probability": min_final_router_probability,

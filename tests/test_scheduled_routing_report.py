@@ -46,7 +46,11 @@ def test_scheduled_routing_report_checks_schedule_and_logged_values(tmp_path: Pa
     assert report["checks"]["lambda_route_decays"] is True
     assert report["checks"]["schedule_values_numeric"] is True
     assert report["checks"]["logged_router_probability_matches_schedule"] is True
+    assert report["checks"]["logged_eval_schedule_values_present"] is True
+    assert report["checks"]["logged_eval_router_probability_matches_schedule"] is True
+    assert report["checks"]["logged_eval_lambda_route_matches_schedule"] is True
     assert report["logged_schedule_values"][-1]["scheduled_router_probability"] == 1.0
+    assert report["logged_eval_schedule_values"][-1]["scheduled_router_probability"] == 1.0
     assert report["latest_eval_schedule_values"]["scheduled_lambda_route"] == 0.05
 
 
@@ -118,6 +122,46 @@ def test_scheduled_routing_report_rejects_boolean_logged_schedule_values(tmp_pat
     assert report["logged_schedule_step_count"] == 0
     assert report["latest_eval_schedule_values"] is None
     assert report["checks"]["logged_schedule_values_present"] is False
+    assert report["checks"]["logged_eval_schedule_values_present"] is False
+
+
+def test_scheduled_routing_report_rejects_eval_schedule_mismatch(tmp_path: Path) -> None:
+    run_dir = tmp_path / "stage3"
+    run_dir.mkdir()
+    schedule = [
+        {"max_step": 1, "router_probability": 0.1, "lambda_route": 1.0},
+        {"max_step": 2, "router_probability": 1.0, "lambda_route": 0.05},
+    ]
+    (run_dir / "config_resolved.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "stage": "stage3_scheduled_free_routing",
+                "loss_weights": {"route": 1.0},
+                "routing": {"mode": "scheduled", "schedule": schedule},
+            }
+        ),
+        encoding="utf-8",
+    )
+    _write_jsonl(
+        run_dir / "train_log.jsonl",
+        [
+            {"step": 1, "scheduled_router_probability": 0.1, "scheduled_lambda_route": 1.0},
+            {"step": 2, "scheduled_router_probability": 1.0, "scheduled_lambda_route": 0.05},
+        ],
+    )
+    _write_jsonl(
+        run_dir / "eval_log.jsonl",
+        [{"step": 2, "scheduled_router_probability": 0.1, "scheduled_lambda_route": 1.0}],
+    )
+
+    output = make_scheduled_routing_report(run_dir, output_path=tmp_path / "scheduled.json")
+    report = json.loads(output.read_text(encoding="utf-8"))
+
+    assert report["overall_status"] == "fail"
+    assert report["checks"]["logged_schedule_values_present"] is True
+    assert report["checks"]["logged_eval_schedule_values_present"] is True
+    assert report["checks"]["logged_eval_router_probability_matches_schedule"] is False
+    assert report["checks"]["logged_eval_lambda_route_matches_schedule"] is False
 
 
 def test_scheduled_routing_eval_config_resolves() -> None:
