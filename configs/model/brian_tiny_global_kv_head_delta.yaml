@@ -1,0 +1,3 @@
+extends: brian_tiny_global_kv_per_block.yaml
+model_name: brian_tiny_global_kv_head_delta
+global_head_delta_rank: 2

@@ -54,6 +54,7 @@ class BrianRouteConfig:
     global_sink_slots: int = 4
     global_window_slots: int = 32
     global_adapter_scope: str = "shared"
+    global_head_delta_rank: int = 0
     parallel_passing: bool = False
     beam_size: int = 2
     branch_cost: float = 0.01
@@ -92,6 +93,7 @@ class BrianRouteConfig:
             global_sink_slots=int(data.get("global_sink_slots", 4)),
             global_window_slots=int(data.get("global_window_slots", 32)),
             global_adapter_scope=str(data.get("global_adapter_scope", "shared")),
+            global_head_delta_rank=int(data.get("global_head_delta_rank", 0)),
             parallel_passing=parallel_passing,
             beam_size=int(data.get("beam_size", 2)),
             branch_cost=float(data.get("branch_cost", 0.01)),
@@ -131,17 +133,27 @@ class BrianRouteCore(ModuleBase):
             if config.global_adapter_scope not in {"shared", "per_block"}:
                 raise ValueError(f"Unknown global_adapter_scope: {config.global_adapter_scope}")
             self.global_cache = CanonicalGlobalCache(config.global_sink_slots, config.global_window_slots)
+            adapter_kwargs = {
+                "n_heads": config.base.n_heads,
+                "head_delta_rank": config.global_head_delta_rank,
+            }
             if config.global_adapter_scope == "per_block":
                 adapter_count = config.route_pool_blocks + 1
                 self.global_write = nn.ModuleList(
-                    [GlobalWriteAdapter(config.base.d_model, config.global_code_dim) for _ in range(adapter_count)]
+                    [
+                        GlobalWriteAdapter(config.base.d_model, config.global_code_dim, **adapter_kwargs)
+                        for _ in range(adapter_count)
+                    ]
                 )
                 self.global_read = nn.ModuleList(
-                    [GlobalReadAdapter(config.base.d_model, config.global_code_dim) for _ in range(adapter_count)]
+                    [
+                        GlobalReadAdapter(config.base.d_model, config.global_code_dim, **adapter_kwargs)
+                        for _ in range(adapter_count)
+                    ]
                 )
             else:
-                self.global_write = GlobalWriteAdapter(config.base.d_model, config.global_code_dim)
-                self.global_read = GlobalReadAdapter(config.base.d_model, config.global_code_dim)
+                self.global_write = GlobalWriteAdapter(config.base.d_model, config.global_code_dim, **adapter_kwargs)
+                self.global_read = GlobalReadAdapter(config.base.d_model, config.global_code_dim, **adapter_kwargs)
         else:
             self.global_cache = None
             self.global_write = None
@@ -677,6 +689,7 @@ class BrianRouteCore(ModuleBase):
             "global_sink_slots": self.config.global_sink_slots,
             "global_window_slots": self.config.global_window_slots,
             "global_adapter_scope": self.config.global_adapter_scope,
+            "global_head_delta_rank": self.config.global_head_delta_rank,
             "parallel_passing": str(self.config.parallel_passing),
             "beam_size": self.config.beam_size,
             "branch_cost": str(self.config.branch_cost),

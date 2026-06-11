@@ -103,6 +103,38 @@ def test_brian_global_kv_per_block_adapters_support_parallel_route() -> None:
     assert "parallel_delta_cache_slots_mean" in summary
 
 
+def test_brian_global_kv_head_delta_adapters_report_metrics() -> None:
+    cfg = BrianRouteConfig(
+        base=BaselineConfig(vocab_size=64, context_length=8, layers=4, d_model=32, n_heads=4),
+        pre_blocks=1,
+        route_pool_blocks=2,
+        post_blocks=1,
+        block_position_dim=8,
+        max_route_steps=2,
+        top_k=2,
+        hard_exit=True,
+        global_kv=True,
+        global_code_dim=8,
+        global_sink_slots=1,
+        global_window_slots=2,
+        global_adapter_scope="per_block",
+        global_head_delta_rank=2,
+    )
+    model = BrianRouteCore(cfg)
+    assert isinstance(model.global_write, torch.nn.ModuleList)
+    assert isinstance(model.global_read, torch.nn.ModuleList)
+    assert model.global_write[0].head_delta_rank == 2
+    assert model.global_read[0].head_delta_rank == 2
+    assert model.model_stats()["global_head_delta_rank"] == 2
+
+    input_ids = torch.randint(0, 64, (2, 8))
+    output = model(input_ids, targets=input_ids, route_mode="scheduled", router_probability=1.0, hard_exit=True)
+    summary = output["routing_summary"]
+
+    assert "global_read_gate_mean" in summary
+    assert "global_cache_slots_mean" in summary
+
+
 def test_global_read_adapter_reports_sink_and_window_attention() -> None:
     adapter = GlobalReadAdapter(d_model=4, code_dim=2)
     hidden = torch.ones(2, 3, 4)

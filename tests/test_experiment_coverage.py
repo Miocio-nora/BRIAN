@@ -52,6 +52,7 @@ def test_global_kv_package_coverage_passes_window_and_sink_requirements(tmp_path
     assert window["status"] == "pass"
     assert len(window["checks"]["distinct_global_window_slots"]) >= 2
     assert _requirement(report, "C6")["status"] == "pass"
+    assert _requirement(report, "C7")["status"] == "pass"
 
 
 def test_parallel_package_coverage_passes_weighted_and_beam2_requirements(tmp_path: Path) -> None:

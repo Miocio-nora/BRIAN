@@ -15,13 +15,34 @@ ModuleBase = nn.Module if nn is not None else object
 class GlobalReadAdapter(ModuleBase):
     """Read canonical global codes back into local hidden space."""
 
-    def __init__(self, d_model: int, code_dim: int) -> None:
+    def __init__(
+        self,
+        d_model: int,
+        code_dim: int,
+        *,
+        n_heads: int | None = None,
+        head_delta_rank: int = 0,
+    ) -> None:
         if torch is None:
             raise ModuleNotFoundError("PyTorch is required for GlobalReadAdapter.")
         super().__init__()
+        self.d_model = d_model
+        self.code_dim = code_dim
+        self.n_heads = int(n_heads or 1)
+        self.head_delta_rank = int(head_delta_rank)
+        if self.head_delta_rank < 0:
+            raise ValueError("head_delta_rank must be non-negative.")
+        if self.head_delta_rank and d_model % self.n_heads != 0:
+            raise ValueError("d_model must be divisible by n_heads for per-head global read deltas.")
+        self.head_dim = d_model // self.n_heads if self.head_delta_rank else d_model
         self.query = nn.Linear(d_model, code_dim, bias=False)
         self.out = nn.Linear(code_dim, d_model, bias=False)
         self.gate = nn.Parameter(torch.tensor(-4.0))
+        if self.head_delta_rank:
+            self.head_delta_down = nn.Parameter(torch.empty(self.n_heads, code_dim, self.head_delta_rank))
+            self.head_delta_up = nn.Parameter(torch.empty(self.n_heads, self.head_delta_rank, self.head_dim))
+            nn.init.normal_(self.head_delta_down, std=0.02)
+            nn.init.zeros_(self.head_delta_up)
 
     def forward(
         self,
@@ -44,7 +65,12 @@ class GlobalReadAdapter(ModuleBase):
         attn = F.softmax(torch.einsum("bd,bnd->bn", query, codes) * scale, dim=-1)
         read_code = torch.einsum("bn,bnd->bd", attn, codes)
         gate = torch.sigmoid(self.gate).to(hidden.dtype)
-        updated = hidden + gate * self.out(read_code).unsqueeze(1)
+        read_hidden = self.out(read_code)
+        if self.head_delta_rank:
+            delta = torch.einsum("bd,hdr->bhr", read_code, self.head_delta_down)
+            delta = torch.einsum("bhr,hrm->bhm", delta, self.head_delta_up)
+            read_hidden = read_hidden + delta.reshape(read_code.size(0), self.d_model)
+        updated = hidden + gate * read_hidden.unsqueeze(1)
         sink_count = max(0, min(int(sink_slots), codes.size(1)))
         sink_mass = (
             attn[:, :sink_count].sum(dim=-1).mean()

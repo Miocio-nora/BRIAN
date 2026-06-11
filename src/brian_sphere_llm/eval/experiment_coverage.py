@@ -217,7 +217,16 @@ def _global_kv_requirements(plan: ExperimentPlan, entries: list[dict[str, Any]])
             "global KV per-block adapter",
             entries,
             lambda entry: entry["model"].get("global_kv") is True
-            and entry["model"].get("global_adapter_scope") == "per_block",
+            and entry["model"].get("global_adapter_scope") == "per_block"
+            and (_num(entry["model"].get("global_head_delta_rank")) or 0) == 0,
+        ),
+        _group_requirement(
+            "C7",
+            "global KV per-block plus per-head low-rank delta",
+            entries,
+            lambda entry: entry["model"].get("global_kv") is True
+            and entry["model"].get("global_adapter_scope") == "per_block"
+            and (_num(entry["model"].get("global_head_delta_rank")) or 0) > 0,
         ),
         {
             "id": "baseline_train_config",
@@ -431,6 +440,7 @@ def _model_summary(config: dict[str, Any], model_config_path: Path | None) -> di
         "global_sink_slots",
         "global_window_slots",
         "global_adapter_scope",
+        "global_head_delta_rank",
         "parallel_passing",
         "beam_size",
         "branch_cost",

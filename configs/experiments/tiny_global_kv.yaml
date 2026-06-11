@@ -34,3 +34,7 @@ ablations:
     name: global_kv_per_block_adapter
     train_config: configs/train/stage5_tiny_global_kv_per_block.yaml
     purpose: Tiny smoke test for route-block-specific Global KV read/write adapters.
+  - id: C7
+    name: global_kv_head_delta_adapter
+    train_config: configs/train/stage5_tiny_global_kv_head_delta.yaml
+    purpose: Tiny smoke test for per-block adapters plus per-head low-rank Global KV deltas.
