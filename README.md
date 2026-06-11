@@ -114,6 +114,17 @@ python scripts/eval.py \
 
 This writes `reports/compute_report.json` with parameter ratios, active layer eval ratios, estimated FLOPs/token, estimated GPU-hours, validation loss deltas, and throughput ratios.
 
+Run the Stage 3 block-position smoke ablations:
+
+```bash
+python scripts/train.py --config configs/train/stage3_no_position_tiny_debug.yaml
+python scripts/train.py --config configs/train/stage3_position_router_only_tiny_debug.yaml
+python scripts/train.py --config configs/train/stage3_position_circular_tiny_debug.yaml
+python scripts/train.py --config configs/train/stage3_position_random_tiny_debug.yaml
+```
+
+The formal BRIAN-R125 position ablation manifest is `configs/experiments/route_core_position_ablations.yaml`.
+
 Run tests:
 
 ```bash

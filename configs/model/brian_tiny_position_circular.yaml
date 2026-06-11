@@ -1,0 +1,5 @@
+extends: brian_tiny.yaml
+model_name: brian_tiny_position_circular
+block_position_mode: circular
+position_to_router: true
+position_to_blocks: true

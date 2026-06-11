@@ -56,6 +56,9 @@ class BrianRouteConfig:
     parallel_passing: bool = False
     beam_size: int = 2
     branch_cost: float = 0.01
+    block_position_mode: str = "open_arc"
+    position_to_router: bool = True
+    position_to_blocks: bool = True
 
     @classmethod
     def from_dict(cls, data: dict[str, Any], *, config_dir: str | Path | None = None) -> "BrianRouteConfig":
@@ -89,6 +92,9 @@ class BrianRouteConfig:
             parallel_passing=parallel_passing,
             beam_size=int(data.get("beam_size", 2)),
             branch_cost=float(data.get("branch_cost", 0.01)),
+            block_position_mode=str(data.get("block_position_mode", "open_arc")),
+            position_to_router=_as_bool(data.get("position_to_router", True)),
+            position_to_blocks=_as_bool(data.get("position_to_blocks", True)),
         )
 
 
@@ -107,7 +113,11 @@ class BrianRouteCore(ModuleBase):
         )
         self.exit_block = ExitBlock(config.base.d_model, config.block_position_dim)
         self.post_blocks = nn.ModuleList([TransformerBlock(backbone) for _ in range(config.post_blocks)])
-        self.position_table = BlockPositionTable(config.route_pool_blocks, config.block_position_dim)
+        self.position_table = BlockPositionTable(
+            config.route_pool_blocks,
+            config.block_position_dim,
+            mode=config.block_position_mode,
+        )
         self.router = LatentRouter(
             config.base.d_model,
             config.block_position_dim,
@@ -191,7 +201,7 @@ class BrianRouteCore(ModuleBase):
                 route_info["global_cache_slots"].append(
                     torch.tensor(float(global_state.slots), device=input_ids.device, dtype=hidden.dtype)
                 )
-            logits = self.router(hidden, position)
+            logits = self.router(hidden, self._router_position(position))
             probs = F.softmax(logits, dim=-1)
             top_actions, top_weights = self._topk_actions(probs)
             if step < len(route_targets):
@@ -235,7 +245,7 @@ class BrianRouteCore(ModuleBase):
             if hard_exit and torch.all(exited):
                 break
 
-        hidden = self.exit_block(hidden, position)
+        hidden = self.exit_block(hidden, self._block_position(position))
         if self.config.global_kv and global_state is not None:
             assert self.global_read is not None
             hidden, global_metrics = self.global_read(hidden, global_state.codes)
@@ -329,7 +339,7 @@ class BrianRouteCore(ModuleBase):
                 route_info["global_cache_slots"].append(
                     torch.tensor(float(flat_codes.size(1)), device=hidden.device, dtype=hidden.dtype)
                 )
-            logits = self.router(flat_hidden, flat_position)
+            logits = self.router(flat_hidden, self._router_position(flat_position))
             probs = F.softmax(logits, dim=-1).view(batch_size, current_beam, -1)
             log_probs = F.log_softmax(logits, dim=-1)
             top_log_probs, top_actions = log_probs.topk(top_k, dim=-1)
@@ -434,10 +444,11 @@ class BrianRouteCore(ModuleBase):
 
     def _apply_selected_blocks(self, hidden: torch.Tensor, position: torch.Tensor, selected: torch.Tensor) -> torch.Tensor:
         next_hidden = hidden.clone()
+        block_position = self._block_position(position)
         for action, block in enumerate(self.route_blocks):
             mask = selected == action
             if torch.any(mask):
-                next_hidden[mask] = block(hidden[mask], position[mask])
+                next_hidden[mask] = block(hidden[mask], block_position[mask])
         return next_hidden
 
     def _topk_actions(self, probs: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
@@ -459,10 +470,11 @@ class BrianRouteCore(ModuleBase):
         use_weighted_fusion: torch.Tensor,
     ) -> torch.Tensor:
         next_hidden = hidden.clone()
+        block_position = self._block_position(position)
         for action, block in enumerate(self.route_blocks):
             top1_mask = (selected == action) & ~use_weighted_fusion
             if torch.any(top1_mask):
-                next_hidden[top1_mask] = block(hidden[top1_mask], position[top1_mask])
+                next_hidden[top1_mask] = block(hidden[top1_mask], block_position[top1_mask])
 
         if torch.any(use_weighted_fusion):
             accum = torch.zeros_like(hidden)
@@ -472,7 +484,7 @@ class BrianRouteCore(ModuleBase):
                     mask = use_weighted_fusion & (top_actions[:, rank] == action)
                     if not torch.any(mask):
                         continue
-                    action_output = block(hidden[mask], position[mask])
+                    action_output = block(hidden[mask], block_position[mask])
                     weight = top_weights[mask, rank].to(hidden.dtype)
                     accum[mask] = accum[mask] + action_output * weight.view(-1, 1, 1)
                     weight_sum[mask] = weight_sum[mask] + weight
@@ -504,6 +516,16 @@ class BrianRouteCore(ModuleBase):
             position = torch.where(use_weighted_fusion.unsqueeze(-1), weighted_position, position)
         return position
 
+    def _router_position(self, position: torch.Tensor) -> torch.Tensor:
+        if self.config.position_to_router:
+            return position
+        return torch.zeros_like(position)
+
+    def _block_position(self, position: torch.Tensor) -> torch.Tensor:
+        if self.config.position_to_blocks:
+            return position
+        return torch.zeros_like(position)
+
     def model_stats(self) -> dict[str, int | str]:
         return {
             "model_name": "brian_route_core",
@@ -513,8 +535,19 @@ class BrianRouteCore(ModuleBase):
             "post_blocks": self.config.post_blocks,
             "block_position_dim": self.config.block_position_dim,
             "top_k": self.config.top_k,
+            "block_position_mode": self.config.block_position_mode,
+            "position_to_router": str(self.config.position_to_router),
+            "position_to_blocks": str(self.config.position_to_blocks),
             "global_kv": str(self.config.global_kv),
             "global_code_dim": self.config.global_code_dim,
             "global_sink_slots": self.config.global_sink_slots,
             "global_window_slots": self.config.global_window_slots,
         }
+
+
+def _as_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.lower() in {"1", "true", "yes", "on", "enabled"}
+    return bool(value)

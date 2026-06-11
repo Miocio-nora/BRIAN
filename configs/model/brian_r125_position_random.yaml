@@ -1,0 +1,5 @@
+extends: brian_r125.yaml
+model_name: brian_r125_position_random
+block_position_mode: random
+position_to_router: true
+position_to_blocks: true

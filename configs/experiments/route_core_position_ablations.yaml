@@ -1,0 +1,28 @@
+experiment_name: route_core_position_ablations
+description: Stage 3 block-position ablations for BRIAN-R125 route-core validation.
+baseline_train_config: configs/train/stage0_baseline.yaml
+ablations:
+  - id: P0
+    name: no_position_state
+    train_config: configs/train/ablation_p0_no_position.yaml
+    purpose: Test whether the router and routed blocks still work when block-position is fully zeroed.
+  - id: P1
+    name: random_position_initialization
+    train_config: configs/train/ablation_p1_position_random.yaml
+    purpose: Test learned geometry from random action embeddings.
+  - id: P2
+    name: open_arc_position_initialization
+    train_config: configs/train/ablation_p5_position_router_and_blocks.yaml
+    purpose: Main proposal using open-arc sinusoidal action positions.
+  - id: P3
+    name: circular_position_initialization
+    train_config: configs/train/ablation_p3_position_circular.yaml
+    purpose: Compare closed circular geometry where IN and OUT are adjacent.
+  - id: P4
+    name: position_only_to_router
+    train_config: configs/train/ablation_p4_position_router_only.yaml
+    purpose: Isolate router-side block-position effects from block side-channel effects.
+  - id: P5
+    name: position_to_router_and_blocks
+    train_config: configs/train/ablation_p5_position_router_and_blocks.yaml
+    purpose: Main route-core position path.

@@ -1,0 +1,2 @@
+extends: stage3_tiny_debug.yaml
+model_config: ../model/brian_tiny_no_position.yaml

@@ -1,0 +1,5 @@
+extends: brian_tiny.yaml
+model_name: brian_tiny_no_position
+block_position_mode: none
+position_to_router: false
+position_to_blocks: false

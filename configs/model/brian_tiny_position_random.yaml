@@ -1,0 +1,5 @@
+extends: brian_tiny.yaml
+model_name: brian_tiny_position_random
+block_position_mode: random
+position_to_router: true
+position_to_blocks: true

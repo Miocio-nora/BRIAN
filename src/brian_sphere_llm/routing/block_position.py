@@ -15,7 +15,7 @@ ModuleBase = nn.Module if nn is not None else object
 
 
 class BlockPositionTable(ModuleBase):
-    def __init__(self, num_internal_blocks: int, position_dim: int, *, open_arc: bool = True) -> None:
+    def __init__(self, num_internal_blocks: int, position_dim: int, *, mode: str = "open_arc") -> None:
         if torch is None:
             raise ModuleNotFoundError("PyTorch is required for block-position state.")
         super().__init__()
@@ -23,10 +23,22 @@ class BlockPositionTable(ModuleBase):
         self.position_dim = position_dim
         self.num_actions = num_internal_blocks + 1
         self.out_action = num_internal_blocks
-        init = self._open_arc_init(open_arc)
-        self.embeddings = nn.Parameter(init)
+        self.mode = mode
+        init = self._init_embeddings(mode)
+        self.embeddings = nn.Parameter(init, requires_grad=mode != "none")
 
-    def _open_arc_init(self, open_arc: bool) -> torch.Tensor:
+    def _init_embeddings(self, mode: str) -> torch.Tensor:
+        if mode == "none":
+            return torch.zeros(self.num_actions, self.position_dim, dtype=torch.float32)
+        if mode == "random":
+            return F.normalize(torch.randn(self.num_actions, self.position_dim), dim=-1)
+        if mode == "open_arc":
+            return self._sinusoidal_init(open_arc=True)
+        if mode == "circular":
+            return self._sinusoidal_init(open_arc=False)
+        raise ValueError(f"Unsupported block_position_mode: {mode}")
+
+    def _sinusoidal_init(self, open_arc: bool) -> torch.Tensor:
         denom = self.num_actions if open_arc else max(1, self.num_actions - 1)
         max_theta = math.pi if open_arc else 2 * math.pi
         rows = []
@@ -44,11 +56,17 @@ class BlockPositionTable(ModuleBase):
         return self.embeddings[0].detach().to(device).expand(batch_size, -1)
 
     def by_action(self, action: torch.Tensor) -> torch.Tensor:
+        if self.mode == "none":
+            return torch.zeros(action.size(0), self.position_dim, dtype=self.embeddings.dtype, device=action.device)
         return F.normalize(self.embeddings[action], dim=-1)
 
     def weighted(self, probs: torch.Tensor) -> torch.Tensor:
+        if self.mode == "none":
+            return torch.zeros(probs.size(0), self.position_dim, dtype=probs.dtype, device=probs.device)
         return F.normalize(probs @ self.embeddings, dim=-1)
 
     def location_distance(self, position: torch.Tensor, probs: torch.Tensor) -> torch.Tensor:
+        if self.mode == "none":
+            return torch.zeros((), dtype=position.dtype, device=position.device)
         distances = torch.cdist(position.unsqueeze(1), self.embeddings.unsqueeze(0)).squeeze(1).pow(2)
         return (probs * distances).sum(dim=-1).mean()
