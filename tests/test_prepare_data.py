@@ -1,6 +1,7 @@
 import json
 from pathlib import Path
 
+from brian_sphere_llm.data.manifest import REQUIRED_MANIFEST_FIELDS
 from brian_sphere_llm.data.prepare import prepare_data
 from brian_sphere_llm.utils.config import load_yaml, save_yaml
 
@@ -33,6 +34,18 @@ def test_prepare_tiny_synthetic_data(tmp_path: Path) -> None:
         if line.strip()
     ]
     assert tokenizer_config["tokenizer_class"] == "SimpleByteTokenizer"
+    assert REQUIRED_MANIFEST_FIELDS <= set(manifest_rows[0])
+    for key in [
+        "num_documents",
+        "num_tokens_train",
+        "num_tokens_val",
+        "avg_tokens_per_doc",
+        "sequence_length",
+        "vocab_size",
+        "source_mixture_realized",
+        "sha256_manifest",
+    ]:
+        assert key in stats
     assert stats["sha256_manifest"]
     assert stats["source_mixture_realized"]
     assert manifest_rows[0]["route_metadata"]["pseudo_route_type"] in {
