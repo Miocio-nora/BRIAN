@@ -6,6 +6,10 @@ ablations:
     name: no_position_state
     train_config: configs/train/stage3_no_position_tiny_debug.yaml
     purpose: Verify zero-position Stage 3 smoke execution.
+  - id: P1
+    name: random_position_initialization
+    train_config: configs/train/stage3_position_random_tiny_debug.yaml
+    purpose: Verify random position initialization in smoke.
   - id: P2
     name: open_arc_position_initialization
     train_config: configs/train/stage3_tiny_debug.yaml
@@ -18,3 +22,15 @@ ablations:
     name: position_only_to_router
     train_config: configs/train/stage3_position_router_only_tiny_debug.yaml
     purpose: Verify router-only position smoke execution.
+  - id: P5
+    name: position_to_router_and_blocks
+    train_config: configs/train/stage3_tiny_debug.yaml
+    purpose: Main tiny position path with router and block side-channel.
+  - id: P6
+    name: no_location_bias
+    train_config: configs/train/stage3_position_no_location_bias_tiny_debug.yaml
+    purpose: Tiny smoke ablation with geometric router location bias disabled.
+  - id: P7
+    name: no_location_loss
+    train_config: configs/train/stage3_position_no_location_loss_tiny_debug.yaml
+    purpose: Tiny smoke ablation with location regularization disabled.

@@ -70,3 +70,13 @@ class BlockPositionTable(ModuleBase):
             return torch.zeros((), dtype=position.dtype, device=position.device)
         distances = torch.cdist(position.unsqueeze(1), self.embeddings.unsqueeze(0)).squeeze(1).pow(2)
         return (probs * distances).sum(dim=-1).mean()
+
+    def action_distances(self, position: torch.Tensor) -> torch.Tensor:
+        if self.mode == "none":
+            return torch.zeros(
+                position.size(0),
+                self.num_actions,
+                dtype=position.dtype,
+                device=position.device,
+            )
+        return torch.cdist(position.unsqueeze(1), self.embeddings.unsqueeze(0)).squeeze(1).pow(2)

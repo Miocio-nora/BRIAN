@@ -18,6 +18,9 @@ PROFILE_ALIASES = {
     "route_core_r350_scaling": "package_b_r350_scaling",
     "package_b": "package_b_r350_scaling",
     "package_b_r350_scaling": "package_b_r350_scaling",
+    "route_core_position_ablations": "block_position_ablation",
+    "tiny_position_ablations": "block_position_ablation",
+    "block_position_ablation": "block_position_ablation",
     "route_core_global_kv": "global_kv_ablation",
     "tiny_global_kv": "global_kv_ablation",
     "package_c": "global_kv_ablation",
@@ -116,6 +119,8 @@ def _requirements(profile: str, plan: ExperimentPlan, entries: list[dict[str, An
                 _req("B4", "350M difficulty-conditioned route", mode="pseudo"),
             ],
         )
+    if profile == "block_position_ablation":
+        return _position_requirements(entries)
     if profile == "global_kv_ablation":
         return _global_kv_requirements(plan, entries)
     if profile == "parallel_passing_beta":
@@ -236,6 +241,41 @@ def _global_kv_requirements(plan: ExperimentPlan, entries: list[dict[str, Any]])
             "checks": {"baseline_train_config_present": plan.baseline_train_config is not None},
         },
     ]
+
+
+def _position_requirements(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return _exact_id_requirements(
+        entries,
+        [
+            _req(
+                "P0",
+                "no block-position state",
+                mode="scheduled",
+                model_flags={
+                    "block_position_mode": "none",
+                    "position_to_router": False,
+                    "position_to_blocks": False,
+                },
+            ),
+            _req("P1", "random position initialization", mode="scheduled", model_flags={"block_position_mode": "random"}),
+            _req("P2", "open-arc position initialization", mode="scheduled", model_flags={"block_position_mode": "open_arc"}),
+            _req("P3", "circular position initialization", mode="scheduled", model_flags={"block_position_mode": "circular"}),
+            _req(
+                "P4",
+                "position only to router",
+                mode="scheduled",
+                model_flags={"position_to_router": True, "position_to_blocks": False},
+            ),
+            _req(
+                "P5",
+                "position to router and blocks",
+                mode="scheduled",
+                model_flags={"position_to_router": True, "position_to_blocks": True},
+            ),
+            _req("P6", "no location bias", mode="scheduled", model_flags={"location_bias_weight": 0.0}),
+            _req("P7", "no location loss", mode="scheduled", loss_weights={"location": 0.0}),
+        ],
+    )
 
 
 def _parallel_requirements(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -439,6 +479,7 @@ def _model_summary(config: dict[str, Any], model_config_path: Path | None) -> di
         "block_position_mode",
         "position_to_router",
         "position_to_blocks",
+        "location_bias_weight",
         "max_route_steps",
         "top_k",
         "later_top_k",

@@ -1,0 +1,6 @@
+extends: stage3_tiny_debug.yaml
+loss_weights:
+  route: 1.0
+  balance: 0.01
+  cost: 0.001
+  location: 0.0

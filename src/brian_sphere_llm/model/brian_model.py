@@ -62,6 +62,7 @@ class BrianRouteConfig:
     block_position_mode: str = "open_arc"
     position_to_router: bool = True
     position_to_blocks: bool = True
+    location_bias_weight: float = 0.0
 
     @classmethod
     def from_dict(cls, data: dict[str, Any], *, config_dir: str | Path | None = None) -> "BrianRouteConfig":
@@ -101,6 +102,7 @@ class BrianRouteConfig:
             block_position_mode=str(data.get("block_position_mode", "open_arc")),
             position_to_router=_as_bool(data.get("position_to_router", True)),
             position_to_blocks=_as_bool(data.get("position_to_blocks", True)),
+            location_bias_weight=float(data.get("location_bias_weight", 0.0)),
         )
 
 
@@ -239,7 +241,7 @@ class BrianRouteCore(ModuleBase):
                 route_info["global_cache_slots"].append(
                     torch.tensor(float(global_state.slots), device=input_ids.device, dtype=hidden.dtype)
                 )
-            logits = self.router(hidden, self._router_position(position))
+            logits = self._apply_location_bias(self.router(hidden, self._router_position(position)), position)
             probs = F.softmax(logits, dim=-1)
             top_actions, top_weights = self._topk_actions(probs)
             if step < len(route_targets):
@@ -400,7 +402,7 @@ class BrianRouteCore(ModuleBase):
                 route_info["global_cache_slots"].append(
                     torch.tensor(float(flat_codes.size(1)), device=hidden.device, dtype=hidden.dtype)
                 )
-            logits = self.router(flat_hidden, self._router_position(flat_position))
+            logits = self._apply_location_bias(self.router(flat_hidden, self._router_position(flat_position)), flat_position)
             probs = F.softmax(logits, dim=-1).view(batch_size, current_beam, -1)
             log_probs = F.log_softmax(logits, dim=-1)
             top_log_probs, top_actions = log_probs.topk(top_k, dim=-1)
@@ -616,6 +618,13 @@ class BrianRouteCore(ModuleBase):
             return position
         return torch.zeros_like(position)
 
+    def _apply_location_bias(self, logits: torch.Tensor, position: torch.Tensor) -> torch.Tensor:
+        if self.config.location_bias_weight <= 0.0:
+            return logits
+        return logits - float(self.config.location_bias_weight) * self.position_table.action_distances(position).to(
+            logits.dtype
+        )
+
     def _global_write(self, hidden: torch.Tensor, actions: torch.Tensor | None = None) -> torch.Tensor:
         assert self.global_write is not None
         if not isinstance(self.global_write, nn.ModuleList):
@@ -684,6 +693,7 @@ class BrianRouteCore(ModuleBase):
             "block_position_mode": self.config.block_position_mode,
             "position_to_router": str(self.config.position_to_router),
             "position_to_blocks": str(self.config.position_to_blocks),
+            "location_bias_weight": str(self.config.location_bias_weight),
             "global_kv": str(self.config.global_kv),
             "global_code_dim": self.config.global_code_dim,
             "global_sink_slots": self.config.global_sink_slots,

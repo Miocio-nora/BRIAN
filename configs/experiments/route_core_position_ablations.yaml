@@ -26,3 +26,11 @@ ablations:
     name: position_to_router_and_blocks
     train_config: configs/train/ablation_p5_position_router_and_blocks.yaml
     purpose: Main route-core position path.
+  - id: P6
+    name: no_location_bias
+    train_config: configs/train/ablation_p6_no_location_bias.yaml
+    purpose: Disable geometric router location bias while keeping position state.
+  - id: P7
+    name: no_location_loss
+    train_config: configs/train/ablation_p7_no_location_loss.yaml
+    purpose: Disable location regularization while keeping the geometric router bias.

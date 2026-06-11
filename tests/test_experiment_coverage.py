@@ -34,6 +34,20 @@ def test_r350_scaling_package_coverage_passes(tmp_path: Path) -> None:
     assert _requirement(report, "B2")["checks"]["model_flags_match"] is True
 
 
+def test_position_ablation_coverage_passes_geometry_requirements(tmp_path: Path) -> None:
+    output = make_experiment_coverage_report(
+        "configs/experiments/route_core_position_ablations.yaml",
+        output_path=tmp_path / "coverage.json",
+    )
+    report = json.loads(output.read_text(encoding="utf-8"))
+
+    assert report["overall_status"] == "pass"
+    assert report["profile"] == "block_position_ablation"
+    assert [row["id"] for row in report["requirements"]] == ["P0", "P1", "P2", "P3", "P4", "P5", "P6", "P7"]
+    assert _requirement(report, "P6")["checks"]["model_flags_match"] is True
+    assert _requirement(report, "P7")["checks"]["loss_weights_match"] is True
+
+
 def test_global_kv_package_coverage_passes_window_and_sink_requirements(tmp_path: Path) -> None:
     output = make_experiment_coverage_report(
         "configs/experiments/route_core_global_kv.yaml",
@@ -92,8 +106,25 @@ def test_experiment_coverage_fails_missing_required_entry(tmp_path: Path) -> Non
 
 
 def test_experiment_coverage_fails_unknown_profile(tmp_path: Path) -> None:
+    manifest = tmp_path / "unknown.yaml"
+    manifest.write_text(
+        yaml.safe_dump(
+            {
+                "experiment_name": "unknown_experiment",
+                "ablations": [
+                    {
+                        "id": "X0",
+                        "name": "stub",
+                        "train_config": "configs/train/stage0_tiny_debug.yaml",
+                        "purpose": "exercise unknown profile handling",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
     output = make_experiment_coverage_report(
-        "configs/experiments/tiny_position_ablations.yaml",
+        manifest,
         output_path=tmp_path / "coverage.json",
     )
     report = json.loads(output.read_text(encoding="utf-8"))

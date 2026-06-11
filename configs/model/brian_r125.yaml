@@ -5,9 +5,13 @@ pre_blocks: 2
 route_pool_blocks: 8
 post_blocks: 2
 block_position_dim: 64
+block_position_mode: open_arc
+position_to_router: true
+position_to_blocks: true
 max_route_steps: 4
 top_k: 1
 later_top_k: 2
+location_bias_weight: 0.1
 global_kv: false
 parallel_passing: false
 hard_exit: false
