@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Protocol
 
 
@@ -38,6 +40,52 @@ class SimpleByteTokenizer:
         if add_special_tokens:
             return [self.bos_token_id, *tokens, self.eos_token_id]
         return tokens
+
+    def save_pretrained(self, output_dir: str | Path) -> tuple[str, ...]:
+        output_dir = Path(output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        tokenizer_json = {
+            "format": "simple-byte-tokenizer-v1",
+            "model": {
+                "type": "byte-level",
+                "byte_tokens": {f"<0x{value:02x}>": value for value in range(256)},
+            },
+            "special_tokens": {
+                "<bos>": self.bos_token_id,
+                "<eos>": self.eos_token_id,
+                "<pad>": self.pad_token_id,
+                "<unk>": self.unk_token_id,
+            },
+        }
+        tokenizer_config = {
+            "tokenizer_class": self.__class__.__name__,
+            "name_or_path": self.name_or_path,
+            "vocab_size": self.vocab_size,
+            "bos_token": "<bos>",
+            "eos_token": "<eos>",
+            "pad_token": "<pad>",
+            "unk_token": "<unk>",
+            "bos_token_id": self.bos_token_id,
+            "eos_token_id": self.eos_token_id,
+            "pad_token_id": self.pad_token_id,
+            "unk_token_id": self.unk_token_id,
+        }
+        special_tokens_map = {
+            "bos_token": "<bos>",
+            "eos_token": "<eos>",
+            "pad_token": "<pad>",
+            "unk_token": "<unk>",
+        }
+        paths = (
+            output_dir / "tokenizer.json",
+            output_dir / "tokenizer_config.json",
+            output_dir / "special_tokens_map.json",
+        )
+        for path, payload in zip(paths, (tokenizer_json, tokenizer_config, special_tokens_map), strict=True):
+            with path.open("w", encoding="utf-8") as handle:
+                json.dump(payload, handle, indent=2, sort_keys=True)
+                handle.write("\n")
+        return tuple(str(path) for path in paths)
 
 
 def load_tokenizer(

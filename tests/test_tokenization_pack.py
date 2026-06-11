@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 from brian_sphere_llm.data.pack import pack_fixed_length, read_token_bin, write_index, write_token_bin
@@ -9,6 +10,22 @@ def test_simple_byte_tokenizer_metadata() -> None:
     meta = tokenizer_metadata(tokenizer, name="simple-byte-tokenizer", revision="local", license="test")
     assert meta.vocab_size == 260
     assert tokenizer.encode("A", add_special_tokens=True)[0] == tokenizer.bos_token_id
+
+
+def test_simple_byte_tokenizer_saves_reproducible_artifacts(tmp_path: Path) -> None:
+    tokenizer = SimpleByteTokenizer()
+    paths = tokenizer.save_pretrained(tmp_path)
+    tokenizer_config = json.loads((tmp_path / "tokenizer_config.json").read_text(encoding="utf-8"))
+    tokenizer_json = json.loads((tmp_path / "tokenizer.json").read_text(encoding="utf-8"))
+
+    assert {Path(path).name for path in paths} == {
+        "tokenizer.json",
+        "tokenizer_config.json",
+        "special_tokens_map.json",
+    }
+    assert tokenizer_config["tokenizer_class"] == "SimpleByteTokenizer"
+    assert tokenizer_json["format"] == "simple-byte-tokenizer-v1"
+    assert tokenizer_json["model"]["byte_tokens"]["<0x41>"] == 65
 
 
 def test_pack_and_bin_roundtrip(tmp_path: Path) -> None:

@@ -15,6 +15,7 @@ This repository contains the project plan, Codex engineering guidance, and a run
 Implemented v0.1 pieces:
 
 - reproducible data manifest and fixed-length token packing;
+- offline tokenizer artifacts (`tokenizer.json`, `tokenizer_config.json`, and metadata) for smoke data;
 - synthetic routing smoke data;
 - LLaMA-like decoder-only baseline;
 - BRIAN route-core wrapper with pre / route-pool / post blocks;

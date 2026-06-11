@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 from brian_sphere_llm.data.prepare import prepare_data
@@ -17,4 +18,15 @@ def test_prepare_tiny_synthetic_data(tmp_path: Path) -> None:
     assert (output_dir / "train.bin").exists()
     assert (output_dir / "train.idx").exists()
     assert (output_dir / "val.bin").exists()
+    assert (output_dir / "val.idx").exists()
+    assert (output_dir / "manifest.jsonl").exists()
+    assert Path(cfg["manifest_path"]).exists()
+    assert (output_dir / "tokenizer.json").exists()
+    assert (output_dir / "tokenizer_config.json").exists()
+    assert (output_dir / "tokenizer_metadata.json").exists()
     assert (output_dir / "stats.json").exists()
+    tokenizer_config = json.loads((output_dir / "tokenizer_config.json").read_text(encoding="utf-8"))
+    stats = json.loads((output_dir / "stats.json").read_text(encoding="utf-8"))
+    assert tokenizer_config["tokenizer_class"] == "SimpleByteTokenizer"
+    assert stats["sha256_manifest"]
+    assert stats["source_mixture_realized"]
