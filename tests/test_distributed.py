@@ -1,5 +1,7 @@
 import pytest
 
+torch = pytest.importorskip("torch")
+
 from brian_sphere_llm.utils import distributed
 
 
@@ -44,3 +46,20 @@ def test_unwrap_model_returns_module_attribute() -> None:
 
     assert distributed.unwrap_model(Wrapper()) == "inner"
     assert distributed.unwrap_model("plain") == "plain"
+
+
+def test_mean_scalar_noops_when_distributed_is_not_initialized() -> None:
+    assert distributed.mean_scalar(3.5) == 3.5
+
+
+def test_mean_scalar_uses_all_reduce_sum_and_world_size(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(distributed.torch.distributed, "is_available", lambda: True)
+    monkeypatch.setattr(distributed.torch.distributed, "is_initialized", lambda: True)
+    monkeypatch.setattr(distributed.torch.distributed, "get_world_size", lambda: 4)
+
+    def fake_all_reduce(tensor, op=None):
+        tensor.fill_(20.0)
+
+    monkeypatch.setattr(distributed.torch.distributed, "all_reduce", fake_all_reduce)
+
+    assert distributed.mean_scalar(99.0, device=torch.device("cpu")) == pytest.approx(5.0)

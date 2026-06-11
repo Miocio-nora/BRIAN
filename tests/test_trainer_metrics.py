@@ -11,6 +11,8 @@ from brian_sphere_llm.train.trainer import (
     _bool_config,
     _ddp_no_sync_microbatch_count,
     _device,
+    _distributed_mean_metrics,
+    _distributed_mean_scalar,
     _float_config,
     _forward_for_stage,
     _gradient_sync_context,
@@ -153,6 +155,47 @@ def test_global_train_token_count_uses_world_size_for_distributed(monkeypatch: p
 
     assert _global_train_token_count(128, distributed=True) == 1024
     assert _global_train_token_count(128, distributed=False) == 128
+
+
+def test_distributed_mean_metrics_reduce_numeric_values_only(monkeypatch: pytest.MonkeyPatch) -> None:
+    import brian_sphere_llm.train.trainer as trainer_module
+
+    calls: list[float] = []
+
+    def fake_mean_scalar(value: float, *, device):
+        calls.append(value)
+        return value + 10.0
+
+    monkeypatch.setattr(trainer_module.dist_utils, "mean_scalar", fake_mean_scalar)
+    reduced = _distributed_mean_metrics(
+        {
+            "loss": 2.0,
+            "active_block_evals_per_token": 3,
+            "flag": True,
+            "histogram": {"0": 2},
+            "examples": [[0, 1]],
+        },
+        device=torch.device("cpu"),
+        distributed=True,
+    )
+
+    assert calls == [2.0, 3.0]
+    assert reduced["loss"] == 12.0
+    assert reduced["active_block_evals_per_token"] == 13.0
+    assert reduced["flag"] is True
+    assert reduced["histogram"] == {"0": 2}
+    assert reduced["examples"] == [[0, 1]]
+
+
+def test_distributed_mean_scalar_noops_when_not_distributed(monkeypatch: pytest.MonkeyPatch) -> None:
+    import brian_sphere_llm.train.trainer as trainer_module
+
+    def fail_mean_scalar(value: float, *, device):
+        raise AssertionError("mean_scalar should not be called")
+
+    monkeypatch.setattr(trainer_module.dist_utils, "mean_scalar", fail_mean_scalar)
+
+    assert _distributed_mean_scalar(7.0, device=torch.device("cpu"), distributed=False) == 7.0
 
 
 def test_evaluate_reports_inference_timing_metrics() -> None:

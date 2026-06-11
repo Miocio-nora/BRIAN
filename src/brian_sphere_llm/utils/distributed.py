@@ -51,6 +51,16 @@ def barrier() -> None:
         torch.distributed.barrier()
 
 
+def mean_scalar(value: float, device: Any | None = None) -> float:
+    if not is_initialized():
+        return float(value)
+    tensor_device = device if device is not None else torch.device("cpu")
+    tensor = torch.tensor(float(value), dtype=torch.float64, device=tensor_device)
+    torch.distributed.all_reduce(tensor, op=torch.distributed.ReduceOp.SUM)
+    tensor /= torch.distributed.get_world_size()
+    return float(tensor.item())
+
+
 def unwrap_model(model: Any) -> Any:
     return getattr(model, "module", model)
 

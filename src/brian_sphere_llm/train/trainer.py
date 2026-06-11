@@ -234,7 +234,7 @@ def train_from_config(config_path: str | Path) -> Path:
         global_token_count = _global_train_token_count(local_token_count, distributed=distributed)
         row = {
             "step": step,
-            "loss": _mean(losses),
+            "loss": _distributed_mean_scalar(_mean(losses), device=device, distributed=distributed),
             "learning_rate": current_learning_rate,
             "micro_batch_size": batch_size,
             "gradient_accumulation_steps": gradient_accumulation_steps,
@@ -253,11 +253,23 @@ def train_from_config(config_path: str | Path) -> Path:
         }
         row.update(_cuda_memory_metrics(device))
         if loss_components:
-            row.update({key: _mean(values) for key, values in loss_components.items()})
+            row.update(
+                _distributed_mean_metrics(
+                    {key: _mean(values) for key, values in loss_components.items()},
+                    device=device,
+                    distributed=distributed,
+                )
+            )
         if schedule_values:
             row.update(schedule_values)
         if routing_summary or routing_numeric_values:
-            row.update(_finalize_routing_summary(routing_summary, routing_numeric_values))
+            row.update(
+                _distributed_mean_metrics(
+                    _finalize_routing_summary(routing_summary, routing_numeric_values),
+                    device=device,
+                    distributed=distributed,
+                )
+            )
         if train_log is not None:
             train_log.write(row)
 
@@ -360,6 +372,25 @@ def _global_train_token_count(local_token_count: int, *, distributed: bool) -> i
     if distributed:
         return local_token_count * dist_utils.world_size()
     return local_token_count
+
+
+def _distributed_mean_metrics(metrics: dict[str, Any], *, device: "torch.device", distributed: bool) -> dict[str, Any]:
+    if not distributed:
+        return metrics
+    reduced: dict[str, Any] = {}
+    for key, value in metrics.items():
+        number = _metric_number(value)
+        if number is None:
+            reduced[key] = value
+        else:
+            reduced[key] = dist_utils.mean_scalar(number, device=device)
+    return reduced
+
+
+def _distributed_mean_scalar(value: float, *, device: "torch.device", distributed: bool) -> float:
+    if not distributed:
+        return value
+    return dist_utils.mean_scalar(value, device=device)
 
 
 def _set_sampler_epoch(loader: Any, epoch: int) -> None:
