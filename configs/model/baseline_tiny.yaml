@@ -1,0 +1,11 @@
+model_name: baseline_tiny
+architecture: decoder_only_llama_like
+layers: 4
+d_model: 64
+n_heads: 4
+ffn_type: swiglu
+norm: rmsnorm
+token_position: rope
+context_length: 64
+vocab_size: 260
+dropout: 0.0

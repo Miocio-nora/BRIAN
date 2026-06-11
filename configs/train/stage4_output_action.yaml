@@ -1,0 +1,10 @@
+extends: stage3_scheduled_free_routing.yaml
+stage: stage4_output_action
+routing:
+  mode: scheduled
+  hard_exit: true
+loss_weights:
+  route: 0.05
+  balance: 0.01
+  cost: 0.01
+  location: 0.02

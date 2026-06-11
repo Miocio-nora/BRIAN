@@ -1,0 +1,11 @@
+model_name: baseline_125m
+architecture: decoder_only_llama_like
+layers: 12
+d_model: 768
+n_heads: 12
+ffn_type: swiglu
+norm: rmsnorm
+token_position: rope
+context_length: 2048
+vocab_size: 32000
+dropout: 0.0

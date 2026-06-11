@@ -10,7 +10,18 @@ The short project name is **BRIAN-Sphere** or **BRIAN**. The planned Python pack
 
 ## Current Status
 
-This repository currently contains the project plan and research roadmap. It does **not** yet contain a runnable model implementation, training pipeline, or installable Python package.
+This repository contains the project plan, Codex engineering guidance, and a runnable v0.1 PyTorch research scaffold.
+
+Implemented v0.1 pieces:
+
+- reproducible data manifest and fixed-length token packing;
+- synthetic routing smoke data;
+- LLaMA-like decoder-only baseline;
+- BRIAN route-core wrapper with pre / route-pool / post blocks;
+- block-position state, latent router, pseudo policies, and route metrics;
+- Stage 0 baseline, Stage 1 fixed route, Stage 2 router imitation, and Stage 3 scheduled routing entrypoints;
+- JSONL train/eval logs, model stats, checkpoint save/resume, and routing report generation;
+- B200-compatible conda environment using PyTorch CUDA 12.8 wheels.
 
 The immediate priority is **BRIAN-R125 route-core validation**:
 
@@ -22,6 +33,55 @@ The immediate priority is **BRIAN-R125 route-core validation**:
 6. Validate `OUT` as a terminal routing action.
 
 See [BRIAN-Sphere-LLM_PROJECT_PLAN.md](./BRIAN-Sphere-LLM_PROJECT_PLAN.md) for the full technical plan.
+See [CODEX_GUIDANCE.md](./CODEX_GUIDANCE.md) for implementation guidance.
+
+## Setup
+
+Create the project environment:
+
+```bash
+conda env create -f environment.yml
+conda activate brian-sphere
+```
+
+The environment pins PyTorch CUDA 12.8 wheels:
+
+```text
+torch==2.11.0+cu128
+torchvision==0.26.0+cu128
+torchaudio==2.11.0+cu128
+```
+
+This is intended for Blackwell/B200 hosts with a CUDA 12.8-capable driver.
+
+## Quick Smoke Run
+
+Prepare a tiny synthetic dataset:
+
+```bash
+python scripts/prepare_data.py --config configs/data/r125_tiny_debug.yaml
+```
+
+Run the local smoke stages:
+
+```bash
+python scripts/train.py --config configs/train/stage0_tiny_debug.yaml
+python scripts/train.py --config configs/train/stage1_tiny_debug.yaml
+python scripts/train.py --config configs/train/stage2_tiny_debug.yaml
+python scripts/train.py --config configs/train/stage3_tiny_debug.yaml
+```
+
+Generate a routing report:
+
+```bash
+python scripts/eval.py --config configs/eval/routing_eval.yaml --run <run_dir>
+```
+
+Run tests:
+
+```bash
+pytest
+```
 
 ## Core Idea
 
@@ -167,22 +227,21 @@ If these fail, the plan is to fix route training, position design, and curriculu
 
 ## Planned Repository Structure
 
-The intended implementation layout is:
+The implementation layout is:
 
 ```text
 BRIAN-Sphere-LLM/
   README.md
   BRIAN-Sphere-LLM_PROJECT_PLAN.md
-  brian_sphere_llm/
-    model/
-    routing/
-    position/
-    memory/
-    losses/
-    data/
-    eval/
-    train/
-    configs/
+  CODEX_GUIDANCE.md
+  environment.yml
+  pyproject.toml
+  configs/
+  src/brian_sphere_llm/
+  scripts/
+  tests/
+  data/
+  runs/
   experiments/
   reports/
 ```

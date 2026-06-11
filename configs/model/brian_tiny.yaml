@@ -1,0 +1,13 @@
+model_name: brian_tiny
+architecture: brian_route_core
+base_config: baseline_tiny.yaml
+pre_blocks: 1
+route_pool_blocks: 2
+post_blocks: 1
+block_position_dim: 16
+max_route_steps: 3
+top_k: 1
+later_top_k: 2
+global_kv: false
+parallel_passing: false
+hard_exit: false

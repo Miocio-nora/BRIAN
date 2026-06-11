@@ -1,0 +1,8 @@
+extends: stage1_fixed_route.yaml
+model_config: ../model/brian_tiny.yaml
+data_config: ../data/r125_tiny_debug.yaml
+precision: fp32
+batch_size: 2
+max_steps: 3
+eval_interval: 1
+save_interval: 3

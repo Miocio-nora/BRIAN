@@ -1,0 +1,13 @@
+model_name: brian_r350
+architecture: brian_route_core
+base_config: baseline_350m.yaml
+pre_blocks: 4
+route_pool_blocks: 16
+post_blocks: 4
+block_position_dim: 128
+max_route_steps: 8
+top_k: 1
+later_top_k: 2
+global_kv: phase_2_only
+parallel_passing: false
+hard_exit: false

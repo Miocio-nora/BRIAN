@@ -1,0 +1,4 @@
+extends: stage6_parallel_passing.yaml
+stage: stage7_parallel_passing
+enabled: false
+note: "Alias for guide compatibility."

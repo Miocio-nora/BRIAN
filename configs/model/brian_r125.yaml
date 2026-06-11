@@ -1,0 +1,13 @@
+model_name: brian_r125
+architecture: brian_route_core
+base_config: baseline_125m.yaml
+pre_blocks: 2
+route_pool_blocks: 8
+post_blocks: 2
+block_position_dim: 64
+max_route_steps: 4
+top_k: 1
+later_top_k: 2
+global_kv: false
+parallel_passing: false
+hard_exit: false

@@ -1,0 +1,21 @@
+extends: stage1_fixed_route.yaml
+stage: stage3_scheduled_free_routing
+routing:
+  mode: scheduled
+  pseudo_policy: mixed_skip_recur
+  schedule:
+    - max_step: 200
+      router_probability: 0.10
+      lambda_route: 1.0
+    - max_step: 400
+      router_probability: 0.30
+      lambda_route: 0.5
+    - max_step: 700
+      router_probability: 0.50
+      lambda_route: 0.2
+    - max_step: 900
+      router_probability: 0.80
+      lambda_route: 0.05
+    - max_step: 1000
+      router_probability: 1.00
+      lambda_route: 0.05

@@ -1,0 +1,7 @@
+eval_name: long_context_eval
+enabled_after: stage5_global_kv
+metrics:
+  - needle_retrieval
+  - synthetic_multihop_tracing
+  - ruler_subset
+  - longbench_subset

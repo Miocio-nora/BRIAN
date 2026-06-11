@@ -1,0 +1,19 @@
+name: brian-sphere
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - pip
+  - numpy
+  - pyyaml
+  - tqdm
+  - pytest
+  - pip:
+      # B200 is Blackwell. Pin CUDA 12.8 wheels to match driver 570 / CUDA 12.8 hosts.
+      - --index-url https://download.pytorch.org/whl/cu128
+      - --extra-index-url https://pypi.org/simple
+      - torch==2.11.0+cu128
+      - torchvision==0.26.0+cu128
+      - torchaudio==2.11.0+cu128
+      - transformers>=4.44
+      - datasets>=2.20

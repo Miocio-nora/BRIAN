@@ -1,0 +1,6 @@
+extends: r125_smoke.yaml
+recipe_name: r125_main_2b
+target_tokens: 2000000000
+validation_tokens: 50000000
+output_dir: data/tokenized/r125_main_2b
+manifest_path: data/manifests/r125_main_2b.jsonl

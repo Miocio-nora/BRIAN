@@ -1,0 +1,31 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+
+# Local data and run artifacts
+data/raw/
+data/processed/
+data/tokenized/
+data/shards/
+data/manifests/*.jsonl
+data/manifests/*.json
+runs/*
+!runs/.gitkeep
+reports/generated/
+experiments/generated/
+
+# Checkpoints and model artifacts
+checkpoint*/
+*.pt
+*.pth
+*.safetensors
+
+# Editor/OS noise
+.DS_Store
+.idea/
+.vscode/

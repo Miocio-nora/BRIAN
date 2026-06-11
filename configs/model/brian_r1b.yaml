@@ -1,0 +1,13 @@
+model_name: brian_r1b
+architecture: brian_route_core
+base_config: baseline_1b.yaml
+pre_blocks: 6
+route_pool_blocks: 20
+post_blocks: 6
+block_position_dim: 256
+max_route_steps: 12
+top_k: 2
+later_top_k: 2
+global_kv: true_after_route_core
+parallel_passing: experimental_only
+hard_exit: false

@@ -1,0 +1,24 @@
+extends: r125_smoke.yaml
+recipe_name: r1b_pilot_10b
+target_tokens: 10000000000
+validation_tokens: 100000000
+sequence_length: 4096
+output_dir: data/tokenized/r1b_pilot_10b
+manifest_path: data/manifests/r1b_pilot_10b.jsonl
+mixture:
+  fineweb_edu:
+    weight: 0.88
+    source_dataset: HuggingFaceFW/fineweb-edu
+    split: train
+  synthetic_routing:
+    weight: 0.03
+    source_dataset: brian_synthetic_routing
+    split: train
+  math_symbolic_qa:
+    weight: 0.04
+    source_dataset: synthetic_math_symbolic
+    split: train
+  code_structured:
+    weight: 0.05
+    source_dataset: synthetic_code_structured
+    split: train

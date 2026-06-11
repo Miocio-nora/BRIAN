@@ -1,0 +1,6 @@
+eval_name: reasoning_eval
+metrics:
+  - synthetic_arithmetic
+  - symbolic_rewrite
+  - copy_reverse_transform
+  - short_multihop_qa

@@ -1,0 +1,16 @@
+recipe_name: r125_tiny_debug
+target_tokens: 10000
+sequence_length: 64
+validation_tokens: 1024
+output_dir: data/tokenized/r125_tiny_debug
+manifest_path: data/manifests/r125_tiny_debug.jsonl
+tokenizer:
+  name: simple-byte-tokenizer
+  revision: local
+  license: internal-test
+  local_files_only: true
+  fallback_to_byte: true
+synthetic_only:
+  enabled: true
+  sample_count: 128
+seed: 1

@@ -1,0 +1,4 @@
+extends: stage5_global_kv.yaml
+stage: stage6_parallel_passing
+enabled: false
+note: "Planning config only. Implement after global KV gates pass."

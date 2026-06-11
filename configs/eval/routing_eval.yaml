@@ -1,0 +1,8 @@
+eval_name: routing_eval
+metrics:
+  - route_entropy
+  - block_load_histogram
+  - average_route_steps
+  - exit_step_distribution
+  - position_norm_mean
+  - route_imitation_accuracy

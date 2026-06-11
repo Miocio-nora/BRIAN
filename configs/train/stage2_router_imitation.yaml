@@ -1,0 +1,10 @@
+extends: stage1_fixed_route.yaml
+stage: stage2_router_imitation
+routing:
+  mode: pseudo
+  pseudo_policy: mixed_skip_recur
+loss_weights:
+  route: 1.0
+  balance: 0.01
+  cost: 0.001
+  location: 0.05

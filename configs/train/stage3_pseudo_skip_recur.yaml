@@ -1,0 +1,5 @@
+extends: stage2_router_imitation.yaml
+stage: stage3_pseudo_skip_recur
+routing:
+  mode: pseudo
+  pseudo_policy: mixed_skip_recur
