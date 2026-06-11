@@ -15,6 +15,8 @@ def _write_long_context_report(
     attention_mass: float | None = None,
     read_gate: float | None = None,
     cache_slots: float | None = None,
+    sink_attention_mass: float | None = None,
+    window_attention_mass: float | None = None,
 ) -> Path:
     path.write_text(
         json.dumps(
@@ -28,6 +30,8 @@ def _write_long_context_report(
                 },
                 "global_kv": {
                     "global_attention_mass": attention_mass,
+                    "global_sink_attention_mass": sink_attention_mass,
+                    "global_window_attention_mass": window_attention_mass,
                     "global_read_gate_mean": read_gate,
                     "global_cache_slots_mean": cache_slots,
                 },
@@ -63,6 +67,8 @@ def test_long_context_compare_passes_active_global_kv_not_worse(tmp_path: Path) 
         exact_match=0.25,
         teacher_accuracy=0.55,
         attention_mass=0.1,
+        sink_attention_mass=0.03,
+        window_attention_mass=0.07,
         read_gate=0.2,
         cache_slots=3.0,
     )
@@ -77,6 +83,8 @@ def test_long_context_compare_passes_active_global_kv_not_worse(tmp_path: Path) 
     assert row["checks"]["quality_not_worse"] is True
     assert row["checks"]["memory_budget_present"] is True
     assert row["checks"]["global_budget_below_local_context"] is True
+    assert row["global_kv"]["global_sink_attention_mass"] == 0.03
+    assert row["global_kv"]["global_window_attention_mass"] == 0.07
     assert row["memory_budget"]["candidate"]["estimated_global_cache_capacity_bytes_fp16"] == 128.0
     assert row["teacher_forced_token_accuracy_delta"] == pytest.approx(0.05)
 

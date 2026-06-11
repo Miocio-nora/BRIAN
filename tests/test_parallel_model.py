@@ -32,6 +32,8 @@ def test_parallel_route_forward_reports_branch_metrics() -> None:
     assert summary["parallel_branch_count_mean"] <= 2.0
     assert "parallel_score_margin_mean" in summary
     assert "global_attention_mass" in summary
+    assert "global_sink_attention_mass" in summary
+    assert "global_window_attention_mass" in summary
 
 
 def test_stage6_config_builds_parallel_model() -> None:

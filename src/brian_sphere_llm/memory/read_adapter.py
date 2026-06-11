@@ -23,10 +23,21 @@ class GlobalReadAdapter(ModuleBase):
         self.out = nn.Linear(code_dim, d_model, bias=False)
         self.gate = nn.Parameter(torch.tensor(-4.0))
 
-    def forward(self, hidden: "torch.Tensor", codes: "torch.Tensor") -> tuple["torch.Tensor", dict[str, "torch.Tensor"]]:
+    def forward(
+        self,
+        hidden: "torch.Tensor",
+        codes: "torch.Tensor",
+        *,
+        sink_slots: int = 0,
+    ) -> tuple["torch.Tensor", dict[str, "torch.Tensor"]]:
         if codes.size(1) == 0:
             zero = torch.zeros((), device=hidden.device, dtype=hidden.dtype)
-            return hidden, {"global_attention_mass": zero, "global_read_gate": torch.sigmoid(self.gate).to(hidden.dtype)}
+            return hidden, {
+                "global_attention_mass": zero,
+                "global_sink_attention_mass": zero,
+                "global_window_attention_mass": zero,
+                "global_read_gate": torch.sigmoid(self.gate).to(hidden.dtype),
+            }
         pooled = hidden.mean(dim=1)
         query = self.query(pooled)
         scale = query.size(-1) ** -0.5
@@ -34,7 +45,16 @@ class GlobalReadAdapter(ModuleBase):
         read_code = torch.einsum("bn,bnd->bd", attn, codes)
         gate = torch.sigmoid(self.gate).to(hidden.dtype)
         updated = hidden + gate * self.out(read_code).unsqueeze(1)
+        sink_count = max(0, min(int(sink_slots), codes.size(1)))
+        sink_mass = (
+            attn[:, :sink_count].sum(dim=-1).mean()
+            if sink_count
+            else torch.zeros((), device=hidden.device, dtype=attn.dtype)
+        )
+        window_mass = attn[:, sink_count:].sum(dim=-1).mean()
         return updated, {
             "global_attention_mass": attn.sum(dim=-1).mean(),
+            "global_sink_attention_mass": sink_mass,
+            "global_window_attention_mass": window_mass,
             "global_read_gate": gate,
         }

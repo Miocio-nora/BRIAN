@@ -32,6 +32,8 @@ class TinyLongContextModel:
             "logits": logits,
             "routing_summary": {
                 "global_attention_mass": 0.2,
+                "global_sink_attention_mass": 0.05,
+                "global_window_attention_mass": 0.15,
                 "global_read_gate_mean": 0.1,
                 "global_cache_slots_mean": 3.0,
             },
@@ -110,3 +112,5 @@ def test_evaluate_long_context_sample_exact_match_with_fake_model() -> None:
     assert row["exact_match"] is True
     assert row["teacher_forced_token_accuracy"] == 1.0
     assert row["routing_global_attention_mass"] == 0.2
+    assert row["routing_global_sink_attention_mass"] == 0.05
+    assert row["routing_global_window_attention_mass"] == 0.15

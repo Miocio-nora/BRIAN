@@ -278,6 +278,8 @@ def _routing_summary(rows: list[dict[str, Any]]) -> dict[str, float | None]:
 def _global_kv_summary(rows: list[dict[str, Any]]) -> dict[str, float | None]:
     return {
         "global_attention_mass": _mean([row.get("routing_global_attention_mass") for row in rows]),
+        "global_sink_attention_mass": _mean([row.get("routing_global_sink_attention_mass") for row in rows]),
+        "global_window_attention_mass": _mean([row.get("routing_global_window_attention_mass") for row in rows]),
         "global_read_gate_mean": _mean([row.get("routing_global_read_gate_mean") for row in rows]),
         "global_cache_slots_mean": _mean([row.get("routing_global_cache_slots_mean") for row in rows]),
     }

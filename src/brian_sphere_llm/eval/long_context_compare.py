@@ -65,6 +65,8 @@ def _compare_candidate(
     candidate_exact = _num(candidate_overall.get("exact_match_accuracy"))
     global_kv = candidate.get("global_kv", {})
     attention_mass = _num(global_kv.get("global_attention_mass"))
+    sink_attention_mass = _num(global_kv.get("global_sink_attention_mass"))
+    window_attention_mass = _num(global_kv.get("global_window_attention_mass"))
     read_gate = _num(global_kv.get("global_read_gate_mean"))
     cache_slots = _num(global_kv.get("global_cache_slots_mean"))
     teacher_delta = _delta(candidate_teacher, baseline_teacher)
@@ -108,6 +110,8 @@ def _compare_candidate(
         "candidate_truncation_rate": _num(candidate_overall.get("truncation_rate")),
         "global_kv": {
             "global_attention_mass": attention_mass,
+            "global_sink_attention_mass": sink_attention_mass,
+            "global_window_attention_mass": window_attention_mass,
             "global_read_gate_mean": read_gate,
             "global_cache_slots_mean": cache_slots,
         },

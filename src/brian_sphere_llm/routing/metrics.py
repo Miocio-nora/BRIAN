@@ -99,6 +99,12 @@ def summarize_routes(route_info: dict[str, Any], num_internal_blocks: int) -> di
     if "global_attention_mass" in route_info and route_info["global_attention_mass"]:
         mass = torch.stack(route_info["global_attention_mass"])
         summary["global_attention_mass"] = float(mass.mean().detach().cpu())
+    if "global_sink_attention_mass" in route_info and route_info["global_sink_attention_mass"]:
+        mass = torch.stack(route_info["global_sink_attention_mass"])
+        summary["global_sink_attention_mass"] = float(mass.mean().detach().cpu())
+    if "global_window_attention_mass" in route_info and route_info["global_window_attention_mass"]:
+        mass = torch.stack(route_info["global_window_attention_mass"])
+        summary["global_window_attention_mass"] = float(mass.mean().detach().cpu())
     if "global_read_gate" in route_info and route_info["global_read_gate"]:
         gate = torch.stack(route_info["global_read_gate"])
         summary["global_read_gate_mean"] = float(gate.mean().detach().cpu())

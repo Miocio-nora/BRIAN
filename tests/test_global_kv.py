@@ -3,6 +3,7 @@ import pytest
 torch = pytest.importorskip("torch")
 
 from brian_sphere_llm.memory import CanonicalGlobalCache
+from brian_sphere_llm.memory.read_adapter import GlobalReadAdapter
 from brian_sphere_llm.model.baseline import BaselineConfig
 from brian_sphere_llm.model.brian_model import BrianRouteConfig, BrianRouteCore
 
@@ -37,5 +38,33 @@ def test_brian_global_kv_reports_metrics() -> None:
     output = model(input_ids, targets=input_ids, route_mode="scheduled", router_probability=1.0, hard_exit=True)
     summary = output["routing_summary"]
     assert "global_attention_mass" in summary
+    assert "global_sink_attention_mass" in summary
+    assert "global_window_attention_mass" in summary
     assert "global_read_gate_mean" in summary
     assert "global_cache_slots_mean" in summary
+    assert 0.0 <= summary["global_sink_attention_mass"] <= 1.0
+    assert 0.0 <= summary["global_window_attention_mass"] <= 1.0
+
+
+def test_global_read_adapter_reports_sink_and_window_attention() -> None:
+    adapter = GlobalReadAdapter(d_model=4, code_dim=2)
+    hidden = torch.ones(2, 3, 4)
+    codes = torch.randn(2, 4, 2)
+    _, metrics = adapter(hidden, codes, sink_slots=1)
+
+    assert metrics["global_attention_mass"].item() == pytest.approx(1.0)
+    assert metrics["global_sink_attention_mass"].item() >= 0.0
+    assert metrics["global_window_attention_mass"].item() >= 0.0
+    assert (
+        metrics["global_sink_attention_mass"].item() + metrics["global_window_attention_mass"].item()
+    ) == pytest.approx(metrics["global_attention_mass"].item())
+
+
+def test_global_read_adapter_reports_zero_sink_for_no_sink_cache() -> None:
+    adapter = GlobalReadAdapter(d_model=4, code_dim=2)
+    hidden = torch.ones(1, 3, 4)
+    codes = torch.randn(1, 2, 2)
+    _, metrics = adapter(hidden, codes, sink_slots=0)
+
+    assert metrics["global_sink_attention_mass"].item() == pytest.approx(0.0)
+    assert metrics["global_window_attention_mass"].item() == pytest.approx(1.0)

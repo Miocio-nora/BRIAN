@@ -26,6 +26,8 @@ ROUTING_KEYS = {
     "route_imitation_accuracy",
     "weighted_fusion_ratio",
     "global_attention_mass",
+    "global_sink_attention_mass",
+    "global_window_attention_mass",
     "global_read_gate_mean",
     "global_cache_slots_mean",
     "parallel_branch_count_mean",

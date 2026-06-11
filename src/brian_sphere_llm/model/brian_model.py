@@ -171,6 +171,8 @@ class BrianRouteCore(ModuleBase):
             "position_norms": [],
             "location_distance": [],
             "global_attention_mass": [],
+            "global_sink_attention_mass": [],
+            "global_window_attention_mass": [],
             "global_read_gate": [],
             "global_cache_slots": [],
         }
@@ -195,8 +197,14 @@ class BrianRouteCore(ModuleBase):
         for step in range(max_steps if route_mode != "parallel" and not self.config.parallel_passing else 0):
             if self.config.global_kv and global_state is not None:
                 assert self.global_read is not None
-                hidden, global_metrics = self.global_read(hidden, global_state.codes)
+                hidden, global_metrics = self.global_read(
+                    hidden,
+                    global_state.codes,
+                    sink_slots=self.config.global_sink_slots,
+                )
                 route_info["global_attention_mass"].append(global_metrics["global_attention_mass"])
+                route_info["global_sink_attention_mass"].append(global_metrics["global_sink_attention_mass"])
+                route_info["global_window_attention_mass"].append(global_metrics["global_window_attention_mass"])
                 route_info["global_read_gate"].append(global_metrics["global_read_gate"])
                 route_info["global_cache_slots"].append(
                     torch.tensor(float(global_state.slots), device=input_ids.device, dtype=hidden.dtype)
@@ -248,8 +256,14 @@ class BrianRouteCore(ModuleBase):
         hidden = self.exit_block(hidden, self._block_position(position))
         if self.config.global_kv and global_state is not None:
             assert self.global_read is not None
-            hidden, global_metrics = self.global_read(hidden, global_state.codes)
+            hidden, global_metrics = self.global_read(
+                hidden,
+                global_state.codes,
+                sink_slots=self.config.global_sink_slots,
+            )
             route_info["global_attention_mass"].append(global_metrics["global_attention_mass"])
+            route_info["global_sink_attention_mass"].append(global_metrics["global_sink_attention_mass"])
+            route_info["global_window_attention_mass"].append(global_metrics["global_window_attention_mass"])
             route_info["global_read_gate"].append(global_metrics["global_read_gate"])
             route_info["global_cache_slots"].append(
                 torch.tensor(float(global_state.slots), device=input_ids.device, dtype=hidden.dtype)
@@ -333,8 +347,14 @@ class BrianRouteCore(ModuleBase):
                 base_codes = global_state.codes.unsqueeze(1).expand(-1, current_beam, -1, -1)
                 combined_codes = torch.cat([base_codes, branch_delta_codes], dim=2)
                 flat_codes = combined_codes.reshape(batch_size * current_beam, combined_codes.size(2), combined_codes.size(3))
-                flat_hidden, global_metrics = self.global_read(flat_hidden, flat_codes)
+                flat_hidden, global_metrics = self.global_read(
+                    flat_hidden,
+                    flat_codes,
+                    sink_slots=self.config.global_sink_slots,
+                )
                 route_info["global_attention_mass"].append(global_metrics["global_attention_mass"])
+                route_info["global_sink_attention_mass"].append(global_metrics["global_sink_attention_mass"])
+                route_info["global_window_attention_mass"].append(global_metrics["global_window_attention_mass"])
                 route_info["global_read_gate"].append(global_metrics["global_read_gate"])
                 route_info["global_cache_slots"].append(
                     torch.tensor(float(flat_codes.size(1)), device=hidden.device, dtype=hidden.dtype)

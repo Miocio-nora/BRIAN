@@ -144,7 +144,7 @@ python scripts/eval.py \
   --sample-count 12
 ```
 
-This writes a needle-retrieval / two-hop tracing report with exact-match accuracy, teacher-forced target token accuracy, truncation rate, estimated fp16 KV/global-code memory budgets, and Global KV routing diagnostics.
+This writes a needle-retrieval / two-hop tracing report with exact-match accuracy, teacher-forced target token accuracy, truncation rate, estimated fp16 KV/global-code memory budgets, and Global KV routing diagnostics including sink/window attention mass.
 
 Compare a local-KV baseline against one or more Global KV candidates:
 
@@ -425,6 +425,7 @@ Routing behavior is a first-class research output. Every routed model should rep
 - cost-quality curve;
 - difficulty-step correlation;
 - `OUT` probability by difficulty.
+Global KV reports additionally track global read gate, global cache slots, sink attention mass, and window attention mass.
 
 The most important route-core diagnostic is:
 
