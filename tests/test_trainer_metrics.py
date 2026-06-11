@@ -7,7 +7,15 @@ torch = pytest.importorskip("torch")
 
 from brian_sphere_llm.data.pack import write_index, write_token_bin
 from brian_sphere_llm.model.baseline import BaselineConfig, BaselineLM
-from brian_sphere_llm.train.trainer import _model_stats, _schedule_values, evaluate, run_name, train_from_config
+from brian_sphere_llm.train.trainer import (
+    _float_config,
+    _int_config,
+    _model_stats,
+    _schedule_values,
+    evaluate,
+    run_name,
+    train_from_config,
+)
 from brian_sphere_llm.utils.config import save_yaml
 
 
@@ -31,6 +39,15 @@ def test_schedule_values_rejects_boolean_default_lambda_route() -> None:
 
     with pytest.raises(ValueError, match="lambda_route"):
         _schedule_values(config, route_mode="scheduled", global_step=1)
+
+
+def test_train_config_numeric_helpers_reject_boolean_values() -> None:
+    with pytest.raises(ValueError, match="max_steps"):
+        _int_config({"max_steps": True}, "max_steps", minimum=1)
+    with pytest.raises(ValueError, match="learning_rate"):
+        _float_config({"learning_rate": False}, "learning_rate", minimum=0.0)
+    with pytest.raises(ValueError, match="grad_clip"):
+        _float_config({"grad_clip": True}, "grad_clip", minimum=0.0)
 
 
 def test_evaluate_reports_inference_timing_metrics() -> None:

@@ -53,7 +53,14 @@ def train_from_config(config_path: str | Path) -> Path:
 
     config_path = Path(config_path)
     config = load_config(config_path)
-    set_seed(int(config.get("seed", 1)))
+    seed = _int_config(config, "seed", default=1, minimum=0)
+    batch_size = _int_config(config, "batch_size", minimum=1)
+    max_steps = _int_config(config, "max_steps", minimum=1)
+    eval_interval = _int_config(config, "eval_interval", default=max_steps, minimum=1)
+    save_interval = _int_config(config, "save_interval", default=max_steps, minimum=1)
+    learning_rate = _float_config(config, "learning_rate", minimum=0.0)
+    weight_decay = _float_config(config, "weight_decay", default=0.0, minimum=0.0)
+    set_seed(seed)
 
     model_config_path = (config_path.parent / config["model_config"]).resolve()
     data_config_path = (config_path.parent / config["data_config"]).resolve()
@@ -68,7 +75,7 @@ def train_from_config(config_path: str | Path) -> Path:
         config,
         model_config["model_name"],
         data_config["recipe_name"],
-        context_length=int(data_config.get("sequence_length", 0) or 0),
+        context_length=_int_config(data_config, "sequence_length", default=0, minimum=0) or 0,
     )
     run_dir.mkdir(parents=True, exist_ok=True)
     save_yaml({**config, "model_config_resolved": model_config, "data_config_resolved": data_config}, run_dir / "config_resolved.yaml")
@@ -79,20 +86,20 @@ def train_from_config(config_path: str | Path) -> Path:
     train_loader = build_dataloader(
         tokenized_dir=tokenized_dir,
         split="train",
-        batch_size=int(config["batch_size"]),
+        batch_size=batch_size,
         shuffle=True,
     )
     val_loader = build_dataloader(
         tokenized_dir=tokenized_dir,
         split="val",
-        batch_size=int(config["batch_size"]),
+        batch_size=batch_size,
         shuffle=False,
     )
 
     optimizer = torch.optim.AdamW(
         model.parameters(),
-        lr=float(config["learning_rate"]),
-        weight_decay=float(config.get("weight_decay", 0.0)),
+        lr=learning_rate,
+        weight_decay=weight_decay,
     )
     start_step = 0
     best_eval_loss: float | None = None
@@ -105,7 +112,7 @@ def train_from_config(config_path: str | Path) -> Path:
             {
                 "checkpoint": str(latest),
                 "resumed_from_step": start_step,
-                "target_max_steps": int(config["max_steps"]),
+                "target_max_steps": max_steps,
                 "optimizer_state_loaded": "optimizer" in payload,
                 "best_eval_loss": best_eval_loss,
             }
@@ -113,9 +120,6 @@ def train_from_config(config_path: str | Path) -> Path:
 
     train_log = JsonlLogger(run_dir / "train_log.jsonl")
     eval_log = JsonlLogger(run_dir / "eval_log.jsonl")
-    max_steps = int(config["max_steps"])
-    eval_interval = int(config.get("eval_interval", max_steps))
-    save_interval = int(config.get("save_interval", max_steps))
     write_routing_report = bool(config.get("write_routing_report_on_checkpoint", True))
     stage_mode = train_mode_for_stage(config["stage"])
     iterator = iter(train_loader)
@@ -136,8 +140,8 @@ def train_from_config(config_path: str | Path) -> Path:
             outputs = _forward_for_stage(model, batch, config=config, route_mode=stage_mode, global_step=step)
             loss = outputs["loss"]
         loss.backward()
-        if config.get("grad_clip"):
-            torch.nn.utils.clip_grad_norm_(model.parameters(), float(config["grad_clip"]))
+        if config.get("grad_clip") is not None:
+            torch.nn.utils.clip_grad_norm_(model.parameters(), _float_config(config, "grad_clip", minimum=0.0))
         optimizer.step()
         _synchronize_if_cuda(device)
         elapsed = max(1e-9, time.time() - started)
@@ -281,6 +285,53 @@ def _cuda_memory_metrics(device: "torch.device") -> dict[str, float]:
         "cuda_memory_allocated_mb": torch.cuda.memory_allocated(device) / (1024.0 * 1024.0),
         "cuda_max_memory_allocated_mb": torch.cuda.max_memory_allocated(device) / (1024.0 * 1024.0),
     }
+
+
+def _int_config(
+    config: dict[str, Any],
+    key: str,
+    *,
+    default: int | None = None,
+    minimum: int | None = None,
+) -> int:
+    if key in config:
+        value = config[key]
+    elif default is not None:
+        value = default
+    else:
+        raise KeyError(key)
+    if isinstance(value, bool):
+        raise ValueError(f"{key} must be an integer, not a boolean.")
+    if isinstance(value, int):
+        number = value
+    elif isinstance(value, float) and math.isfinite(value) and value.is_integer():
+        number = int(value)
+    else:
+        raise ValueError(f"{key} must be an integer.")
+    if minimum is not None and number < minimum:
+        raise ValueError(f"{key} must be >= {minimum}.")
+    return number
+
+
+def _float_config(
+    config: dict[str, Any],
+    key: str,
+    *,
+    default: float | None = None,
+    minimum: float | None = None,
+) -> float:
+    if key in config:
+        value = config[key]
+    elif default is not None:
+        value = default
+    else:
+        raise KeyError(key)
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(float(value)):
+        raise ValueError(f"{key} must be a finite numeric value.")
+    number = float(value)
+    if minimum is not None and number < minimum:
+        raise ValueError(f"{key} must be >= {minimum}.")
+    return number
 
 
 def _data_manifest_ref(data_config: dict[str, Any], tokenized_dir: Path) -> dict[str, Any]:
