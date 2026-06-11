@@ -167,6 +167,31 @@ def test_train_from_config_writes_final_routing_report_when_checkpoint_report_di
     assert report["cost_quality_curve"]["summary"]["train_point_count"] == 1
 
 
+def test_train_from_config_logs_routed_behavior(tmp_path: Path) -> None:
+    train_config = _write_tiny_routed_train_fixture(tmp_path)
+
+    run_dir = train_from_config(train_config)
+
+    train_rows = [json.loads(line) for line in (run_dir / "train_log.jsonl").read_text(encoding="utf-8").splitlines()]
+    eval_rows = [json.loads(line) for line in (run_dir / "eval_log.jsonl").read_text(encoding="utf-8").splitlines()]
+    train_row = train_rows[-1]
+    eval_row = eval_rows[-1]
+    for key in [
+        "route_entropy",
+        "block_load_entropy",
+        "active_block_evals_per_token",
+        "average_route_steps",
+        "route_imitation_accuracy",
+    ]:
+        assert isinstance(train_row[key], (int, float))
+        assert isinstance(eval_row[key], (int, float))
+    assert isinstance(train_row["top1_block_histogram"], dict)
+    assert train_row["route_path_examples"]
+    report = json.loads((run_dir / "routing_report.json").read_text(encoding="utf-8"))
+    assert report["summary"]["route_entropy"] >= 0.0
+    assert report["latest_route_path_examples"]
+
+
 def test_train_from_config_records_resume_event(tmp_path: Path) -> None:
     train_config = _write_tiny_train_fixture(tmp_path, max_steps=1, resume=False)
     run_dir = train_from_config(train_config)
@@ -245,6 +270,79 @@ def _write_tiny_train_fixture(
             "learning_rate": 0.001,
             "resume": resume,
             "write_routing_report_on_checkpoint": write_routing_report_on_checkpoint,
+        },
+        train_config,
+    )
+    return train_config
+
+
+def _write_tiny_routed_train_fixture(tmp_path: Path) -> Path:
+    tokenized = tmp_path / "tokenized_routed"
+    sequences = [
+        [1, 2, 3, 4],
+        [2, 3, 4, 5],
+        [3, 4, 5, 6],
+        [4, 5, 6, 7],
+    ]
+    write_token_bin(sequences, tokenized / "train.bin")
+    write_index(tokenized / "train.idx", sequence_length=4, num_sequences=len(sequences))
+    write_token_bin(sequences, tokenized / "val.bin")
+    write_index(tokenized / "val.idx", sequence_length=4, num_sequences=len(sequences))
+
+    model_config = tmp_path / "model_routed.yaml"
+    save_yaml(
+        {
+            "model_name": "brian_unit_routed",
+            "architecture": "brian_route_core",
+            "base": {
+                "model_name": "baseline_unit_routed",
+                "layers": 4,
+                "d_model": 16,
+                "n_heads": 4,
+                "context_length": 4,
+                "vocab_size": 32,
+                "dropout": 0.0,
+            },
+            "pre_blocks": 1,
+            "route_pool_blocks": 2,
+            "post_blocks": 1,
+            "block_position_dim": 8,
+            "max_route_steps": 2,
+            "top_k": 1,
+            "later_top_k": 1,
+            "hard_exit": False,
+        },
+        model_config,
+    )
+    data_config = tmp_path / "data_routed.yaml"
+    save_yaml(
+        {
+            "recipe_name": "unit_data_routed",
+            "output_dir": str(tokenized),
+            "manifest_path": str(tmp_path / "manifest_routed.jsonl"),
+            "sequence_length": 4,
+        },
+        data_config,
+    )
+    train_config = tmp_path / "train_routed.yaml"
+    save_yaml(
+        {
+            "stage": "stage1_fixed_route",
+            "run_name": "unit_routed_run",
+            "model_config": str(model_config),
+            "data_config": str(data_config),
+            "output_root": str(tmp_path / "runs"),
+            "seed": 1,
+            "device": "cpu",
+            "precision": "fp32",
+            "batch_size": 2,
+            "max_steps": 1,
+            "eval_interval": 1,
+            "save_interval": 1,
+            "learning_rate": 0.001,
+            "resume": False,
+            "routing": {"pseudo_policy": "sequential"},
+            "loss_weights": {"route": 1.0, "balance": 0.01, "cost": 0.01, "location": 0.01},
         },
         train_config,
     )
