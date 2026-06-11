@@ -146,6 +146,17 @@ python scripts/eval.py \
 
 This writes `baseline_difficulty_report.json` plus sample JSONL rows with baseline cross-entropy and easy/medium/hard bins. Stage 0 gates use this as explicit sample-level CE evidence.
 
+Generate Stage 2 pseudo-route curriculum evidence from those difficulty bins:
+
+```bash
+python scripts/eval.py \
+  --config configs/eval/pseudo_route_curriculum.yaml \
+  --run <stage2_router_imitation_run> \
+  --baseline-report <stage0_baseline_run>/baseline_difficulty_report.json
+```
+
+This writes `pseudo_route_curriculum_report.json` showing that easy samples receive skip/early-exit targets, hard samples receive recurrent targets, and all samples include supervised `OUT`. Stage 2 gates use it as explicit curriculum evidence.
+
 Run the lightweight synthetic reasoning eval:
 
 ```bash

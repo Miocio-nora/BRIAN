@@ -19,6 +19,7 @@ def _write_run(
     resume_event: dict | None = None,
     baseline_difficulty_report: dict | None = None,
     fixed_route_stability_report: dict | None = None,
+    pseudo_route_curriculum_report: dict | None = None,
 ) -> Path:
     run_dir = root / name
     run_dir.mkdir(parents=True)
@@ -45,6 +46,11 @@ def _write_run(
     if fixed_route_stability_report is not None:
         (run_dir / "fixed_route_stability_report.json").write_text(
             json.dumps(fixed_route_stability_report),
+            encoding="utf-8",
+        )
+    if pseudo_route_curriculum_report is not None:
+        (run_dir / "pseudo_route_curriculum_report.json").write_text(
+            json.dumps(pseudo_route_curriculum_report),
             encoding="utf-8",
         )
     return run_dir
@@ -100,6 +106,30 @@ def test_stage_gate_report_writes_json(tmp_path: Path) -> None:
             },
         },
     )
+    stage2 = _write_run(
+        tmp_path,
+        "stage2",
+        stage="stage2_router_imitation",
+        val_loss=10.2,
+        train_row={
+            "route_imitation_accuracy": 0.95,
+            "block_load_entropy": 0.5,
+            "top1_block_histogram": {"0": 2, "1": 2, "2": 1},
+        },
+        pseudo_route_curriculum_report={
+            "overall_status": "pass",
+            "checks": {
+                "baseline_samples_present": True,
+                "difficulty_bins_present": True,
+                "mixed_skip_recur_policy": True,
+                "easy_has_skip_or_small_pool": True,
+                "hard_has_recur_transition": True,
+                "exit_action_supervised": True,
+                "easy_exits_no_later_than_hard": True,
+                "route_length_conditioned_by_difficulty": True,
+            },
+        },
+    )
     stage5 = _write_run(
         tmp_path,
         "global",
@@ -125,17 +155,19 @@ def test_stage_gate_report_writes_json(tmp_path: Path) -> None:
     )
     output = tmp_path / "gate.json"
     report_path = make_stage_gate_report(
-        [baseline, fixed, stage5],
+        [baseline, fixed, stage2, stage5],
         output_path=output,
         long_context_compare_report_path=long_context_compare,
     )
     report = json.loads(report_path.read_text(encoding="utf-8"))
-    assert report["run_count"] == 3
+    assert report["run_count"] == 4
     assert report["gates"]["stage0_to_1"]["status"] == "pass"
     assert report["gates"]["stage0_to_1"]["checks"]["checkpoint_resume_event"] is True
     assert report["gates"]["stage0_to_1"]["checks"]["baseline_difficulty_bins_present"] is True
     assert report["gates"]["stage1_to_2"]["status"] == "pass"
     assert report["gates"]["stage1_to_2"]["checks"]["fixed_route_stability_passed"] is True
+    assert report["gates"]["stage2_to_3"]["status"] == "pass"
+    assert report["gates"]["stage2_to_3"]["checks"]["pseudo_route_curriculum_passed"] is True
     assert report["gates"]["stage5_to_6"]["status"] == "pass"
     assert report["supplemental_reports"]["long_context_compare_report"] == str(long_context_compare)
 

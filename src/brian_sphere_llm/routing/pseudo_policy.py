@@ -28,23 +28,39 @@ def mixed_skip_recur_actions(
         raise ModuleNotFoundError("PyTorch is required for pseudo policies.")
     if difficulty is None:
         difficulty = torch.arange(batch_size, device=device) % 3
-    current = torch.zeros(batch_size, dtype=torch.long, device=device)
     actions: list[torch.Tensor] = []
     out = torch.full((batch_size,), num_internal_blocks, dtype=torch.long, device=device)
     for step in range(max_route_steps):
-        action = current.clone()
+        sequential = torch.full(
+            (batch_size,),
+            min(step, max(0, num_internal_blocks - 1)),
+            dtype=torch.long,
+            device=device,
+        )
+        easy_action = torch.full(
+            (batch_size,),
+            min(2, max(0, num_internal_blocks - 1)),
+            dtype=torch.long,
+            device=device,
+        )
+        hard_action = torch.full(
+            (batch_size,),
+            min(max(0, step - 1), max(0, num_internal_blocks - 1)),
+            dtype=torch.long,
+            device=device,
+        )
+        action = sequential
         easy = difficulty == 0
         medium = difficulty == 1
         hard = difficulty == 2
-        if step >= 1:
-            action = torch.where(easy, out, action)
-        if step >= max_route_steps - 1:
-            action = torch.where(medium | hard, out, action)
+        if num_internal_blocks > 2:
+            action = torch.where(easy & (step == 1), easy_action, action)
+            action = torch.where(easy & (step >= 2), out, action)
+        else:
+            action = torch.where(easy & (step >= 1), out, action)
+        action = torch.where(hard, hard_action, action)
+        action = torch.where((medium | hard) & (step >= max_route_steps - 1), out, action)
         actions.append(action)
-        next_current = current + 1
-        next_current = torch.where(easy, current + 2, next_current)
-        next_current = torch.where(hard & (step % 2 == 0), current, next_current)
-        current = torch.clamp(next_current, max=num_internal_blocks - 1)
     if not torch.all(actions[-1] == out):
         actions.append(out)
     return actions

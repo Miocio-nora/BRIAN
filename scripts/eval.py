@@ -17,6 +17,7 @@ from brian_sphere_llm.eval.long_context_compare import make_long_context_compari
 from brian_sphere_llm.eval.out_by_difficulty import make_out_by_difficulty_report
 from brian_sphere_llm.eval.parallel_compare import make_parallel_comparison_report
 from brian_sphere_llm.eval.position_ablation import make_position_ablation_report
+from brian_sphere_llm.eval.pseudo_route_curriculum import make_pseudo_route_curriculum_report
 from brian_sphere_llm.eval.reasoning import make_reasoning_report
 from brian_sphere_llm.eval.routing_report import make_routing_report
 from brian_sphere_llm.eval.stage_gate_report import make_stage_gate_report
@@ -208,6 +209,15 @@ def main() -> None:
             output_path=args.output or config.get("output_path"),
             min_validation_loss_delta=float(config.get("min_validation_loss_delta", 0.001)),
             min_routing_metric_delta=float(config.get("min_routing_metric_delta", 0.001)),
+        )
+    elif eval_name == "pseudo_route_curriculum_report":
+        baseline_report = args.baseline_report or config.get("baseline_difficulty_report_path")
+        if not args.run or not baseline_report:
+            raise SystemExit("pseudo_route_curriculum_report requires --run and --baseline-report")
+        report = make_pseudo_route_curriculum_report(
+            args.run,
+            baseline_difficulty_report_path=baseline_report,
+            output_path=args.output or config.get("output_path"),
         )
     elif eval_name == "out_by_difficulty_report":
         reasoning_report = args.reasoning_report or config.get("reasoning_report_path")

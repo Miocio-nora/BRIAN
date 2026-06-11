@@ -89,6 +89,7 @@ def _summarize_run(run_dir: Path) -> dict[str, Any]:
     routing_report = _read_json_if_exists(run_dir / "routing_report.json")
     baseline_difficulty_report = _read_json_if_exists(run_dir / "baseline_difficulty_report.json")
     fixed_route_stability_report = _read_json_if_exists(run_dir / "fixed_route_stability_report.json")
+    pseudo_route_curriculum_report = _read_json_if_exists(run_dir / "pseudo_route_curriculum_report.json")
     difficulty_report = _read_json_if_exists(run_dir / "difficulty_step_report.json")
     determinism_report = _read_json_if_exists(run_dir / "eval_determinism_report.json")
     eval_rows = _read_jsonl(run_dir / "eval_log.jsonl")
@@ -122,6 +123,10 @@ def _summarize_run(run_dir: Path) -> dict[str, Any]:
         "fixed_route_stability_report_present": bool(fixed_route_stability_report),
         "fixed_route_stability_status": fixed_route_stability_report.get("overall_status"),
         "fixed_route_stability_checks": fixed_route_stability_report.get("checks", {}),
+        "pseudo_route_curriculum_report_present": bool(pseudo_route_curriculum_report),
+        "pseudo_route_curriculum_status": pseudo_route_curriculum_report.get("overall_status"),
+        "pseudo_route_curriculum_checks": pseudo_route_curriculum_report.get("checks", {}),
+        "pseudo_route_curriculum_by_difficulty": pseudo_route_curriculum_report.get("by_difficulty", {}),
         "difficulty_step_correlation": difficulty_corr,
         "difficulty_sample_count": _num(difficulty_report.get("sample_count")),
         "eval_determinism_status": determinism_report.get("overall_status"),
@@ -190,9 +195,19 @@ def _gate_stage2(stage2: dict[str, Any] | None, thresholds: dict[str, float]) ->
         "lm_loss_finite": _finite(stage2.get("validation_loss") if stage2 else None),
         "block_usage_non_degenerate": _block_usage_non_degenerate(stage2),
         "block_load_entropy_present": _metric_at_least(stage2, "block_load_entropy", thresholds["block_load_entropy_min"]),
+        "pseudo_route_curriculum_report_present": bool(stage2 and stage2.get("pseudo_route_curriculum_report_present")),
+        "pseudo_route_curriculum_passed": bool(stage2 and stage2.get("pseudo_route_curriculum_status") == "pass"),
         "checkpoint_present": bool(stage2 and stage2["has_checkpoint_latest"]),
     }
-    return _gate("Stage 2 mixed pseudo routing is stable and non-degenerate", checks)
+    return _gate(
+        "Stage 2 mixed pseudo routing is stable and non-degenerate",
+        checks,
+        {
+            "pseudo_route_curriculum_status": stage2.get("pseudo_route_curriculum_status") if stage2 else None,
+            "pseudo_route_curriculum_checks": stage2.get("pseudo_route_curriculum_checks") if stage2 else {},
+            "pseudo_route_curriculum_by_difficulty": stage2.get("pseudo_route_curriculum_by_difficulty") if stage2 else {},
+        },
+    )
 
 
 def _gate_stage3(stage3: dict[str, Any] | None, stage1: dict[str, Any] | None, thresholds: dict[str, float]) -> dict[str, Any]:
