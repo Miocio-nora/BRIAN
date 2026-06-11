@@ -17,6 +17,27 @@ def test_build_experiment_plan_resolves_repo_paths() -> None:
     assert plan.entries[1].train_config.name == "stage3_no_position_tiny_debug.yaml"
 
 
+def test_r125_package_experiment_manifest_resolves_repo_paths() -> None:
+    plan = build_experiment_plan("configs/experiments/route_core_r125_package.yaml", include_baseline=True)
+    assert plan.experiment_name == "route_core_r125_package"
+    assert plan.entries[0].role == "baseline"
+    assert plan.entries[0].train_config.name == "stage0_baseline.yaml"
+    assert [entry.id for entry in plan.entries[1:]] == ["A0", "A1", "A2", "A3", "A4", "A5", "A6", "A7"]
+    assert plan.entries[3].train_config.name == "stage2_sequential_router_imitation.yaml"
+    assert plan.entries[8].train_config.name == "ablation_a7_no_location_loss.yaml"
+    stages = [load_config(entry.train_config)["stage"] for entry in plan.entries[1:]]
+    assert [train_mode_for_stage(stage) for stage in stages] == [
+        "baseline",
+        "fixed",
+        "pseudo",
+        "pseudo",
+        "scheduled",
+        "scheduled",
+        "scheduled",
+        "scheduled",
+    ]
+
+
 def test_global_kv_experiment_manifest_resolves_repo_paths() -> None:
     plan = build_experiment_plan("configs/experiments/tiny_global_kv.yaml", include_baseline=True)
     assert plan.experiment_name == "tiny_global_kv"

@@ -187,6 +187,16 @@ python scripts/train.py --config configs/train/stage3_position_random_tiny_debug
 
 The formal BRIAN-R125 position ablation manifest is `configs/experiments/route_core_position_ablations.yaml`.
 
+Resolve the full Package A BRIAN-R125 route-core manifest:
+
+```bash
+python scripts/run_experiment.py \
+  --config configs/experiments/route_core_r125_package.yaml \
+  --dry-run
+```
+
+This manifest covers A0-A7 from the project plan: fixed baseline, fixed route wrapper, sequential router imitation, skip/recur router imitation, scheduled free routing with block-position state, no-position ablation, no hard output-action ablation, and no-location-loss ablation.
+
 Resolve an experiment manifest without training:
 
 ```bash

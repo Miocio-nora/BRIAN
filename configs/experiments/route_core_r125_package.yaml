@@ -1,0 +1,36 @@
+experiment_name: route_core_r125_package
+description: Package A BRIAN-R125 route-core validation package.
+baseline_train_config: configs/train/stage0_baseline.yaml
+ablations:
+  - id: A0
+    name: fixed_transformer_baseline
+    train_config: configs/train/stage0_baseline.yaml
+    purpose: Fixed decoder-only Transformer baseline.
+  - id: A1
+    name: fixed_route_wrapper
+    train_config: configs/train/stage1_fixed_route.yaml
+    purpose: Route-core wrapper forced to the original sequential middle-block path.
+  - id: A2
+    name: sequential_router_imitation
+    train_config: configs/train/stage2_sequential_router_imitation.yaml
+    purpose: Router imitation on the original sequential pseudo route.
+  - id: A3
+    name: skip_recur_router_imitation
+    train_config: configs/train/stage3_pseudo_skip_recur.yaml
+    purpose: Router imitation on mixed skip/recurrent pseudo routes.
+  - id: A4
+    name: free_router_block_position
+    train_config: configs/train/stage3_scheduled_free_routing.yaml
+    purpose: Scheduled router-controlled paths with block-position state.
+  - id: A5
+    name: no_block_position
+    train_config: configs/train/ablation_p0_no_position.yaml
+    purpose: Remove block-position state from the scheduled free-routing path.
+  - id: A6
+    name: no_output_action
+    train_config: configs/train/stage4_scheduled_free_routing.yaml
+    purpose: Scheduled routing ablation without hard terminal output action.
+  - id: A7
+    name: no_location_loss
+    train_config: configs/train/ablation_a7_no_location_loss.yaml
+    purpose: Hard-output route-core path without location regularization.
