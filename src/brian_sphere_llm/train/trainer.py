@@ -56,6 +56,7 @@ def train_from_config(config_path: str | Path) -> Path:
     config = load_config(config_path)
     seed = _int_config(config, "seed", default=1, minimum=0)
     batch_size = _int_config(config, "batch_size", minimum=1)
+    gradient_accumulation_steps = _int_config(config, "gradient_accumulation_steps", default=1, minimum=1)
     max_steps = _int_config(config, "max_steps", minimum=1)
     eval_interval = _int_config(config, "eval_interval", default=max_steps, minimum=1)
     save_interval = _int_config(config, "save_interval", default=max_steps, minimum=1)
@@ -127,41 +128,58 @@ def train_from_config(config_path: str | Path) -> Path:
     iterator = iter(train_loader)
     model.train()
     for step in range(start_step + 1, max_steps + 1):
-        try:
-            batch = next(iterator)
-        except StopIteration:
-            iterator = iter(train_loader)
-            batch = next(iterator)
-        batch = batch.to(device)
         if device.type == "cuda":
             torch.cuda.reset_peak_memory_stats(device)
         _synchronize_if_cuda(device)
         started = time.time()
         optimizer.zero_grad(set_to_none=True)
-        with _autocast_context(device, str(config.get("precision", "fp32"))):
-            outputs = _forward_for_stage(model, batch, config=config, route_mode=stage_mode, global_step=step)
-            loss = outputs["loss"]
-        loss.backward()
+        token_count = 0
+        losses: list[float] = []
+        loss_components: dict[str, list[float]] = {}
+        schedule_values: dict[str, float] = {}
+        routing_summary: dict[str, Any] = {}
+        routing_numeric_values: dict[str, list[float]] = {}
+        for _ in range(gradient_accumulation_steps):
+            try:
+                batch = next(iterator)
+            except StopIteration:
+                iterator = iter(train_loader)
+                batch = next(iterator)
+            batch = batch.to(device)
+            with _autocast_context(device, str(config.get("precision", "fp32"))):
+                outputs = _forward_for_stage(model, batch, config=config, route_mode=stage_mode, global_step=step)
+                loss = outputs["loss"]
+                scaled_loss = loss / gradient_accumulation_steps
+            scaled_loss.backward()
+            token_count += int(batch.numel())
+            losses.append(float(loss.detach().cpu()))
+            _accumulate_loss_components(loss_components, outputs.get("loss_components", {}))
+            if "schedule_values" in outputs:
+                schedule_values.update(outputs["schedule_values"])
+            _accumulate_routing_summary(routing_summary, routing_numeric_values, outputs.get("routing_summary", {}))
         if config.get("grad_clip") is not None:
             torch.nn.utils.clip_grad_norm_(model.parameters(), _float_config(config, "grad_clip", minimum=0.0))
         optimizer.step()
         _synchronize_if_cuda(device)
         elapsed = max(1e-9, time.time() - started)
-        token_count = int(batch.numel())
         row = {
             "step": step,
-            "loss": float(loss.detach().cpu()),
+            "loss": _mean(losses),
+            "micro_batch_size": batch_size,
+            "gradient_accumulation_steps": gradient_accumulation_steps,
+            "effective_batch_size": batch_size * gradient_accumulation_steps,
+            "tokens_per_optimizer_step": token_count,
             "tokens_per_second": int(token_count / elapsed),
             "train_step_time_seconds": elapsed,
             "train_latency_ms_per_token": _latency_ms_per_token(elapsed, token_count),
         }
         row.update(_cuda_memory_metrics(device))
-        if "loss_components" in outputs:
-            row.update({key: float(value.cpu()) for key, value in outputs["loss_components"].items()})
-        if "schedule_values" in outputs:
-            row.update(outputs["schedule_values"])
-        if "routing_summary" in outputs:
-            row.update(outputs["routing_summary"])
+        if loss_components:
+            row.update({key: _mean(values) for key, values in loss_components.items()})
+        if schedule_values:
+            row.update(schedule_values)
+        if routing_summary or routing_numeric_values:
+            row.update(_finalize_routing_summary(routing_summary, routing_numeric_values))
         train_log.write(row)
 
         if step % eval_interval == 0 or step == max_steps:
@@ -213,6 +231,52 @@ def _forward_for_stage(model: Any, batch: "torch.Tensor", *, config: dict[str, A
 def _set_activation_checkpointing(model: Any, enabled: bool) -> None:
     if hasattr(model, "activation_checkpointing"):
         model.activation_checkpointing = enabled
+
+
+def _accumulate_loss_components(accumulator: dict[str, list[float]], components: Any) -> None:
+    if not isinstance(components, Mapping):
+        return
+    for key, value in components.items():
+        number = _metric_number(value)
+        if number is not None:
+            accumulator.setdefault(str(key), []).append(number)
+
+
+def _accumulate_routing_summary(
+    last_values: dict[str, Any],
+    numeric_values: dict[str, list[float]],
+    summary: Any,
+) -> None:
+    if not isinstance(summary, Mapping):
+        return
+    for key, value in summary.items():
+        number = _metric_number(value)
+        if number is None:
+            last_values[str(key)] = value
+        else:
+            numeric_values.setdefault(str(key), []).append(number)
+
+
+def _finalize_routing_summary(last_values: dict[str, Any], numeric_values: dict[str, list[float]]) -> dict[str, Any]:
+    summary = dict(last_values)
+    for key, values in numeric_values.items():
+        summary[key] = _mean(values)
+    return summary
+
+
+def _metric_number(value: Any) -> float | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)) and math.isfinite(float(value)):
+        return float(value)
+    if torch is not None and isinstance(value, torch.Tensor) and value.numel() == 1:
+        number = float(value.detach().cpu())
+        return number if math.isfinite(number) else None
+    return None
+
+
+def _mean(values: list[float]) -> float:
+    return sum(values) / max(1, len(values))
 
 
 def _schedule_values(config: dict[str, Any], *, route_mode: str, global_step: int) -> dict[str, float]:

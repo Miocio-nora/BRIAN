@@ -138,6 +138,27 @@ def test_summarize_run_uses_later_top_k_for_weighted_fusion_compute(tmp_path: Pa
     assert summary["active_layer_evals_per_token"] == pytest.approx(5.0)
 
 
+def test_summarize_run_accounts_for_gradient_accumulation_tokens(tmp_path: Path) -> None:
+    run = _write_run(
+        tmp_path,
+        "accumulated",
+        config={
+            "stage": "stage0_baseline",
+            "batch_size": 2,
+            "gradient_accumulation_steps": 3,
+            "data_config_resolved": {"sequence_length": 8},
+        },
+        model_stats={"model_name": "baseline", "parameter_count": 100, "layers": 4},
+    )
+
+    summary = summarize_run(run)
+
+    assert summary["micro_batch_size"] == 2
+    assert summary["gradient_accumulation_steps"] == 3
+    assert summary["effective_batch_size"] == 6
+    assert summary["trained_tokens_estimate"] == 96
+
+
 def test_summarize_run_marks_stage4_output_action_as_hard_exit_by_default(tmp_path: Path) -> None:
     run = _write_run(
         tmp_path,

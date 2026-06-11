@@ -211,6 +211,7 @@ def test_train_from_config_writes_routing_report_on_checkpoint(tmp_path: Path) -
             "device": "cpu",
             "precision": "fp32",
             "batch_size": 2,
+            "gradient_accumulation_steps": 2,
             "max_steps": 1,
             "eval_interval": 1,
             "save_interval": 1,
@@ -244,6 +245,11 @@ def test_train_from_config_writes_routing_report_on_checkpoint(tmp_path: Path) -
     report = json.loads((run_dir / "routing_report.json").read_text(encoding="utf-8"))
     assert report["latest_eval"]["validation_loss"] >= 0.0
     assert report["cost_quality_curve"]["summary"]["train_point_count"] == 1
+    train_row = json.loads((run_dir / "train_log.jsonl").read_text(encoding="utf-8").splitlines()[-1])
+    assert train_row["micro_batch_size"] == 2
+    assert train_row["gradient_accumulation_steps"] == 2
+    assert train_row["effective_batch_size"] == 4
+    assert train_row["tokens_per_optimizer_step"] == 16
 
 
 def test_train_from_config_writes_final_routing_report_when_checkpoint_report_disabled(tmp_path: Path) -> None:

@@ -40,6 +40,7 @@ def test_train_configs_resolve_stage_model_and_data_refs() -> None:
     errors: list[str] = []
     for path in _yaml_files(CONFIG_ROOT / "train"):
         config = _load_config(path, errors)
+        _validate_train_config(config, path, errors)
         for key in ["stage", "model_config", "data_config"]:
             if key not in config:
                 errors.append(f"{path}: missing {key}")
@@ -257,6 +258,24 @@ def _validate_data_config(config: dict[str, Any], path: Path, errors: list[str])
             errors.append(f"{path}: mixture.{tag}.source_dataset must be a non-empty string")
     if weights and not math.isclose(sum(weights), 1.0, rel_tol=0.0, abs_tol=1e-9):
         errors.append(f"{path}: mixture weights must sum to 1.0")
+
+
+def _validate_train_config(config: dict[str, Any], path: Path, errors: list[str]) -> None:
+    for key, minimum in [
+        ("batch_size", 1),
+        ("gradient_accumulation_steps", 1),
+        ("max_steps", 1),
+        ("eval_interval", 1),
+        ("save_interval", 1),
+    ]:
+        if key in config:
+            _int_config_value(config.get(key), key, path, errors, minimum=minimum)
+    for key in ["learning_rate", "weight_decay", "grad_clip"]:
+        if key in config:
+            _float_config_value(config.get(key), key, path, errors, minimum=0.0)
+    for key in ["activation_checkpointing", "resume", "write_routing_report_on_checkpoint"]:
+        if key in config and not isinstance(config.get(key), bool):
+            errors.append(f"{path}: {key} must be a boolean")
 
 
 def _int_config_value(value: Any, name: str, path: Path, errors: list[str], *, minimum: int) -> int | None:

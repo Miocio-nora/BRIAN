@@ -3,6 +3,7 @@ stage: stage5_global_kv
 model_config: ../model/brian_r1b.yaml
 data_config: ../data/r1b_pilot.yaml
 batch_size: 1
+gradient_accumulation_steps: 4
 max_steps: 10000
 eval_interval: 500
 save_interval: 1000

@@ -94,6 +94,9 @@ def summarize_run(
         "model_name": model_stats.get("model_name", ""),
         "route_mode": routing_config.get("mode"),
         "hard_exit_enabled": _hard_exit_enabled(config),
+        "micro_batch_size": _batch_size(config),
+        "gradient_accumulation_steps": _gradient_accumulation_steps(config),
+        "effective_batch_size": _batch_size(config) * _gradient_accumulation_steps(config),
         "parameter_count": parameter_count,
         "physical_layer_count": physical_layers,
         "active_layer_evals_per_token": active_layer_evals,
@@ -203,9 +206,22 @@ def _active_layer_evals(model_stats: dict[str, Any], config: dict[str, Any], rou
 
 def _trained_tokens(config: dict[str, Any], final_train: dict[str, Any], final_eval: dict[str, Any]) -> int:
     step = int(_num(final_train.get("step")) or _num(final_eval.get("step")) or _num(config.get("max_steps")) or 0)
-    batch_size = int(_num(config.get("batch_size")) or 0)
+    batch_size = _batch_size(config)
+    gradient_accumulation_steps = _gradient_accumulation_steps(config)
     sequence_length = _sequence_length(config)
-    return int(step * batch_size * sequence_length)
+    return int(step * batch_size * gradient_accumulation_steps * sequence_length)
+
+
+def _batch_size(config: dict[str, Any]) -> int:
+    value = config.get("batch_size")
+    if value is None:
+        return 0
+    return _int_value(value, "batch_size", minimum=1)
+
+
+def _gradient_accumulation_steps(config: dict[str, Any]) -> int:
+    value = config.get("gradient_accumulation_steps", 1)
+    return _int_value(value, "gradient_accumulation_steps", minimum=1)
 
 
 def _hard_exit_enabled(config: dict[str, Any]) -> bool | None:

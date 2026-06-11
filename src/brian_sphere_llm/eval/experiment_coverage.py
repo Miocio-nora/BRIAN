@@ -172,7 +172,7 @@ def _requirements(profile: str, plan: ExperimentPlan, entries: list[dict[str, An
                     stage="stage0_baseline",
                     mode="baseline",
                     model_flags={"model_name": "baseline_1b"},
-                    train_flags={"activation_checkpointing": True},
+                    train_flags={"activation_checkpointing": True, "gradient_accumulation_steps": 4},
                 ),
                 _req(
                     "D1",
@@ -185,7 +185,7 @@ def _requirements(profile: str, plan: ExperimentPlan, entries: list[dict[str, An
                         "parallel_passing": False,
                         "top_k": 2,
                     },
-                    train_flags={"activation_checkpointing": True},
+                    train_flags={"activation_checkpointing": True, "gradient_accumulation_steps": 4},
                 ),
             ],
         )
@@ -274,7 +274,7 @@ def _requirements(profile: str, plan: ExperimentPlan, entries: list[dict[str, An
                         "target_tokens": 50_000_000_000,
                         "sequence_length": 4096,
                     },
-                    train_flags={"activation_checkpointing": True},
+                    train_flags={"activation_checkpointing": True, "gradient_accumulation_steps": 4},
                 ),
                 _req(
                     "D3",
@@ -292,7 +292,7 @@ def _requirements(profile: str, plan: ExperimentPlan, entries: list[dict[str, An
                         "target_tokens": 50_000_000_000,
                         "sequence_length": 4096,
                     },
-                    train_flags={"activation_checkpointing": True},
+                    train_flags={"activation_checkpointing": True, "gradient_accumulation_steps": 4},
                 ),
             ],
         )
@@ -706,6 +706,7 @@ def _summarize_train_config(train_config_path: Path) -> dict[str, Any]:
         "routing_mode": routing.get("mode"),
         "train": {
             "activation_checkpointing": train_config.get("activation_checkpointing", False),
+            "gradient_accumulation_steps": train_config.get("gradient_accumulation_steps", 1),
         },
         "model_config": str(model_config_path) if model_config_path else None,
         "model_base_config": str(model_base_config_path) if model_base_config_path else None,
