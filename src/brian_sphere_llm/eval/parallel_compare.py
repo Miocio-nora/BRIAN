@@ -122,6 +122,8 @@ def _summary_row(summary: dict[str, Any]) -> dict[str, Any]:
         "active_layer_ratio": summary.get("active_layer_ratio"),
         "estimated_flops_per_token": summary.get("estimated_flops_per_token"),
         "tokens_per_second_mean": summary.get("tokens_per_second_mean"),
+        "train_latency_ms_per_token_mean": summary.get("train_latency_ms_per_token_mean"),
+        "inference_latency_ms_per_token_latest": summary.get("inference_latency_ms_per_token_latest"),
         "routing": {
             "average_route_steps": routing.get("average_route_steps"),
             "active_internal_decision_fraction": routing.get("active_internal_decision_fraction"),

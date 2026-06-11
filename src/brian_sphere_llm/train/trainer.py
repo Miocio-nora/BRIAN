@@ -108,6 +108,9 @@ def train_from_config(config_path: str | Path) -> Path:
             iterator = iter(train_loader)
             batch = next(iterator)
         batch = batch.to(device)
+        if device.type == "cuda":
+            torch.cuda.reset_peak_memory_stats(device)
+        _synchronize_if_cuda(device)
         started = time.time()
         optimizer.zero_grad(set_to_none=True)
         with _autocast_context(device, str(config.get("precision", "fp32"))):
@@ -117,12 +120,17 @@ def train_from_config(config_path: str | Path) -> Path:
         if config.get("grad_clip"):
             torch.nn.utils.clip_grad_norm_(model.parameters(), float(config["grad_clip"]))
         optimizer.step()
+        _synchronize_if_cuda(device)
         elapsed = max(1e-9, time.time() - started)
+        token_count = int(batch.numel())
         row = {
             "step": step,
             "loss": float(loss.detach().cpu()),
-            "tokens_per_second": int(batch.numel() / elapsed),
+            "tokens_per_second": int(token_count / elapsed),
+            "train_step_time_seconds": elapsed,
+            "train_latency_ms_per_token": _latency_ms_per_token(elapsed, token_count),
         }
+        row.update(_cuda_memory_metrics(device))
         if "loss_components" in outputs:
             row.update({key: float(value.cpu()) for key, value in outputs["loss_components"].items()})
         if "routing_summary" in outputs:
@@ -177,19 +185,58 @@ def evaluate(
     model.eval()
     losses: list[float] = []
     summary_accumulator: dict[str, list[float]] = {}
+    token_count = 0
+    batch_count = 0
     max_batches = min(8, len(val_loader))
+    if device.type == "cuda":
+        torch.cuda.reset_peak_memory_stats(device)
+    _synchronize_if_cuda(device)
+    started = time.time()
     for index, batch in enumerate(val_loader):
         if index >= max_batches:
             break
         batch = batch.to(device)
+        token_count += int(batch.numel())
+        batch_count += 1
         outputs = _forward_for_stage(model, batch, config=config, route_mode=route_mode, global_step=global_step)
         losses.append(float(outputs["loss"].detach().cpu()))
         for key, value in outputs.get("routing_summary", {}).items():
             if isinstance(value, (int, float)):
                 summary_accumulator.setdefault(key, []).append(float(value))
+    _synchronize_if_cuda(device)
+    elapsed = max(1e-9, time.time() - started)
     model.train()
     mean_loss = sum(losses) / max(1, len(losses))
-    row: dict[str, Any] = {"validation_loss": mean_loss, "perplexity": math.exp(min(20.0, mean_loss))}
+    row: dict[str, Any] = {
+        "validation_loss": mean_loss,
+        "perplexity": math.exp(min(20.0, mean_loss)),
+        "eval_batch_count": batch_count,
+        "eval_token_count": token_count,
+        "inference_time_seconds": elapsed,
+        "inference_tokens_per_second": token_count / elapsed if token_count else None,
+        "inference_latency_ms_per_token": _latency_ms_per_token(elapsed, token_count),
+    }
+    row.update(_cuda_memory_metrics(device))
     for key, values in summary_accumulator.items():
         row[key] = sum(values) / max(1, len(values))
     return row
+
+
+def _synchronize_if_cuda(device: "torch.device") -> None:
+    if device.type == "cuda":
+        torch.cuda.synchronize(device)
+
+
+def _latency_ms_per_token(elapsed_seconds: float, token_count: int) -> float | None:
+    if token_count <= 0:
+        return None
+    return elapsed_seconds * 1000.0 / token_count
+
+
+def _cuda_memory_metrics(device: "torch.device") -> dict[str, float]:
+    if device.type != "cuda":
+        return {}
+    return {
+        "cuda_memory_allocated_mb": torch.cuda.memory_allocated(device) / (1024.0 * 1024.0),
+        "cuda_max_memory_allocated_mb": torch.cuda.max_memory_allocated(device) / (1024.0 * 1024.0),
+    }

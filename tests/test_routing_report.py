@@ -20,6 +20,8 @@ def test_routing_report_preserves_latest_route_examples_and_trajectories(tmp_pat
                 "average_route_steps": 2.0,
                 "p_output_mean": 0.25,
                 "tokens_per_second": 10,
+                "train_step_time_seconds": 0.2,
+                "train_latency_ms_per_token": 20.0,
                 "top1_block_histogram": {"0": 1, "1": 1, "2": 0},
                 "exit_step_distribution": [0, 1],
                 "first_exit_step_histogram": {"2": 1},
@@ -35,6 +37,8 @@ def test_routing_report_preserves_latest_route_examples_and_trajectories(tmp_pat
                 "average_route_steps": 1.0,
                 "p_output_mean": 0.75,
                 "tokens_per_second": 20,
+                "train_step_time_seconds": 0.1,
+                "train_latency_ms_per_token": 5.0,
                 "top1_block_histogram": {"0": 0, "1": 1, "2": 1},
                 "exit_step_distribution": [1, 1],
                 "first_exit_step_histogram": {"1": 1},
@@ -44,7 +48,19 @@ def test_routing_report_preserves_latest_route_examples_and_trajectories(tmp_pat
             },
         ],
     )
-    _write_jsonl(run_dir / "eval_log.jsonl", [{"step": 2, "validation_loss": 2.0, "perplexity": 7.4}])
+    _write_jsonl(
+        run_dir / "eval_log.jsonl",
+        [
+            {
+                "step": 2,
+                "validation_loss": 2.0,
+                "perplexity": 7.4,
+                "inference_time_seconds": 0.2,
+                "inference_tokens_per_second": 10.0,
+                "inference_latency_ms_per_token": 100.0,
+            }
+        ],
+    )
 
     output = make_routing_report(run_dir)
     report = json.loads(output.read_text(encoding="utf-8"))
@@ -65,6 +81,8 @@ def test_routing_report_preserves_latest_route_examples_and_trajectories(tmp_pat
             "average_route_steps": 2.0,
             "p_output_mean": 0.25,
             "tokens_per_second": 10.0,
+            "train_step_time_seconds": 0.2,
+            "train_latency_ms_per_token": 20.0,
         },
         {
             "step": 2.0,
@@ -73,6 +91,8 @@ def test_routing_report_preserves_latest_route_examples_and_trajectories(tmp_pat
             "average_route_steps": 1.0,
             "p_output_mean": 0.75,
             "tokens_per_second": 20.0,
+            "train_step_time_seconds": 0.1,
+            "train_latency_ms_per_token": 5.0,
         },
     ]
     assert report["cost_quality_curve"]["eval_points"] == [
@@ -80,10 +100,15 @@ def test_routing_report_preserves_latest_route_examples_and_trajectories(tmp_pat
             "step": 2.0,
             "validation_loss": 2.0,
             "perplexity": 7.4,
+            "inference_time_seconds": 0.2,
+            "inference_tokens_per_second": 10.0,
+            "inference_latency_ms_per_token": 100.0,
             "active_block_evals_per_token": 0.25,
             "average_route_steps": 1.0,
             "p_output_mean": 0.75,
             "tokens_per_second": 20.0,
+            "train_step_time_seconds": 0.1,
+            "train_latency_ms_per_token": 5.0,
         }
     ]
     assert report["cost_quality_curve"]["summary"]["active_compute_range"] == 0.25

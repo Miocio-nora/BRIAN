@@ -104,6 +104,17 @@ def summarize_run(
         "train_loss": _num(final_train.get("loss")),
         "tokens_per_second_latest": _num(final_train.get("tokens_per_second")),
         "tokens_per_second_mean": _mean([_num(row.get("tokens_per_second")) for row in train_rows]),
+        "train_step_time_seconds_latest": _num(final_train.get("train_step_time_seconds")),
+        "train_step_time_seconds_mean": _mean([_num(row.get("train_step_time_seconds")) for row in train_rows]),
+        "train_latency_ms_per_token_latest": _num(final_train.get("train_latency_ms_per_token")),
+        "train_latency_ms_per_token_mean": _mean([_num(row.get("train_latency_ms_per_token")) for row in train_rows]),
+        "inference_time_seconds_latest": _num(final_eval.get("inference_time_seconds")),
+        "inference_tokens_per_second_latest": _num(final_eval.get("inference_tokens_per_second")),
+        "inference_latency_ms_per_token_latest": _num(final_eval.get("inference_latency_ms_per_token")),
+        "train_cuda_memory_allocated_mb_latest": _num(final_train.get("cuda_memory_allocated_mb")),
+        "train_cuda_max_memory_allocated_mb_latest": _num(final_train.get("cuda_max_memory_allocated_mb")),
+        "eval_cuda_memory_allocated_mb_latest": _num(final_eval.get("cuda_memory_allocated_mb")),
+        "eval_cuda_max_memory_allocated_mb_latest": _num(final_eval.get("cuda_max_memory_allocated_mb")),
         "routing": {
             "average_route_steps": _num(routing_summary.get("average_route_steps")),
             "active_internal_decision_fraction": _num(routing_summary.get("active_block_evals_per_token")),
@@ -123,6 +134,11 @@ def compare_to_baseline(summary: dict[str, Any], baseline: dict[str, Any]) -> di
     param_ratio = _ratio(summary.get("parameter_count"), baseline.get("parameter_count"))
     loss_ratio = _ratio(summary.get("validation_loss"), baseline.get("validation_loss"))
     tokens_per_second_ratio = _ratio(summary.get("tokens_per_second_mean"), baseline.get("tokens_per_second_mean"))
+    train_latency_ratio = _ratio(summary.get("train_latency_ms_per_token_mean"), baseline.get("train_latency_ms_per_token_mean"))
+    inference_latency_ratio = _ratio(
+        summary.get("inference_latency_ms_per_token_latest"),
+        baseline.get("inference_latency_ms_per_token_latest"),
+    )
     return {
         "baseline_run": baseline["run_dir"],
         "parameter_ratio": param_ratio,
@@ -134,6 +150,8 @@ def compare_to_baseline(summary: dict[str, Any], baseline: dict[str, Any]) -> di
         "validation_loss_delta": _delta(summary.get("validation_loss"), baseline.get("validation_loss")),
         "validation_loss_ratio": loss_ratio,
         "tokens_per_second_ratio": tokens_per_second_ratio,
+        "train_latency_ms_per_token_ratio": train_latency_ratio,
+        "inference_latency_ms_per_token_ratio": inference_latency_ratio,
     }
 
 

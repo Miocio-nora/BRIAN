@@ -24,7 +24,7 @@ Implemented v0.1 pieces:
 - hard `OUT` terminal behavior for Stage 4;
 - minimal canonical Global KV path with sink + sliding window retention for Stage 5;
 - experimental Stage 6 parallel passing with beam scoring, pruning, shared base Global KV, and per-branch delta memory;
-- JSONL train/eval logs, model stats, checkpoint save/resume, and routing report generation;
+- JSONL train/eval logs with throughput, latency, and CUDA memory diagnostics, model stats, checkpoint save/resume, and routing report generation;
 - B200-compatible conda environment using PyTorch CUDA 12.8 wheels.
 
 The immediate priority is **BRIAN-R125 route-core validation**:
@@ -184,7 +184,7 @@ python scripts/eval.py \
   --runs <stage0_baseline_run> <routed_run_1> <routed_run_2>
 ```
 
-This writes `reports/compute_report.json` with parameter ratios, active layer eval ratios, estimated FLOPs/token, estimated GPU-hours, validation loss deltas, and throughput ratios.
+This writes `reports/compute_report.json` with parameter ratios, active layer eval ratios, estimated FLOPs/token, estimated GPU-hours, validation loss deltas, throughput ratios, latency/token, train step time, inference timing, and CUDA memory snapshots when available.
 
 Run the Stage 3 block-position smoke ablations:
 
@@ -423,6 +423,7 @@ Routing behavior is a first-class research output. Every routed model should rep
 - position/location trajectories;
 - active block evaluations per token;
 - cost-quality curve;
+- latency/token, train step time, inference timing, and CUDA memory snapshots;
 - difficulty-step correlation;
 - `OUT` probability by difficulty.
 Global KV reports additionally track global read gate, global cache slots, sink attention mass, and window attention mass.

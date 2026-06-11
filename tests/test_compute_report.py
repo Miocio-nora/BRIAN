@@ -21,17 +21,42 @@ def _write_run(
     routing_summary: dict | None = None,
     validation_loss: float = 10.0,
     tokens_per_second: int = 100,
+    train_latency_ms_per_token: float = 0.5,
+    inference_latency_ms_per_token: float = 0.25,
 ) -> Path:
     run_dir = root / name
     run_dir.mkdir(parents=True)
     (run_dir / "config_resolved.yaml").write_text(yaml.safe_dump(config), encoding="utf-8")
     _write_json(run_dir / "model_stats.json", model_stats)
     (run_dir / "train_log.jsonl").write_text(
-        json.dumps({"step": 2, "loss": validation_loss + 1.0, "tokens_per_second": tokens_per_second}) + "\n",
+        json.dumps(
+            {
+                "step": 2,
+                "loss": validation_loss + 1.0,
+                "tokens_per_second": tokens_per_second,
+                "train_step_time_seconds": 0.1,
+                "train_latency_ms_per_token": train_latency_ms_per_token,
+                "cuda_memory_allocated_mb": 12.0,
+                "cuda_max_memory_allocated_mb": 16.0,
+            }
+        )
+        + "\n",
         encoding="utf-8",
     )
     (run_dir / "eval_log.jsonl").write_text(
-        json.dumps({"step": 2, "validation_loss": validation_loss, "perplexity": 123.0}) + "\n",
+        json.dumps(
+            {
+                "step": 2,
+                "validation_loss": validation_loss,
+                "perplexity": 123.0,
+                "inference_time_seconds": 0.2,
+                "inference_tokens_per_second": 80.0,
+                "inference_latency_ms_per_token": inference_latency_ms_per_token,
+                "cuda_memory_allocated_mb": 10.0,
+                "cuda_max_memory_allocated_mb": 14.0,
+            }
+        )
+        + "\n",
         encoding="utf-8",
     )
     _write_json(run_dir / "routing_report.json", {"summary": routing_summary or {}, "latest_eval": {}})
@@ -76,6 +101,10 @@ def test_summarize_run_estimates_active_route_compute(tmp_path: Path) -> None:
     assert summary["trained_tokens_estimate"] == 32
     assert summary["estimated_flops_per_token"] == pytest.approx(1500.0)
     assert summary["routing"]["parallel_score_margin_mean"] == 0.25
+    assert summary["train_step_time_seconds_latest"] == 0.1
+    assert summary["train_latency_ms_per_token_mean"] == 0.5
+    assert summary["inference_latency_ms_per_token_latest"] == 0.25
+    assert summary["train_cuda_max_memory_allocated_mb_latest"] == 16.0
 
 
 def test_make_compute_report_compares_to_baseline(tmp_path: Path) -> None:
@@ -90,6 +119,8 @@ def test_make_compute_report_compares_to_baseline(tmp_path: Path) -> None:
         model_stats={"model_name": "baseline", "parameter_count": 100, "layers": 4},
         validation_loss=10.0,
         tokens_per_second=200,
+        train_latency_ms_per_token=0.5,
+        inference_latency_ms_per_token=0.25,
     )
     routed = _write_run(
         tmp_path,
@@ -109,6 +140,8 @@ def test_make_compute_report_compares_to_baseline(tmp_path: Path) -> None:
         routing_summary={"average_route_steps": 3.0, "active_block_evals_per_token": 2 / 3},
         validation_loss=10.2,
         tokens_per_second=150,
+        train_latency_ms_per_token=0.75,
+        inference_latency_ms_per_token=0.50,
     )
     output = tmp_path / "compute.json"
     report_path = make_compute_report([baseline, routed], baseline_run=baseline, output_path=output)
@@ -118,3 +151,5 @@ def test_make_compute_report_compares_to_baseline(tmp_path: Path) -> None:
     assert comparison["same_parameter_count_view"] is True
     assert comparison["active_layer_eval_ratio"] == pytest.approx(1.0)
     assert comparison["validation_loss_delta"] == pytest.approx(0.2)
+    assert comparison["train_latency_ms_per_token_ratio"] == pytest.approx(1.5)
+    assert comparison["inference_latency_ms_per_token_ratio"] == pytest.approx(2.0)

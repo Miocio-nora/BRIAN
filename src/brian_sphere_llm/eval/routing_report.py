@@ -152,6 +152,9 @@ def _eval_curve_point(eval_row: dict[str, Any], train_row: dict[str, Any] | None
         "step": _num(eval_row.get("step")) or _num(train_row.get("step")),
         "validation_loss": validation_loss,
         "perplexity": _num(eval_row.get("perplexity")),
+        "inference_time_seconds": _num(eval_row.get("inference_time_seconds")),
+        "inference_tokens_per_second": _num(eval_row.get("inference_tokens_per_second")),
+        "inference_latency_ms_per_token": _num(eval_row.get("inference_latency_ms_per_token")),
         **cost,
     }
 
@@ -162,6 +165,10 @@ def _cost_metrics(row: dict[str, Any]) -> dict[str, float]:
         "average_route_steps": _num(row.get("average_route_steps")),
         "p_output_mean": _num(row.get("p_output_mean")),
         "tokens_per_second": _num(row.get("tokens_per_second")),
+        "train_step_time_seconds": _num(row.get("train_step_time_seconds")),
+        "train_latency_ms_per_token": _num(row.get("train_latency_ms_per_token")),
+        "cuda_memory_allocated_mb": _num(row.get("cuda_memory_allocated_mb")),
+        "cuda_max_memory_allocated_mb": _num(row.get("cuda_max_memory_allocated_mb")),
     }
     return {key: value for key, value in metrics.items() if value is not None}
 
