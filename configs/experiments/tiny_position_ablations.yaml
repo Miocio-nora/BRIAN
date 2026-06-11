@@ -1,0 +1,20 @@
+experiment_name: tiny_position_ablations
+description: Fast Stage 3 block-position ablation smoke package.
+baseline_train_config: configs/train/stage0_tiny_debug.yaml
+ablations:
+  - id: P0
+    name: no_position_state
+    train_config: configs/train/stage3_no_position_tiny_debug.yaml
+    purpose: Verify zero-position Stage 3 smoke execution.
+  - id: P2
+    name: open_arc_position_initialization
+    train_config: configs/train/stage3_tiny_debug.yaml
+    purpose: Main tiny position path.
+  - id: P3
+    name: circular_position_initialization
+    train_config: configs/train/stage3_position_circular_tiny_debug.yaml
+    purpose: Compare circular position initialization in smoke.
+  - id: P4
+    name: position_only_to_router
+    train_config: configs/train/stage3_position_router_only_tiny_debug.yaml
+    purpose: Verify router-only position smoke execution.

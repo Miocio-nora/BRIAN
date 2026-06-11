@@ -125,6 +125,23 @@ python scripts/train.py --config configs/train/stage3_position_random_tiny_debug
 
 The formal BRIAN-R125 position ablation manifest is `configs/experiments/route_core_position_ablations.yaml`.
 
+Resolve an experiment manifest without training:
+
+```bash
+python scripts/run_experiment.py \
+  --config configs/experiments/tiny_position_ablations.yaml \
+  --dry-run
+```
+
+Run a bounded tiny experiment package:
+
+```bash
+python scripts/run_experiment.py \
+  --config configs/experiments/tiny_position_ablations.yaml \
+  --include-baseline \
+  --limit 2
+```
+
 Run tests:
 
 ```bash
