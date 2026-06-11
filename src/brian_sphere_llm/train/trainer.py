@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from brian_sphere_llm.data.dataloader import build_dataloader
+from brian_sphere_llm.data.manifest import sha256_text
 from brian_sphere_llm.eval.routing_report import make_routing_report
 from brian_sphere_llm.train.checkpoint import load_checkpoint, save_checkpoint
 from brian_sphere_llm.train.stage_runner import build_model_from_config, train_mode_for_stage
@@ -738,8 +739,13 @@ def _data_manifest_ref(data_config: dict[str, Any], tokenized_dir: Path) -> dict
         "tokenized_dir": str(tokenized_dir),
         "stats_path": str(stats_path),
         "sequence_length": data_config.get("sequence_length"),
+        "path_exists": manifest_path.exists(),
+        "tokenized_dir_exists": tokenized_dir.exists(),
+        "stats_path_exists": stats_path.exists(),
+        "tokenized_artifacts_present": _tokenized_artifacts_present(tokenized_dir),
     }
     if not stats_path.exists():
+        ref["sha256_manifest_verified"] = False
         return ref
     with stats_path.open("r", encoding="utf-8") as handle:
         stats = json.load(handle)
@@ -756,6 +762,9 @@ def _data_manifest_ref(data_config: dict[str, Any], tokenized_dir: Path) -> dict
     ]:
         if key in stats:
             ref[key] = stats[key]
+    ref["sha256_manifest_verified"] = _manifest_hash_verified(manifest_path, stats)
+    ref["stats_recipe_name_matches_config"] = stats.get("recipe_name") == data_config.get("recipe_name")
+    ref["stats_sequence_length_matches_config"] = stats.get("sequence_length") == data_config.get("sequence_length")
     tokenizer = stats.get("tokenizer")
     if isinstance(tokenizer, dict):
         ref["tokenizer"] = {
@@ -764,6 +773,18 @@ def _data_manifest_ref(data_config: dict[str, Any], tokenized_dir: Path) -> dict
             if key in tokenizer
         }
     return ref
+
+
+def _tokenized_artifacts_present(tokenized_dir: Path) -> bool:
+    return all((tokenized_dir / name).exists() for name in ["train.bin", "train.idx", "val.bin", "val.idx"])
+
+
+def _manifest_hash_verified(manifest_path: Path, stats: Mapping[str, Any]) -> bool:
+    expected = stats.get("sha256_manifest")
+    if not isinstance(expected, str) or not expected or not manifest_path.exists():
+        return False
+    actual = sha256_text(manifest_path.read_text(encoding="utf-8"))
+    return actual == expected
 
 
 def _model_stats(model: Any) -> dict[str, Any]:

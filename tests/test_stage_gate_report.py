@@ -136,12 +136,19 @@ def _data_manifest_ref() -> dict:
     return {
         "recipe_name": "unit_data",
         "path": "data/manifests/unit_data.jsonl",
+        "path_exists": True,
         "tokenized_dir": "data/tokenized/unit_data",
+        "tokenized_dir_exists": True,
         "stats_path": "data/tokenized/unit_data/stats.json",
+        "stats_path_exists": True,
+        "tokenized_artifacts_present": True,
         "sequence_length": 8,
         "num_tokens_train": 24,
         "num_tokens_val": 8,
         "sha256_manifest": "abc123",
+        "sha256_manifest_verified": True,
+        "stats_recipe_name_matches_config": True,
+        "stats_sequence_length_matches_config": True,
         "source_mixture_expected": {"unit": 1.0},
         "source_mixture_realized": {"unit": 32},
         "source_mixture_realized_share": {"unit": 1.0},
@@ -504,7 +511,14 @@ def test_stage0_gate_requires_valid_data_manifest_ref(tmp_path: Path) -> None:
     assert gate["checks"]["data_manifest_ref_present"] is True
     assert gate["checks"]["data_manifest_ref_valid"] is False
     assert gate["data_manifest_ref_checks"]["path_present"] is False
+    assert gate["data_manifest_ref_checks"]["path_exists"] is False
+    assert gate["data_manifest_ref_checks"]["tokenized_dir_exists"] is False
+    assert gate["data_manifest_ref_checks"]["stats_path_exists"] is False
+    assert gate["data_manifest_ref_checks"]["tokenized_artifacts_present"] is False
     assert gate["data_manifest_ref_checks"]["sha256_manifest_present"] is False
+    assert gate["data_manifest_ref_checks"]["sha256_manifest_verified"] is False
+    assert gate["data_manifest_ref_checks"]["stats_recipe_name_matches_config"] is False
+    assert gate["data_manifest_ref_checks"]["stats_sequence_length_matches_config"] is False
     assert gate["data_manifest_ref_checks"]["source_mixture_present"] is False
     assert gate["data_manifest_ref_checks"]["source_mixture_realized_share_present"] is False
     assert gate["data_manifest_ref_checks"]["source_mixture_expected_tags_realized"] is False

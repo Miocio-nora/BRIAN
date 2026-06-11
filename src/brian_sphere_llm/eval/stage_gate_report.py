@@ -677,13 +677,20 @@ def _data_manifest_ref_checks(ref: Any) -> dict[str, bool]:
         ref = {}
     return {
         "path_present": _nonempty_string(ref.get("path")),
+        "path_exists": ref.get("path_exists") is True,
         "tokenized_dir_present": _nonempty_string(ref.get("tokenized_dir")),
+        "tokenized_dir_exists": ref.get("tokenized_dir_exists") is True,
         "stats_path_present": _nonempty_string(ref.get("stats_path")),
+        "stats_path_exists": ref.get("stats_path_exists") is True,
+        "tokenized_artifacts_present": ref.get("tokenized_artifacts_present") is True,
         "recipe_name_present": _nonempty_string(ref.get("recipe_name")),
         "sequence_length_positive": _positive_number(ref.get("sequence_length")),
         "num_tokens_train_positive": _positive_number(ref.get("num_tokens_train")),
         "num_tokens_val_positive": _positive_number(ref.get("num_tokens_val")),
         "sha256_manifest_present": _nonempty_string(ref.get("sha256_manifest")),
+        "sha256_manifest_verified": ref.get("sha256_manifest_verified") is True,
+        "stats_recipe_name_matches_config": ref.get("stats_recipe_name_matches_config") is True,
+        "stats_sequence_length_matches_config": ref.get("stats_sequence_length_matches_config") is True,
         "source_mixture_present": isinstance(ref.get("source_mixture_realized"), dict)
         and bool(ref.get("source_mixture_realized")),
         "source_mixture_expected_present": _positive_numeric_mapping(ref.get("source_mixture_expected")),

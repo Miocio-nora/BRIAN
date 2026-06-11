@@ -6,6 +6,7 @@ import pytest
 torch = pytest.importorskip("torch")
 
 from brian_sphere_llm.data.pack import write_index, write_token_bin
+from brian_sphere_llm.data.manifest import sha256_text
 from brian_sphere_llm.model.baseline import BaselineConfig, BaselineLM
 from brian_sphere_llm.train.trainer import (
     _bool_config,
@@ -385,6 +386,8 @@ def test_train_from_config_writes_routing_report_on_checkpoint(tmp_path: Path) -
     write_index(tokenized / "train.idx", sequence_length=4, num_sequences=len(sequences))
     write_token_bin(sequences, tokenized / "val.bin")
     write_index(tokenized / "val.idx", sequence_length=4, num_sequences=len(sequences))
+    manifest_text = json.dumps({"sample_id": "unit"}) + "\n"
+    (tmp_path / "manifest.jsonl").write_text(manifest_text, encoding="utf-8")
     (tokenized / "stats.json").write_text(
         json.dumps(
             {
@@ -398,7 +401,7 @@ def test_train_from_config_writes_routing_report_on_checkpoint(tmp_path: Path) -
                 "source_mixture_expected": {"unit": 1.0},
                 "source_mixture_realized": {"unit": 32},
                 "source_mixture_realized_share": {"unit": 1.0},
-                "sha256_manifest": "abc123",
+                "sha256_manifest": sha256_text(manifest_text),
                 "tokenizer": {
                     "name": "unit-tokenizer",
                     "revision": "local",
@@ -473,7 +476,14 @@ def test_train_from_config_writes_routing_report_on_checkpoint(tmp_path: Path) -
     assert model_stats["parameter_count"] > 0
     manifest_ref = json.loads((run_dir / "data_manifest_ref.json").read_text(encoding="utf-8"))
     assert manifest_ref["path"] == str(tmp_path / "manifest.jsonl")
-    assert manifest_ref["sha256_manifest"] == "abc123"
+    assert manifest_ref["path_exists"] is True
+    assert manifest_ref["tokenized_dir_exists"] is True
+    assert manifest_ref["stats_path_exists"] is True
+    assert manifest_ref["tokenized_artifacts_present"] is True
+    assert manifest_ref["sha256_manifest"] == sha256_text(manifest_text)
+    assert manifest_ref["sha256_manifest_verified"] is True
+    assert manifest_ref["stats_recipe_name_matches_config"] is True
+    assert manifest_ref["stats_sequence_length_matches_config"] is True
     assert manifest_ref["source_mixture_expected"] == {"unit": 1.0}
     assert manifest_ref["source_mixture_realized"] == {"unit": 32}
     assert manifest_ref["source_mixture_realized_share"] == {"unit": 1.0}
