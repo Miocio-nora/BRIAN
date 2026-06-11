@@ -260,6 +260,24 @@ def test_experiment_coverage_fails_missing_required_entry(tmp_path: Path) -> Non
     assert _requirement(report, "A7")["checks"]["entry_present"] is False
 
 
+def test_experiment_coverage_fails_missing_baseline_train_config(tmp_path: Path) -> None:
+    manifest = tmp_path / "missing_baseline.yaml"
+    source = load_config("configs/experiments/route_core_r125_package.yaml")
+    source.pop("baseline_train_config")
+    manifest.write_text(yaml.safe_dump(source), encoding="utf-8")
+
+    output = make_experiment_coverage_report(
+        manifest,
+        output_path=tmp_path / "coverage.json",
+        profile="package_a",
+    )
+    report = json.loads(output.read_text(encoding="utf-8"))
+
+    assert report["overall_status"] == "fail"
+    assert report["checks"]["baseline_train_config_present"] is False
+    assert all(requirement["status"] == "pass" for requirement in report["requirements"])
+
+
 def test_global_kv_coverage_requires_dedicated_window_sweep_entries(tmp_path: Path) -> None:
     manifest = tmp_path / "missing_c5.yaml"
     source = load_config("configs/experiments/route_core_global_kv.yaml")

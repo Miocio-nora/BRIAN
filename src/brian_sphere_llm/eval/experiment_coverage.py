@@ -692,6 +692,7 @@ def _overall_status(checks: dict[str, bool], requirements: list[dict[str, Any]])
         "data_configs_exist",
         "data_configs_load",
         "data_configs_consistent",
+        "baseline_train_config_present",
     ]:
         if checks.get(critical_check) is False:
             return "fail"
