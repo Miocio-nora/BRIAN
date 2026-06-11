@@ -118,6 +118,7 @@ def _summarize_run(run_dir: Path) -> dict[str, Any]:
     scheduled_routing_report = _read_json_if_exists(run_dir / "scheduled_routing_report.json")
     difficulty_report = _read_json_if_exists(run_dir / "difficulty_step_report.json")
     determinism_report = _read_json_if_exists(run_dir / "eval_determinism_report.json")
+    data_manifest_ref = _read_json_if_exists(run_dir / "data_manifest_ref.json")
     global_kv_retention_report = _read_json_if_exists(run_dir / "global_kv_retention_report.json")
     parallel_passing_report = _read_json_if_exists(run_dir / "parallel_passing_report.json")
     eval_rows = _read_jsonl(run_dir / "eval_log.jsonl")
@@ -139,6 +140,9 @@ def _summarize_run(run_dir: Path) -> dict[str, Any]:
         "has_train_log": bool(train_rows),
         "has_resume_event": bool(resume_rows),
         "latest_resume_event": resume_rows[-1] if resume_rows else {},
+        "data_manifest_ref": data_manifest_ref,
+        "data_manifest_ref_present": bool(data_manifest_ref),
+        "data_manifest_ref_checks": _data_manifest_ref_checks(data_manifest_ref),
         "validation_loss": _num(final_eval.get("validation_loss")),
         "perplexity": _num(final_eval.get("perplexity")),
         "train_loss": _num(final_train.get("loss")),
@@ -205,6 +209,7 @@ def _gate_stage0(stage0: dict[str, Any] | None) -> dict[str, Any]:
         "eval_determinism_report_present": bool(stage0 and stage0.get("eval_determinism_report_present")),
         "eval_deterministic": bool(stage0 and stage0.get("eval_determinism_status") == "pass"),
         "eval_determinism_checks_passed": _eval_determinism_checks_passed(determinism_checks),
+        **_data_manifest_gate_checks(stage0),
     }
     return _gate(
         "Stage 0 baseline trains, checkpoints, and evaluates deterministically",
@@ -214,6 +219,7 @@ def _gate_stage0(stage0: dict[str, Any] | None) -> dict[str, Any]:
             "eval_determinism_checks": determinism_checks,
             "latest_resume_event": stage0.get("latest_resume_event") if stage0 else {},
             "resume_event_checks": resume_event_checks,
+            **_data_manifest_gate_extras(stage0),
             "baseline_difficulty_by_bin": stage0.get("baseline_difficulty_by_bin") if stage0 else {},
         },
     )
@@ -230,6 +236,7 @@ def _gate_stage1(stage1: dict[str, Any] | None, stage0: dict[str, Any] | None, t
         "fixed_route_stability_report_present": bool(stage1 and stage1.get("fixed_route_stability_report_present")),
         "fixed_route_stability_passed": bool(stage1 and stage1.get("fixed_route_stability_status") == "pass"),
         "checkpoint_present": bool(stage1 and stage1["has_checkpoint_latest"]),
+        **_data_manifest_gate_checks(stage1),
     }
     return _gate(
         "Stage 1 fixed route wrapper matches baseline and router imitates fixed path",
@@ -238,6 +245,7 @@ def _gate_stage1(stage1: dict[str, Any] | None, stage0: dict[str, Any] | None, t
             "loss_ratio": ratio,
             "fixed_route_stability_status": stage1.get("fixed_route_stability_status") if stage1 else None,
             "fixed_route_stability_checks": stage1.get("fixed_route_stability_checks") if stage1 else {},
+            **_data_manifest_gate_extras(stage1),
         },
     )
 
@@ -251,6 +259,7 @@ def _gate_stage2(stage2: dict[str, Any] | None, thresholds: dict[str, float]) ->
         "pseudo_route_curriculum_report_present": bool(stage2 and stage2.get("pseudo_route_curriculum_report_present")),
         "pseudo_route_curriculum_passed": bool(stage2 and stage2.get("pseudo_route_curriculum_status") == "pass"),
         "checkpoint_present": bool(stage2 and stage2["has_checkpoint_latest"]),
+        **_data_manifest_gate_checks(stage2),
     }
     return _gate(
         "Stage 2 mixed pseudo routing is stable and non-degenerate",
@@ -259,6 +268,7 @@ def _gate_stage2(stage2: dict[str, Any] | None, thresholds: dict[str, float]) ->
             "pseudo_route_curriculum_status": stage2.get("pseudo_route_curriculum_status") if stage2 else None,
             "pseudo_route_curriculum_checks": stage2.get("pseudo_route_curriculum_checks") if stage2 else {},
             "pseudo_route_curriculum_by_difficulty": stage2.get("pseudo_route_curriculum_by_difficulty") if stage2 else {},
+            **_data_manifest_gate_extras(stage2),
         },
     )
 
@@ -279,6 +289,7 @@ def _gate_stage3(stage3: dict[str, Any] | None, stage1: dict[str, Any] | None, t
         "scheduled_routing_report_present": bool(stage3 and stage3.get("scheduled_routing_report_present")),
         "scheduled_routing_passed": bool(stage3 and stage3.get("scheduled_routing_status") == "pass"),
         "checkpoint_present": bool(stage3 and stage3["has_checkpoint_latest"]),
+        **_data_manifest_gate_checks(stage3),
     }
     return _gate(
         "Stage 3 scheduled free routing remains stable",
@@ -288,6 +299,7 @@ def _gate_stage3(stage3: dict[str, Any] | None, stage1: dict[str, Any] | None, t
             "scheduled_routing_status": stage3.get("scheduled_routing_status") if stage3 else None,
             "scheduled_routing_checks": stage3.get("scheduled_routing_checks") if stage3 else {},
             "scheduled_routing_logged_values": stage3.get("scheduled_routing_logged_values") if stage3 else [],
+            **_data_manifest_gate_extras(stage3),
         },
     )
 
@@ -319,6 +331,7 @@ def _gate_stage4(
         and bool(out_checks.get("active_compute_non_decreasing_with_difficulty", False)),
         "easy_output_probability_not_below_hard": bool(out_checks.get("easy_output_probability_at_least_hard", False)),
         "checkpoint_present": bool(stage4 and stage4["has_checkpoint_latest"]),
+        **_data_manifest_gate_checks(stage4),
     }
     return _gate(
         "Stage 4 hard OUT produces controllable exits and difficulty-conditioned compute",
@@ -331,6 +344,7 @@ def _gate_stage4(
             "out_by_difficulty_status": out_by_difficulty_report.get("overall_status") if out_by_difficulty_report else None,
             "out_by_difficulty_checks": out_checks,
             "out_by_difficulty_deltas": out_by_difficulty_report.get("deltas", {}) if out_by_difficulty_report else {},
+            **_data_manifest_gate_extras(stage4),
         },
     )
 
@@ -368,6 +382,7 @@ def _gate_stage5(
         ),
         "long_context_global_kv_benefit_proxy": any_long_context_pass,
         "checkpoint_present": bool(stage5 and stage5["has_checkpoint_latest"]),
+        **_data_manifest_gate_checks(stage5),
     }
     return _gate(
         "Stage 5 Global KV retention is active and has long-context comparison evidence",
@@ -381,6 +396,7 @@ def _gate_stage5(
             "long_context_compare_candidate_count": long_context_compare_report.get("candidate_count")
             if long_context_compare_report
             else None,
+            **_data_manifest_gate_extras(stage5),
         },
     )
 
@@ -419,6 +435,7 @@ def _gate_stage6(
         ),
         "parallel_branch_benefit_proxy": any_parallel_pass,
         "checkpoint_present": bool(stage6 and stage6["has_checkpoint_latest"]),
+        **_data_manifest_gate_checks(stage6),
     }
     return _gate(
         "Stage 6 parallel passing is bounded and has comparison evidence",
@@ -432,6 +449,7 @@ def _gate_stage6(
             "parallel_compare_candidate_count": parallel_compare_report.get("candidate_count")
             if parallel_compare_report
             else None,
+            **_data_manifest_gate_extras(stage6),
         },
     )
 
@@ -484,6 +502,38 @@ def _resume_event_checks(event: Any) -> dict[str, bool]:
         and target_max_steps is not None
         and target_max_steps > resumed_from_step,
         "optimizer_state_loaded": event.get("optimizer_state_loaded") is True,
+    }
+
+
+def _data_manifest_ref_checks(ref: Any) -> dict[str, bool]:
+    if not isinstance(ref, dict):
+        ref = {}
+    return {
+        "path_present": _nonempty_string(ref.get("path")),
+        "tokenized_dir_present": _nonempty_string(ref.get("tokenized_dir")),
+        "stats_path_present": _nonempty_string(ref.get("stats_path")),
+        "recipe_name_present": _nonempty_string(ref.get("recipe_name")),
+        "sequence_length_positive": _positive_number(ref.get("sequence_length")),
+        "num_tokens_train_positive": _positive_number(ref.get("num_tokens_train")),
+        "num_tokens_val_positive": _positive_number(ref.get("num_tokens_val")),
+        "sha256_manifest_present": _nonempty_string(ref.get("sha256_manifest")),
+        "source_mixture_present": isinstance(ref.get("source_mixture_realized"), dict)
+        and bool(ref.get("source_mixture_realized")),
+    }
+
+
+def _data_manifest_gate_checks(summary: dict[str, Any] | None) -> dict[str, bool]:
+    checks = summary.get("data_manifest_ref_checks", {}) if summary else {}
+    return {
+        "data_manifest_ref_present": bool(summary and summary.get("data_manifest_ref_present")),
+        "data_manifest_ref_valid": isinstance(checks, dict) and all(checks.values()),
+    }
+
+
+def _data_manifest_gate_extras(summary: dict[str, Any] | None) -> dict[str, Any]:
+    return {
+        "data_manifest_ref": summary.get("data_manifest_ref") if summary else {},
+        "data_manifest_ref_checks": summary.get("data_manifest_ref_checks") if summary else {},
     }
 
 
@@ -558,6 +608,17 @@ def _int_like(value: Any) -> int | None:
     if isinstance(value, float) and math.isfinite(value) and value.is_integer():
         return int(value)
     return None
+
+
+def _positive_number(value: Any) -> bool:
+    if isinstance(value, bool):
+        return False
+    numeric = _num(value)
+    return numeric is not None and math.isfinite(numeric) and numeric > 0
+
+
+def _nonempty_string(value: Any) -> bool:
+    return isinstance(value, str) and bool(value.strip())
 
 
 def _num(value: Any) -> float | None:

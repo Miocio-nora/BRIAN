@@ -24,6 +24,8 @@ def _write_run(
     difficulty_report: dict | None = None,
     global_kv_retention_report: dict | None = None,
     parallel_passing_report: dict | None = None,
+    data_manifest_ref: dict | None = None,
+    write_data_manifest_ref: bool = True,
 ) -> Path:
     run_dir = root / name
     run_dir.mkdir(parents=True)
@@ -32,6 +34,9 @@ def _write_run(
     (run_dir / "checkpoint_best").mkdir()
     (run_dir / "checkpoint_best" / "state.pt").write_bytes(b"stub")
     (run_dir / "model_stats.json").write_text(json.dumps({"model_name": name}), encoding="utf-8")
+    if write_data_manifest_ref:
+        manifest_ref = _data_manifest_ref() if data_manifest_ref is None else data_manifest_ref
+        (run_dir / "data_manifest_ref.json").write_text(json.dumps(manifest_ref), encoding="utf-8")
     (run_dir / "config_resolved.yaml").write_text(yaml.safe_dump({"stage": stage}), encoding="utf-8")
     (run_dir / "eval_log.jsonl").write_text(json.dumps({"validation_loss": val_loss, "perplexity": 1.0}) + "\n", encoding="utf-8")
     (run_dir / "train_log.jsonl").write_text(json.dumps(train_row | {"loss": val_loss}) + "\n", encoding="utf-8")
@@ -105,6 +110,20 @@ def _baseline_difficulty_report() -> dict:
             "medium": {"sample_count": 1, "mean_baseline_cross_entropy": 2.0},
             "hard": {"sample_count": 1, "mean_baseline_cross_entropy": 3.0},
         },
+    }
+
+
+def _data_manifest_ref() -> dict:
+    return {
+        "recipe_name": "unit_data",
+        "path": "data/manifests/unit_data.jsonl",
+        "tokenized_dir": "data/tokenized/unit_data",
+        "stats_path": "data/tokenized/unit_data/stats.json",
+        "sequence_length": 8,
+        "num_tokens_train": 24,
+        "num_tokens_val": 8,
+        "sha256_manifest": "abc123",
+        "source_mixture_realized": {"unit": 32},
     }
 
 
@@ -283,6 +302,7 @@ def test_stage_gate_report_writes_json(tmp_path: Path) -> None:
     assert report["gates"]["stage0_to_1"]["checks"]["checkpoint_resume_event_valid"] is True
     assert report["gates"]["stage0_to_1"]["checks"]["checkpoint_best_artifact"] is True
     assert report["gates"]["stage0_to_1"]["checks"]["eval_determinism_checks_passed"] is True
+    assert report["gates"]["stage0_to_1"]["checks"]["data_manifest_ref_valid"] is True
     assert report["gates"]["stage0_to_1"]["checks"]["baseline_difficulty_bins_present"] is True
     assert report["gates"]["stage1_to_2"]["status"] == "pass"
     assert report["gates"]["stage1_to_2"]["checks"]["fixed_route_stability_passed"] is True
@@ -349,6 +369,44 @@ def test_stage0_gate_requires_determinism_key_checks(tmp_path: Path) -> None:
     assert gate["status"] == "warn"
     assert gate["checks"]["eval_deterministic"] is True
     assert gate["checks"]["eval_determinism_checks_passed"] is False
+
+
+def test_stage0_gate_requires_valid_data_manifest_ref(tmp_path: Path) -> None:
+    baseline = _write_run(
+        tmp_path,
+        "baseline",
+        stage="stage0_baseline",
+        val_loss=10.0,
+        train_row={},
+        determinism_status="pass",
+        resume_event={
+            "checkpoint": "checkpoint_latest",
+            "resumed_from_step": 1,
+            "target_max_steps": 2,
+            "optimizer_state_loaded": True,
+        },
+        baseline_difficulty_report=_baseline_difficulty_report(),
+        data_manifest_ref={
+            "recipe_name": "unit_data",
+            "path": "",
+            "tokenized_dir": "data/tokenized/unit_data",
+            "stats_path": "data/tokenized/unit_data/stats.json",
+            "sequence_length": 8,
+            "num_tokens_train": 24,
+            "num_tokens_val": 8,
+            "source_mixture_realized": {},
+        },
+    )
+
+    report_path = make_stage_gate_report([baseline], output_path=tmp_path / "gate.json")
+    gate = json.loads(report_path.read_text(encoding="utf-8"))["gates"]["stage0_to_1"]
+
+    assert gate["status"] == "warn"
+    assert gate["checks"]["data_manifest_ref_present"] is True
+    assert gate["checks"]["data_manifest_ref_valid"] is False
+    assert gate["data_manifest_ref_checks"]["path_present"] is False
+    assert gate["data_manifest_ref_checks"]["sha256_manifest_present"] is False
+    assert gate["data_manifest_ref_checks"]["source_mixture_present"] is False
 
 
 def test_stage_gate_report_uses_cost_control_report(tmp_path: Path) -> None:
