@@ -39,6 +39,10 @@ def make_routing_report(run_dir: str | Path) -> Path:
     aggregates: dict[str, list[float]] = defaultdict(list)
     latest_histogram: dict[str, Any] | None = None
     latest_exit_distribution: list[int] | None = None
+    latest_first_exit_histogram: dict[str, Any] | None = None
+    latest_route_path_examples: list[Any] | None = None
+    latest_position_norm_trajectory: list[Any] | None = None
+    latest_location_distance_trajectory: list[Any] | None = None
     for row in rows:
         for key in ROUTING_KEYS:
             if isinstance(row.get(key), (int, float)):
@@ -47,11 +51,23 @@ def make_routing_report(run_dir: str | Path) -> Path:
             latest_histogram = row["top1_block_histogram"]
         if isinstance(row.get("exit_step_distribution"), list):
             latest_exit_distribution = row["exit_step_distribution"]
+        if isinstance(row.get("first_exit_step_histogram"), dict):
+            latest_first_exit_histogram = row["first_exit_step_histogram"]
+        if isinstance(row.get("route_path_examples"), list):
+            latest_route_path_examples = row["route_path_examples"]
+        if isinstance(row.get("position_norm_trajectory"), list):
+            latest_position_norm_trajectory = row["position_norm_trajectory"]
+        if isinstance(row.get("location_distance_trajectory"), list):
+            latest_location_distance_trajectory = row["location_distance_trajectory"]
     report = {
         "run_dir": str(run_dir),
         "summary": {key: sum(values) / max(1, len(values)) for key, values in aggregates.items()},
         "latest_block_histogram": latest_histogram or {},
         "latest_exit_step_distribution": latest_exit_distribution or [],
+        "latest_first_exit_step_histogram": latest_first_exit_histogram or {},
+        "latest_route_path_examples": latest_route_path_examples or [],
+        "latest_position_norm_trajectory": latest_position_norm_trajectory or [],
+        "latest_location_distance_trajectory": latest_location_distance_trajectory or [],
         "latest_eval": eval_rows[-1] if eval_rows else {},
     }
     output = run_dir / "routing_report.json"

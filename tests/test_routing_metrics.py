@@ -34,3 +34,34 @@ def test_summarize_routes_reports_load_entropy_and_path_diversity() -> None:
     assert summary["block_load_entropy_normalized"] > 0.0
     assert summary["route_path_count"] == 2
     assert summary["route_path_diversity"] == pytest.approx(2 / 3)
+
+
+def test_summarize_routes_reports_path_examples_and_position_trajectories() -> None:
+    route_info = {
+        "route_probs": [
+            torch.tensor([[0.9, 0.05, 0.05], [0.05, 0.9, 0.05]]),
+            torch.tensor([[0.05, 0.9, 0.05], [0.05, 0.05, 0.9]]),
+        ],
+        "selected_actions": [
+            torch.tensor([0, 1]),
+            torch.tensor([1, 2]),
+        ],
+        "position_norms": [
+            torch.tensor(1.0),
+            torch.tensor(0.5),
+        ],
+        "location_distance": [
+            torch.tensor(0.25),
+            torch.tensor(0.75),
+        ],
+    }
+    summary = summarize_routes(route_info, num_internal_blocks=2)
+
+    assert summary["route_path_examples"] == [
+        {"sample_index": 0, "actions": [0, 1]},
+        {"sample_index": 1, "actions": [1, 2]},
+    ]
+    assert summary["position_norm_trajectory"] == [1.0, 0.5]
+    assert summary["position_norm_mean"] == pytest.approx(0.75)
+    assert summary["location_distance_trajectory"] == [0.25, 0.75]
+    assert summary["location_distance_mean"] == pytest.approx(0.5)

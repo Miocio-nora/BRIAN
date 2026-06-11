@@ -56,6 +56,7 @@ def summarize_routes(route_info: dict[str, Any], num_internal_blocks: int) -> di
         paths = [tuple(int(value) for value in stacked[:, sample_index].tolist()) for sample_index in range(stacked.size(1))]
         summary["route_path_count"] = len(set(paths))
         summary["route_path_diversity"] = len(set(paths)) / max(1, len(paths))
+        summary["route_path_examples"] = _path_examples(stacked, max_examples=8)
         advances = 0
         skips = 0
         recurs = 0
@@ -89,9 +90,11 @@ def summarize_routes(route_info: dict[str, Any], num_internal_blocks: int) -> di
         }
     if "position_norms" in route_info and route_info["position_norms"]:
         norms = torch.stack(route_info["position_norms"])
+        summary["position_norm_trajectory"] = [float(value) for value in norms.detach().cpu().flatten().tolist()]
         summary["position_norm_mean"] = float(norms.mean().detach().cpu())
     if "location_distance" in route_info and route_info["location_distance"]:
         distances = torch.stack(route_info["location_distance"])
+        summary["location_distance_trajectory"] = [float(value) for value in distances.detach().cpu().flatten().tolist()]
         summary["location_distance_mean"] = float(distances.mean().detach().cpu())
     if "global_attention_mass" in route_info and route_info["global_attention_mass"]:
         mass = torch.stack(route_info["global_attention_mass"])
@@ -114,3 +117,15 @@ def summarize_routes(route_info: dict[str, Any], num_internal_blocks: int) -> di
             correct.append((selected == target).float().mean())
         summary["route_imitation_accuracy"] = float(torch.stack(correct).mean().detach().cpu())
     return summary
+
+
+def _path_examples(stacked_actions: "torch.Tensor", *, max_examples: int) -> list[dict[str, Any]]:
+    examples = []
+    for sample_index in range(min(max_examples, stacked_actions.size(1))):
+        examples.append(
+            {
+                "sample_index": sample_index,
+                "actions": [int(value) for value in stacked_actions[:, sample_index].tolist()],
+            }
+        )
+    return examples
