@@ -1,0 +1,2 @@
+extends: stage6_parallel_passing.yaml
+model_config: ../model/brian_r125_parallel_any_topk_exit.yaml

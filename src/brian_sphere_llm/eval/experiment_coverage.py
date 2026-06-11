@@ -267,6 +267,22 @@ def _parallel_requirements(entries: list[dict[str, Any]]) -> list[dict[str, Any]
             and (_num(entry["model"].get("branch_cost")) or 0.0) > 0.0
             and (_num(entry.get("loss_weights", {}).get("cost")) or 0.0) > 0.0,
         ),
+        _group_requirement(
+            "PP5",
+            "top-1 OUT terminal rule",
+            entries,
+            lambda entry: entry["id"] == "PP5"
+            and entry["model"].get("parallel_passing") is True
+            and entry["model"].get("parallel_exit_policy") == "top1",
+        ),
+        _group_requirement(
+            "PP6",
+            "OUT in top-k terminal rule",
+            entries,
+            lambda entry: entry["id"] == "PP6"
+            and entry["model"].get("parallel_passing") is True
+            and entry["model"].get("parallel_exit_policy") == "any_topk",
+        ),
     ]
 
 
@@ -410,6 +426,7 @@ def _model_summary(config: dict[str, Any], model_config_path: Path | None) -> di
         "parallel_passing",
         "beam_size",
         "branch_cost",
+        "parallel_exit_policy",
     ]
     summary = {key: config.get(key) for key in keys if key in config}
     base_config = config.get("base_config")

@@ -64,6 +64,7 @@ def make_parallel_passing_report(
             "parallel_passing_enabled": _bool(model_config.get("parallel_passing", False)),
             "beam_size": beam_size,
             "branch_cost": branch_cost,
+            "parallel_exit_policy": str(model_config.get("parallel_exit_policy", "branch")),
             "global_kv_enabled": global_kv_enabled,
             "global_sink_slots": int(_num(model_config.get("global_sink_slots")) or 0),
             "global_window_slots": global_window_slots,

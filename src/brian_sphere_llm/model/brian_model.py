@@ -56,6 +56,7 @@ class BrianRouteConfig:
     parallel_passing: bool = False
     beam_size: int = 2
     branch_cost: float = 0.01
+    parallel_exit_policy: str = "branch"
     block_position_mode: str = "open_arc"
     position_to_router: bool = True
     position_to_blocks: bool = True
@@ -92,6 +93,7 @@ class BrianRouteConfig:
             parallel_passing=parallel_passing,
             beam_size=int(data.get("beam_size", 2)),
             branch_cost=float(data.get("branch_cost", 0.01)),
+            parallel_exit_policy=str(data.get("parallel_exit_policy", "branch")),
             block_position_mode=str(data.get("block_position_mode", "open_arc")),
             position_to_router=_as_bool(data.get("position_to_router", True)),
             position_to_blocks=_as_bool(data.get("position_to_blocks", True)),
@@ -369,6 +371,16 @@ class BrianRouteCore(ModuleBase):
 
             expanded_actions = top_actions
             expanded_log_probs = top_log_probs
+            parent_exit = self._parallel_parent_exit(top_actions)
+            if torch.any(parent_exit):
+                out = torch.full_like(expanded_actions, self.out_action)
+                out_log_probs = log_probs.view(batch_size, current_beam, -1)[..., self.out_action]
+                expanded_actions = torch.where(parent_exit.unsqueeze(-1), out, expanded_actions)
+                expanded_log_probs = torch.where(
+                    parent_exit.unsqueeze(-1),
+                    out_log_probs.unsqueeze(-1).expand_as(expanded_log_probs),
+                    expanded_log_probs,
+                )
             if torch.any(branch_exited):
                 out = torch.full_like(expanded_actions, self.out_action)
                 zeros = torch.zeros_like(expanded_log_probs)
@@ -451,6 +463,16 @@ class BrianRouteCore(ModuleBase):
         merged_hidden = (branch_hidden * weights.view(batch_size, -1, 1, 1)).sum(dim=1)
         merged_position = F.normalize((branch_position * weights.view(batch_size, -1, 1)).sum(dim=1), dim=-1)
         return merged_hidden, merged_position, route_info
+
+    def _parallel_parent_exit(self, top_actions: torch.Tensor) -> torch.Tensor:
+        policy = self.config.parallel_exit_policy
+        if policy == "branch":
+            return torch.zeros(top_actions.shape[:-1], dtype=torch.bool, device=top_actions.device)
+        if policy == "top1":
+            return top_actions[..., 0] == self.out_action
+        if policy == "any_topk":
+            return torch.any(top_actions == self.out_action, dim=-1)
+        raise ValueError(f"Unknown parallel_exit_policy: {policy}")
 
     def _scheduled_select(
         self,
@@ -566,6 +588,10 @@ class BrianRouteCore(ModuleBase):
             "global_code_dim": self.config.global_code_dim,
             "global_sink_slots": self.config.global_sink_slots,
             "global_window_slots": self.config.global_window_slots,
+            "parallel_passing": str(self.config.parallel_passing),
+            "beam_size": self.config.beam_size,
+            "branch_cost": str(self.config.branch_cost),
+            "parallel_exit_policy": self.config.parallel_exit_policy,
         }
 
 

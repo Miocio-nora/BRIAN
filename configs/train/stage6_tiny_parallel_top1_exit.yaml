@@ -1,0 +1,5 @@
+extends: stage6_tiny_debug.yaml
+model_config: ../model/brian_tiny_parallel_top1_exit.yaml
+max_steps: 3
+eval_interval: 1
+save_interval: 3

@@ -1,0 +1,3 @@
+extends: brian_r125_parallel.yaml
+model_name: brian_r125_parallel_top1_exit
+parallel_exit_policy: top1

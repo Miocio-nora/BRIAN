@@ -467,7 +467,7 @@ python scripts/run_experiment.py \
 The fast smoke manifest is `configs/experiments/tiny_parallel_passing.yaml`;
 the BRIAN-R125 sweep manifest is `configs/experiments/route_core_parallel_passing.yaml`.
 These cover PP0 top-k weighted fusion, PP1 beam-2 independent branch passing, PP2 beam-4 capacity,
-and PP3/PP4 branch-cost off/on ablations.
+PP3/PP4 branch-cost off/on ablations, and PP5/PP6 top-1-vs-top-k OUT terminal rules.
 
 Resolve the first BRIAN-R350 scaling package:
 

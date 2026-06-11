@@ -22,3 +22,11 @@ ablations:
     name: branch_cost_on
     train_config: configs/train/ablation_pp4_parallel_cost_on.yaml
     purpose: Main branch-cost-enabled parallel passing proposal.
+  - id: PP5
+    name: top1_out_terminal_rule
+    train_config: configs/train/ablation_pp5_parallel_top1_exit.yaml
+    purpose: "Clean terminal rule: exit only when top-1 action is OUT."
+  - id: PP6
+    name: any_topk_out_terminal_rule
+    train_config: configs/train/ablation_pp6_parallel_any_topk_exit.yaml
+    purpose: "Contrast terminal rule: exit when OUT appears anywhere in top-k."

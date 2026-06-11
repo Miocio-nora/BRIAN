@@ -38,6 +38,7 @@ def test_parallel_passing_report_passes_bounded_beam_and_cost(tmp_path: Path) ->
     assert report["checks"]["branch_count_bounded_by_beam"] is True
     assert report["checks"]["delta_memory_policy_present"] is True
     assert report["checks"]["delta_cache_bounded_by_window"] is True
+    assert report["model"]["parallel_exit_policy"] == "branch"
     assert report["routing"]["parallel_branch_count"]["max"] == 2.0
     assert report["routing"]["parallel_delta_cache_slots"]["max"] == 2.0
 
