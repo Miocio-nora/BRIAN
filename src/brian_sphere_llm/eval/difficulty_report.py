@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 import json
+import math
 from pathlib import Path
 from typing import Any
 
@@ -49,7 +50,8 @@ def make_baseline_difficulty_report(
     device = _device(device_name)
     model = _load_model_for_run(run_dir, checkpoint, device)
     model.eval()
-    effective_batch_size = int(batch_size or config.get("batch_size", 1))
+    effective_batch_size = _effective_batch_size(batch_size, config)
+    effective_max_batches = _int_value(max_batches, "max_batches", minimum=1)
     loader = build_dataloader(
         tokenized_dir=data_config["output_dir"],
         split=split,
@@ -59,7 +61,7 @@ def make_baseline_difficulty_report(
     samples: list[dict[str, Any]] = []
     with torch.no_grad():
         for batch_index, batch in enumerate(loader):
-            if batch_index >= max_batches:
+            if batch_index >= effective_max_batches:
                 break
             batch = batch.to(device)
             outputs = model(batch)
@@ -87,7 +89,7 @@ def make_baseline_difficulty_report(
         "run_dir": str(run_dir),
         "split": split,
         "batch_size": effective_batch_size,
-        "max_batches": max_batches,
+        "max_batches": effective_max_batches,
         "checkpoint": str(_checkpoint_dir(run_dir, checkpoint)),
         "samples_path": str(sample_output_path),
     }
@@ -125,7 +127,12 @@ def make_difficulty_report(
     baseline_model.eval()
     routed_model.eval()
 
-    effective_batch_size = batch_size or int(routed_config.get("batch_size", baseline_config.get("batch_size", 1)))
+    effective_batch_size = _effective_batch_size(
+        batch_size,
+        routed_config,
+        fallback_config=baseline_config,
+    )
+    effective_max_batches = _int_value(max_batches, "max_batches", minimum=1)
     loader = build_dataloader(
         tokenized_dir=data_config["output_dir"],
         split=split,
@@ -137,7 +144,7 @@ def make_difficulty_report(
     samples: list[dict[str, float | int]] = []
     with torch.no_grad():
         for batch_index, batch in enumerate(loader):
-            if batch_index >= max_batches:
+            if batch_index >= effective_max_batches:
                 break
             batch = batch.to(device)
             baseline_outputs = baseline_model(batch)
@@ -185,7 +192,7 @@ def make_difficulty_report(
         "routed_run": str(routed_run),
         "split": split,
         "batch_size": effective_batch_size,
-        "max_batches": max_batches,
+        "max_batches": effective_max_batches,
         "baseline_checkpoint": str(_checkpoint_dir(baseline_run, baseline_checkpoint)),
         "routed_checkpoint": str(_checkpoint_dir(routed_run, routed_checkpoint)),
         "routed_eval_step": routed_step,
@@ -330,6 +337,36 @@ def _mapping_config(config: dict[str, Any], key: str) -> Mapping[str, Any]:
     if not isinstance(value, Mapping):
         raise ValueError(f"{key} must be a mapping.")
     return value
+
+
+def _effective_batch_size(
+    batch_size: int | None,
+    config: dict[str, Any],
+    *,
+    fallback_config: dict[str, Any] | None = None,
+) -> int:
+    if batch_size is not None:
+        return _int_value(batch_size, "batch_size", minimum=1)
+    value = config.get("batch_size")
+    if value is None and fallback_config is not None:
+        value = fallback_config.get("batch_size")
+    if value is None:
+        value = 1
+    return _int_value(value, "batch_size", minimum=1)
+
+
+def _int_value(value: Any, name: str, *, minimum: int | None = None) -> int:
+    if isinstance(value, bool):
+        raise ValueError(f"{name} must be an integer, not a boolean.")
+    if isinstance(value, int):
+        number = value
+    elif isinstance(value, float) and math.isfinite(value) and value.is_integer():
+        number = int(value)
+    else:
+        raise ValueError(f"{name} must be an integer.")
+    if minimum is not None and number < minimum:
+        raise ValueError(f"{name} must be >= {minimum}.")
+    return number
 
 
 def _load_model_for_run(run_dir: Path, checkpoint: str, device: "torch.device") -> Any:

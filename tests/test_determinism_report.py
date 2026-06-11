@@ -6,7 +6,13 @@ import pytest
 torch = pytest.importorskip("torch")
 
 from brian_sphere_llm.data.pack import write_index, write_token_bin
-from brian_sphere_llm.eval.determinism_report import _compare_numeric_metrics, make_eval_determinism_report
+from brian_sphere_llm.eval.determinism_report import (
+    _effective_batch_size,
+    _float_value,
+    _int_value,
+    _compare_numeric_metrics,
+    make_eval_determinism_report,
+)
 from brian_sphere_llm.train.trainer import train_from_config
 from brian_sphere_llm.utils.config import save_yaml
 
@@ -55,6 +61,15 @@ def test_eval_determinism_comparison_rejects_boolean_numeric_metrics() -> None:
             "within_tolerance": True,
         }
     ]
+
+
+def test_eval_determinism_config_helpers_reject_boolean_values() -> None:
+    with pytest.raises(ValueError, match="batch_size"):
+        _effective_batch_size(None, {"batch_size": True})
+    with pytest.raises(ValueError, match="seed"):
+        _int_value(True, "seed", minimum=0)
+    with pytest.raises(ValueError, match="tolerance"):
+        _float_value(True, "tolerance", minimum=0.0)
 
 
 def _train_tiny_baseline(tmp_path: Path) -> Path:

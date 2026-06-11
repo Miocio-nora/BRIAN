@@ -5,7 +5,9 @@ torch = pytest.importorskip("torch")
 from brian_sphere_llm.eval.difficulty import summarize_difficulty_samples
 from brian_sphere_llm.eval.difficulty_report import (
     _assign_difficulty_bins,
+    _effective_batch_size,
     _forward_routed_for_eval,
+    _int_value,
     _mapping_config,
     _summarize_baseline_difficulty_samples,
     causal_lm_sample_losses,
@@ -98,6 +100,13 @@ def test_difficulty_eval_forward_parses_string_false_hard_exit() -> None:
 def test_difficulty_eval_forward_rejects_non_mapping_routing_config() -> None:
     with pytest.raises(ValueError, match="routing"):
         _mapping_config({"routing": True}, "routing")
+
+
+def test_difficulty_report_config_helpers_reject_boolean_integer_values() -> None:
+    with pytest.raises(ValueError, match="batch_size"):
+        _effective_batch_size(None, {"batch_size": True})
+    with pytest.raises(ValueError, match="max_batches"):
+        _int_value(True, "max_batches", minimum=1)
 
 
 def test_baseline_difficulty_bins_are_ce_ordered() -> None:

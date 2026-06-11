@@ -50,7 +50,9 @@ def make_eval_determinism_report(
     model = _load_model_for_run(run_dir, checkpoint, device)
     route_mode = train_mode_for_stage(str(config["stage"]))
     global_step = _checkpoint_step(run_dir, checkpoint)
-    effective_batch_size = int(batch_size or config.get("batch_size", 1))
+    effective_batch_size = _effective_batch_size(batch_size, config)
+    effective_tolerance = _float_value(tolerance, "tolerance", minimum=0.0)
+    effective_seed = _int_value(seed, "seed", minimum=0)
     loader = build_dataloader(
         tokenized_dir=data_config["output_dir"],
         split=split,
@@ -58,7 +60,15 @@ def make_eval_determinism_report(
         shuffle=False,
     )
 
-    first = _eval_once(model, loader, config=config, device=device, route_mode=route_mode, global_step=global_step, seed=seed)
+    first = _eval_once(
+        model,
+        loader,
+        config=config,
+        device=device,
+        route_mode=route_mode,
+        global_step=global_step,
+        seed=effective_seed,
+    )
     second = _eval_once(
         model,
         loader,
@@ -66,15 +76,15 @@ def make_eval_determinism_report(
         device=device,
         route_mode=route_mode,
         global_step=global_step,
-        seed=seed,
+        seed=effective_seed,
     )
-    comparison = _compare_numeric_metrics(first, second, tolerance=tolerance)
+    comparison = _compare_numeric_metrics(first, second, tolerance=effective_tolerance)
     checks = {
         "checkpoint_loaded": True,
         "two_eval_passes_completed": True,
         "compared_numeric_metrics_present": comparison["compared_metric_count"] > 0,
         "numeric_metrics_within_tolerance": comparison["max_abs_delta"] is not None
-        and comparison["max_abs_delta"] <= tolerance
+        and comparison["max_abs_delta"] <= effective_tolerance
         and not comparison["mismatched_metrics"],
     }
     report = {
@@ -83,8 +93,8 @@ def make_eval_determinism_report(
         "checkpoint_step": global_step,
         "split": split,
         "batch_size": effective_batch_size,
-        "seed": seed,
-        "tolerance": tolerance,
+        "seed": effective_seed,
+        "tolerance": effective_tolerance,
         "first_eval": first,
         "second_eval": second,
         "comparison": comparison,
@@ -147,6 +157,34 @@ def _num(value: Any) -> float | None:
     if isinstance(value, (int, float)) and math.isfinite(float(value)):
         return float(value)
     return None
+
+
+def _effective_batch_size(batch_size: int | None, config: dict[str, Any]) -> int:
+    value = batch_size if batch_size is not None else config.get("batch_size", 1)
+    return _int_value(value, "batch_size", minimum=1)
+
+
+def _int_value(value: Any, name: str, *, minimum: int | None = None) -> int:
+    if isinstance(value, bool):
+        raise ValueError(f"{name} must be an integer, not a boolean.")
+    if isinstance(value, int):
+        number = value
+    elif isinstance(value, float) and math.isfinite(value) and value.is_integer():
+        number = int(value)
+    else:
+        raise ValueError(f"{name} must be an integer.")
+    if minimum is not None and number < minimum:
+        raise ValueError(f"{name} must be >= {minimum}.")
+    return number
+
+
+def _float_value(value: Any, name: str, *, minimum: float | None = None) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(float(value)):
+        raise ValueError(f"{name} must be a finite numeric value.")
+    number = float(value)
+    if minimum is not None and number < minimum:
+        raise ValueError(f"{name} must be >= {minimum}.")
+    return number
 
 
 def _device(name: str) -> "torch.device":
