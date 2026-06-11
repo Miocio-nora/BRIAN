@@ -80,3 +80,31 @@ def test_summarize_routes_derives_global_read_ratios() -> None:
     assert summary["local_read_fraction_mean"] == pytest.approx(0.5)
     assert summary["global_to_local_read_ratio"] == pytest.approx(1.0)
     assert summary["local_to_global_read_ratio"] == pytest.approx(1.0)
+
+
+def test_summarize_routes_reports_forced_max_step_exit_fallback() -> None:
+    route_info = {
+        "hard_exit_enabled": True,
+        "max_route_steps": 3,
+        "route_probs": [
+            torch.tensor([[0.9, 0.05, 0.05], [0.9, 0.05, 0.05]]),
+            torch.tensor([[0.9, 0.05, 0.05], [0.05, 0.05, 0.9]]),
+            torch.tensor([[0.9, 0.05, 0.05], [0.05, 0.05, 0.9]]),
+        ],
+        "selected_actions": [
+            torch.tensor([0, 0]),
+            torch.tensor([0, 2]),
+            torch.tensor([0, 2]),
+        ],
+        "exit_flags": [
+            torch.tensor([False, False]),
+            torch.tensor([False, True]),
+            torch.tensor([False, True]),
+        ],
+    }
+    summary = summarize_routes(route_info, num_internal_blocks=2)
+
+    assert summary["first_exit_step_histogram"] == {"0": 1, "2": 1}
+    assert summary["forced_max_step_exit_count"] == 1
+    assert summary["forced_max_step_exit_fraction"] == 0.5
+    assert summary["max_route_steps"] == 3

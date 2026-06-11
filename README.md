@@ -228,6 +228,8 @@ python scripts/eval.py \
 
 This reads the reasoning report's sample JSONL and writes an OUT-by-difficulty report with easy/medium/hard route-step, active-compute, and output-probability summaries. Stage 4 gates use this as explicit evidence that hard samples do not use less routed compute than easy samples.
 
+Stage 4 gates also require the routing report to record `max_route_steps` plus `forced_max_step_exit_count` / `forced_max_step_exit_fraction`, so the max-step fallback path is observable even when most samples select `OUT` normally.
+
 Run the lightweight long-context / Global KV eval:
 
 ```bash

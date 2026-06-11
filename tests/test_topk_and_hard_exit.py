@@ -99,6 +99,9 @@ def test_hard_exit_stops_when_router_prefers_out() -> None:
     output = model(input_ids, targets=input_ids, route_mode="free", hard_exit=True)
     assert len(output["route_info"]["selected_actions"]) == 1
     assert output["routing_summary"]["first_exit_step_histogram"] == {"1": 2}
+    assert output["routing_summary"]["forced_max_step_exit_count"] == 0
+    assert output["routing_summary"]["forced_max_step_exit_fraction"] == 0.0
+    assert output["routing_summary"]["max_route_steps"] == cfg.max_route_steps
 
 
 def test_hard_exit_ignores_out_when_out_is_only_in_topk() -> None:
@@ -120,6 +123,9 @@ def test_hard_exit_ignores_out_when_out_is_only_in_topk() -> None:
 
     assert len(output["route_info"]["selected_actions"]) == cfg.max_route_steps
     assert output["routing_summary"]["first_exit_step_histogram"] == {"0": 2}
+    assert output["routing_summary"]["forced_max_step_exit_count"] == 2
+    assert output["routing_summary"]["forced_max_step_exit_fraction"] == 1.0
+    assert output["routing_summary"]["max_route_steps"] == cfg.max_route_steps
     for topk_actions in output["route_info"]["topk_actions"]:
         assert torch.all(topk_actions[:, 0] == 0)
         assert torch.all(topk_actions[:, 1] == cfg.route_pool_blocks)

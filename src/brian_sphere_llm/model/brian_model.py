@@ -219,6 +219,8 @@ class BrianRouteCore(ModuleBase):
             "global_read_gate": [],
             "global_cache_slots": [],
             "parallel_delta_cache_slots": [],
+            "hard_exit_enabled": bool(hard_exit),
+            "max_route_steps": self.config.max_route_steps,
         }
         route_targets = self._targets_for_mode(route_mode, pseudo_policy, batch_size, input_ids.device)
         max_steps = len(route_targets) if route_mode == "fixed" else self.config.max_route_steps

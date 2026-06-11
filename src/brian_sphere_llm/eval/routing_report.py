@@ -37,6 +37,9 @@ ROUTING_KEYS = {
     "parallel_score_margin_mean",
     "parallel_delta_cache_slots_mean",
     "parallel_delta_cache_slots_max",
+    "max_route_steps",
+    "forced_max_step_exit_count",
+    "forced_max_step_exit_fraction",
 }
 
 

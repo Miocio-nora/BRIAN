@@ -36,6 +36,8 @@ def summarize_routes(route_info: dict[str, Any], num_internal_blocks: int) -> di
     topk_actions = route_info.get("topk_actions")
     used_weighted_fusion = route_info.get("used_weighted_fusion")
     exit_flags = route_info.get("exit_flags")
+    hard_exit_enabled = route_info.get("hard_exit_enabled") is True
+    max_route_steps = route_info.get("max_route_steps")
     summary: dict[str, Any] = {}
     if probs:
         all_probs = torch.stack(probs)
@@ -87,6 +89,12 @@ def summarize_routes(route_info: dict[str, Any], num_internal_blocks: int) -> di
         summary["first_exit_step_histogram"] = {
             str(step): first_exit_steps.count(step) for step in sorted(set(first_exit_steps))
         }
+        if hard_exit_enabled:
+            forced_count = first_exit_steps.count(0)
+            summary["forced_max_step_exit_count"] = forced_count
+            summary["forced_max_step_exit_fraction"] = forced_count / max(1, len(first_exit_steps))
+            if isinstance(max_route_steps, int) and not isinstance(max_route_steps, bool):
+                summary["max_route_steps"] = max_route_steps
     if "position_norms" in route_info and route_info["position_norms"]:
         norms = torch.stack(route_info["position_norms"])
         summary["position_norm_trajectory"] = [float(value) for value in norms.detach().cpu().flatten().tolist()]

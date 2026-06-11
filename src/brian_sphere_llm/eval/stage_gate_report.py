@@ -412,6 +412,10 @@ def _gate_stage4(
         "not_all_immediate_exit": bool(exit_hist) and immediate < total_exits,
         "not_never_exit": bool(exit_hist) and nonzero_exits > 0,
         "average_route_steps_present": _finite(_routing_metric(stage4, "average_route_steps")),
+        "max_route_steps_recorded": _finite(_routing_metric(stage4, "max_route_steps")),
+        "forced_max_step_exit_fallback_recorded": _finite(
+            _routing_metric(stage4, "forced_max_step_exit_fraction")
+        ),
         "cost_control_report_present": bool(cost_control_report),
         "cost_control_active_range_present": bool(cost_checks.get("active_compute_range_present", False)),
         "cost_control_active_not_increasing": bool(cost_checks.get("active_compute_not_increasing_with_cost", False)),
@@ -441,6 +445,9 @@ def _gate_stage4(
         checks,
         {
             "first_exit_step_histogram": exit_hist,
+            "max_route_steps": _routing_metric(stage4, "max_route_steps"),
+            "forced_max_step_exit_count": _routing_metric(stage4, "forced_max_step_exit_count"),
+            "forced_max_step_exit_fraction": _routing_metric(stage4, "forced_max_step_exit_fraction"),
             "cost_control_status": cost_analysis.get("status") if cost_analysis else None,
             "cost_control_average_route_steps_range": cost_analysis.get("average_route_steps_range") if cost_analysis else None,
             "cost_control_active_block_evals_range": cost_analysis.get("active_block_evals_range") if cost_analysis else None,
