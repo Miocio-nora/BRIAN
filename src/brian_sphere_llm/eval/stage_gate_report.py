@@ -179,6 +179,7 @@ def _summarize_run(run_dir: Path) -> dict[str, Any]:
         "baseline_difficulty_report_present": bool(baseline_difficulty_report),
         "baseline_difficulty_sample_count": _num(baseline_difficulty_report.get("sample_count")),
         "baseline_difficulty_bin_count": _num(baseline_difficulty_report.get("difficulty_bin_count")),
+        "baseline_difficulty_bins": baseline_difficulty_report.get("difficulty_bins", []),
         "baseline_difficulty_by_bin": baseline_difficulty_report.get("by_difficulty", {}),
         "fixed_route_stability_report_present": bool(fixed_route_stability_report),
         "fixed_route_stability_status": fixed_route_stability_report.get("overall_status"),
@@ -216,6 +217,7 @@ def _gate_stage0(stage0: dict[str, Any] | None) -> dict[str, Any]:
     resume_event = stage0.get("latest_resume_event") if stage0 else {}
     resume_event_checks = _resume_event_checks(resume_event)
     rank_state_resume_checks = _rank_state_resume_event_checks(resume_event, stage0)
+    baseline_difficulty_checks = _baseline_difficulty_checks(stage0)
     determinism_checks = stage0.get("eval_determinism_checks", {}) if stage0 else {}
     checks = {
         "checkpoint_resume_artifact": bool(stage0 and stage0["has_checkpoint_latest"]),
@@ -236,6 +238,8 @@ def _gate_stage0(stage0: dict[str, Any] | None) -> dict[str, Any]:
             and _num(stage0.get("baseline_difficulty_bin_count")) is not None
             and stage0["baseline_difficulty_bin_count"] >= 3
         ),
+        "baseline_difficulty_bin_means_present": baseline_difficulty_checks["bin_means_present"],
+        "baseline_difficulty_bin_means_ordered": baseline_difficulty_checks["bin_means_ordered"],
         "eval_determinism_report_present": bool(stage0 and stage0.get("eval_determinism_report_present")),
         "eval_deterministic": bool(stage0 and stage0.get("eval_determinism_status") == "pass"),
         "eval_determinism_checks_passed": _eval_determinism_checks_passed(determinism_checks),
@@ -257,6 +261,7 @@ def _gate_stage0(stage0: dict[str, Any] | None) -> dict[str, Any]:
             **_model_stats_gate_extras(stage0),
             **_data_manifest_gate_extras(stage0),
             "baseline_difficulty_by_bin": stage0.get("baseline_difficulty_by_bin") if stage0 else {},
+            "baseline_difficulty_checks": baseline_difficulty_checks,
         },
     )
 
@@ -593,6 +598,25 @@ def _resume_event_checks(event: Any) -> dict[str, bool]:
     }
 
 
+def _baseline_difficulty_checks(summary: dict[str, Any] | None) -> dict[str, bool]:
+    if not summary:
+        return {"bin_means_present": False, "bin_means_ordered": False}
+    bins = summary.get("baseline_difficulty_bins")
+    if not isinstance(bins, list) or not bins:
+        bins = ["easy", "medium", "hard"]
+    by_bin = summary.get("baseline_difficulty_by_bin")
+    if not isinstance(by_bin, dict):
+        by_bin = {}
+    means = [_num(_dict(by_bin.get(str(label))).get("mean_baseline_cross_entropy")) for label in bins]
+    finite_means = [value for value in means if value is not None and math.isfinite(value)]
+    return {
+        "bin_means_present": len(finite_means) == len(bins) and len(finite_means) >= 3,
+        "bin_means_ordered": len(finite_means) == len(bins)
+        and len(finite_means) >= 3
+        and all(next_value >= value for value, next_value in zip(finite_means, finite_means[1:])),
+    }
+
+
 def _rank_state_resume_event_checks(event: Any, summary: dict[str, Any] | None) -> dict[str, bool]:
     if not isinstance(event, dict):
         event = {}
@@ -907,6 +931,10 @@ def _num(value: Any) -> float | None:
     if isinstance(value, (int, float)):
         return float(value)
     return None
+
+
+def _dict(value: Any) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
 
 
 def _read_jsonl(path: Path) -> list[dict[str, Any]]:

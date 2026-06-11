@@ -126,6 +126,7 @@ def test_pearson_and_difficulty_step_correlation() -> None:
 def _baseline_difficulty_report() -> dict:
     return {
         "sample_count": 3,
+        "difficulty_bins": ["easy", "medium", "hard"],
         "difficulty_bin_count": 3,
         "by_difficulty": {
             "easy": {"sample_count": 1, "mean_baseline_cross_entropy": 1.0},
@@ -400,6 +401,8 @@ def test_stage_gate_report_writes_json(tmp_path: Path) -> None:
     assert report["gates"]["stage0_to_1"]["checks"]["validation_report_valid"] is True
     assert report["gates"]["stage0_to_1"]["validation_report_metrics"]["tokens_per_second"] == 128.0
     assert report["gates"]["stage0_to_1"]["checks"]["baseline_difficulty_bins_present"] is True
+    assert report["gates"]["stage0_to_1"]["checks"]["baseline_difficulty_bin_means_present"] is True
+    assert report["gates"]["stage0_to_1"]["checks"]["baseline_difficulty_bin_means_ordered"] is True
     assert report["gates"]["stage1_to_2"]["status"] == "pass"
     assert report["gates"]["stage1_to_2"]["checks"]["fixed_route_stability_passed"] is True
     assert report["gates"]["stage1_to_2"]["checks"]["validation_report_valid"] is True
@@ -466,6 +469,36 @@ def test_stage0_gate_requires_rng_and_dataloader_resume_state(tmp_path: Path) ->
     assert gate["resume_event_checks"]["rng_state_loaded"] is False
     assert gate["resume_event_checks"]["data_epoch_nonnegative"] is False
     assert gate["resume_event_checks"]["microbatch_in_epoch_nonnegative"] is False
+
+
+def test_stage0_gate_requires_ordered_baseline_difficulty_bin_means(tmp_path: Path) -> None:
+    baseline = _write_run(
+        tmp_path,
+        "baseline",
+        stage="stage0_baseline",
+        val_loss=10.0,
+        train_row={},
+        determinism_status="pass",
+        resume_event={},
+        baseline_difficulty_report={
+            "sample_count": 3,
+            "difficulty_bins": ["easy", "medium", "hard"],
+            "difficulty_bin_count": 3,
+            "by_difficulty": {
+                "easy": {"sample_count": 1, "mean_baseline_cross_entropy": 3.0},
+                "medium": {"sample_count": 1, "mean_baseline_cross_entropy": 2.0},
+                "hard": {"sample_count": 1, "mean_baseline_cross_entropy": 1.0},
+            },
+        },
+    )
+
+    report_path = make_stage_gate_report([baseline], output_path=tmp_path / "gate.json")
+    gate = json.loads(report_path.read_text(encoding="utf-8"))["gates"]["stage0_to_1"]
+
+    assert gate["status"] == "warn"
+    assert gate["checks"]["baseline_difficulty_bin_means_present"] is True
+    assert gate["checks"]["baseline_difficulty_bin_means_ordered"] is False
+    assert gate["baseline_difficulty_checks"]["bin_means_ordered"] is False
 
 
 def test_stage0_gate_accepts_loaded_rank_state_resume_path(tmp_path: Path) -> None:
