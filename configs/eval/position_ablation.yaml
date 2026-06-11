@@ -1,0 +1,6 @@
+eval_name: position_ablation_report
+output_path: reports/position_ablation_report.json
+reference_run: null
+candidate_runs: []
+min_validation_loss_delta: 0.001
+min_routing_metric_delta: 0.001

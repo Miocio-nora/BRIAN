@@ -15,6 +15,7 @@ from brian_sphere_llm.eval.long_context import make_long_context_report
 from brian_sphere_llm.eval.long_context_compare import make_long_context_comparison_report
 from brian_sphere_llm.eval.out_by_difficulty import make_out_by_difficulty_report
 from brian_sphere_llm.eval.parallel_compare import make_parallel_comparison_report
+from brian_sphere_llm.eval.position_ablation import make_position_ablation_report
 from brian_sphere_llm.eval.reasoning import make_reasoning_report
 from brian_sphere_llm.eval.routing_report import make_routing_report
 from brian_sphere_llm.eval.stage_gate_report import make_stage_gate_report
@@ -182,6 +183,18 @@ def main() -> None:
             max_estimated_flops_ratio=float(config.get("max_estimated_flops_ratio", 2.0)),
             min_throughput_ratio=float(config.get("min_throughput_ratio", 0.0)),
             min_parallel_branch_count=float(config.get("min_parallel_branch_count", 1.5)),
+        )
+    elif eval_name == "position_ablation_report":
+        reference_run = args.baseline_run or args.run or config.get("reference_run")
+        runs = args.runs or config.get("candidate_runs", []) or config.get("runs", [])
+        if not reference_run or not runs:
+            raise SystemExit("position_ablation_report requires --run/--baseline-run and --runs")
+        report = make_position_ablation_report(
+            reference_run,
+            runs,
+            output_path=args.output or config.get("output_path"),
+            min_validation_loss_delta=float(config.get("min_validation_loss_delta", 0.001)),
+            min_routing_metric_delta=float(config.get("min_routing_metric_delta", 0.001)),
         )
     elif eval_name == "out_by_difficulty_report":
         reasoning_report = args.reasoning_report or config.get("reasoning_report_path")

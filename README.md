@@ -219,6 +219,17 @@ python scripts/train.py --config configs/train/stage3_position_random_tiny_debug
 
 The formal BRIAN-R125 position ablation manifest is `configs/experiments/route_core_position_ablations.yaml`.
 
+Generate a position-ablation evidence report:
+
+```bash
+python scripts/eval.py \
+  --config configs/eval/position_ablation.yaml \
+  --run <main_position_run> \
+  --runs <no_position_run> <router_only_position_run> <circular_position_run>
+```
+
+This writes `reports/position_ablation_report.json` with validation-loss and routing/position metric deltas. Pass it to the Go/No-Go report with `--position-ablation-report`.
+
 Resolve the full Package A BRIAN-R125 route-core manifest:
 
 ```bash
