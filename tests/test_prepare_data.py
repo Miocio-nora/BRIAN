@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-from brian_sphere_llm.data.manifest import REQUIRED_MANIFEST_FIELDS
+from brian_sphere_llm.data.manifest import REQUIRED_MANIFEST_FIELDS, sha256_text
 from brian_sphere_llm.data.prepare import DEFAULT_MANIFEST_CREATED_AT, prepare_data
 from brian_sphere_llm.utils.config import load_yaml, save_yaml
 
@@ -48,6 +48,7 @@ def test_prepare_tiny_synthetic_data(tmp_path: Path) -> None:
     ]:
         assert key in stats
     assert stats["sha256_manifest"]
+    assert stats["sha256_manifest"] == sha256_text(manifest_text)
     assert stats["source_mixture_realized"]
     assert {row["created_at"] for row in manifest_rows} == {DEFAULT_MANIFEST_CREATED_AT}
     assert manifest_rows[0]["route_metadata"]["pseudo_route_type"] in {

@@ -1,4 +1,7 @@
+import json
 from pathlib import Path
+
+import pytest
 
 from brian_sphere_llm.data.manifest import ManifestRow, read_manifest, write_manifest
 
@@ -22,3 +25,34 @@ def test_manifest_roundtrip(tmp_path: Path) -> None:
     assert rows[0]["sample_id"] == "sample-1"
     assert rows[0]["token_count"] == 3
     assert rows[0]["route_metadata"]["pseudo_route_type"] == "skip"
+
+
+def test_read_manifest_rejects_invalid_counts_and_split(tmp_path: Path) -> None:
+    row = ManifestRow.from_sample(
+        sample_id="sample-1",
+        text="hello world",
+        tokens=[1, 2, 3],
+        source_dataset="unit",
+        source_url_or_id="unit-1",
+        split="train",
+        license="test",
+        path="memory",
+        mixture_tag="synthetic",
+    )
+    invalid = row.__dict__ | {"token_count": -1, "split": "dev"}
+    path = tmp_path / "manifest.jsonl"
+    path.write_text(json.dumps(invalid) + "\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="Manifest counts must be non-negative"):
+        read_manifest(path)
+
+    invalid = row.__dict__ | {"split": "dev"}
+    path.write_text(json.dumps(invalid) + "\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="Unsupported split"):
+        read_manifest(path)
+
+    path.write_text(json.dumps(["not", "an", "object"]) + "\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="Manifest row must be a JSON object"):
+        read_manifest(path)

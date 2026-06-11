@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
@@ -100,9 +99,11 @@ def prepare_data(config_path: str | Path) -> Path:
     write_token_bin(val_sequences, output_dir / "val.bin")
     write_index(output_dir / "train.idx", sequence_length=sequence_length, num_sequences=len(train_sequences))
     write_index(output_dir / "val.idx", sequence_length=sequence_length, num_sequences=len(val_sequences))
-    write_manifest(manifest_rows, output_dir / "manifest.jsonl")
+    output_manifest_path = output_dir / "manifest.jsonl"
+    write_manifest(manifest_rows, output_manifest_path)
     manifest_path = Path(config.get("manifest_path", output_dir / "manifest.jsonl"))
     write_manifest(manifest_rows, manifest_path)
+    manifest_text = output_manifest_path.read_text(encoding="utf-8")
     stats = {
         "recipe_name": config["recipe_name"],
         "num_documents": len(manifest_rows),
@@ -112,7 +113,7 @@ def prepare_data(config_path: str | Path) -> Path:
         "sequence_length": sequence_length,
         "vocab_size": metadata.vocab_size,
         "source_mixture_realized": _realized_mixture(manifest_rows),
-        "sha256_manifest": sha256_text("\n".join(json.dumps(asdict(row), sort_keys=True) for row in manifest_rows)),
+        "sha256_manifest": sha256_text(manifest_text),
         "tokenizer": asdict(metadata),
     }
     write_json(stats, output_dir / "stats.json")

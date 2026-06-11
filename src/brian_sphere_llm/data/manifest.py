@@ -87,13 +87,7 @@ class ManifestRow:
         )
 
     def validate(self) -> None:
-        missing = REQUIRED_MANIFEST_FIELDS - set(asdict(self))
-        if missing:
-            raise ValueError(f"Manifest row missing fields: {sorted(missing)}")
-        if self.token_count < 0 or self.byte_count < 0:
-            raise ValueError("Manifest counts must be non-negative")
-        if self.split not in {"train", "val", "test"}:
-            raise ValueError(f"Unsupported split: {self.split}")
+        _validate_manifest_row(asdict(self))
 
 
 def write_manifest(rows: Iterable[ManifestRow], path: str | Path) -> None:
@@ -111,8 +105,20 @@ def read_manifest(path: str | Path) -> list[dict]:
         for line in handle:
             if line.strip():
                 row = json.loads(line)
-                missing = REQUIRED_MANIFEST_FIELDS - set(row)
-                if missing:
-                    raise ValueError(f"Manifest row missing fields: {sorted(missing)}")
+                _validate_manifest_row(row)
                 rows.append(row)
     return rows
+
+
+def _validate_manifest_row(row: dict) -> None:
+    if not isinstance(row, dict):
+        raise ValueError("Manifest row must be a JSON object")
+    missing = REQUIRED_MANIFEST_FIELDS - set(row)
+    if missing:
+        raise ValueError(f"Manifest row missing fields: {sorted(missing)}")
+    if not isinstance(row.get("token_count"), int) or not isinstance(row.get("byte_count"), int):
+        raise ValueError("Manifest counts must be integers")
+    if row["token_count"] < 0 or row["byte_count"] < 0:
+        raise ValueError("Manifest counts must be non-negative")
+    if row["split"] not in {"train", "val", "test"}:
+        raise ValueError(f"Unsupported split: {row['split']}")
