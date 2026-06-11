@@ -8,6 +8,7 @@ from brian_sphere_llm.eval.long_context import make_long_context_report
 from brian_sphere_llm.eval.long_context_compare import make_long_context_comparison_report
 from brian_sphere_llm.eval.out_by_difficulty import make_out_by_difficulty_report
 from brian_sphere_llm.eval.parallel_compare import make_parallel_comparison_report
+from brian_sphere_llm.eval.parallel_passing_report import make_parallel_passing_report
 from brian_sphere_llm.eval.reasoning import make_reasoning_report
 from brian_sphere_llm.eval.stage_gate_report import make_stage_gate_report
 
@@ -22,6 +23,7 @@ __all__ = [
     "make_long_context_report",
     "make_out_by_difficulty_report",
     "make_parallel_comparison_report",
+    "make_parallel_passing_report",
     "make_reasoning_report",
     "make_stage_gate_report",
     "summarize_difficulty_samples",

@@ -18,6 +18,7 @@ from brian_sphere_llm.eval.long_context import make_long_context_report
 from brian_sphere_llm.eval.long_context_compare import make_long_context_comparison_report
 from brian_sphere_llm.eval.out_by_difficulty import make_out_by_difficulty_report
 from brian_sphere_llm.eval.parallel_compare import make_parallel_comparison_report
+from brian_sphere_llm.eval.parallel_passing_report import make_parallel_passing_report
 from brian_sphere_llm.eval.position_ablation import make_position_ablation_report
 from brian_sphere_llm.eval.pseudo_route_curriculum import make_pseudo_route_curriculum_report
 from brian_sphere_llm.eval.reasoning import make_reasoning_report
@@ -47,6 +48,7 @@ def main() -> None:
     parser.add_argument("--long-context-compare-report", default=None, help="Long-context comparison report path for stage gate eval.")
     parser.add_argument("--global-kv-retention-report", default=None, help="Global KV retention report path for stage gate eval.")
     parser.add_argument("--global-kv-ablation-report", default=None, help="Global KV ablation report path for decision reports.")
+    parser.add_argument("--parallel-passing-report", default=None, help="Parallel-passing safety report path for stage gate eval.")
     parser.add_argument("--parallel-compare-report", default=None, help="Parallel comparison report path for stage gate eval.")
     parser.add_argument("--position-ablation-report", default=None, help="Position ablation report path for go/no-go eval.")
     parser.add_argument("--out-by-difficulty-report", default=None, help="OUT-by-difficulty report path for go/no-go eval.")
@@ -75,6 +77,8 @@ def main() -> None:
             or config.get("global_kv_retention_report_path"),
             long_context_compare_report_path=args.long_context_compare_report
             or config.get("long_context_compare_report_path"),
+            parallel_passing_report_path=args.parallel_passing_report
+            or config.get("parallel_passing_report_path"),
             parallel_compare_report_path=args.parallel_compare_report or config.get("parallel_compare_report_path"),
         )
     elif eval_name == "difficulty_step_eval":
@@ -228,6 +232,17 @@ def main() -> None:
             max_estimated_flops_ratio=float(config.get("max_estimated_flops_ratio", 2.0)),
             min_throughput_ratio=float(config.get("min_throughput_ratio", 0.0)),
             min_parallel_branch_count=float(config.get("min_parallel_branch_count", 1.5)),
+        )
+    elif eval_name == "parallel_passing_report":
+        if not args.run:
+            raise SystemExit("parallel_passing_report requires --run")
+        report = make_parallel_passing_report(
+            args.run,
+            output_path=args.output or config.get("output_path"),
+            max_beam_size=int(config.get("max_beam_size", 2)),
+            min_parallel_branch_count=float(config.get("min_parallel_branch_count", 1.5)),
+            min_branch_cost=float(config.get("min_branch_cost", 0.0)),
+            tolerance=float(config.get("tolerance", 1e-6)),
         )
     elif eval_name == "position_ablation_report":
         reference_run = args.baseline_run or args.run or config.get("reference_run")

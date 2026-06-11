@@ -19,6 +19,7 @@ def main() -> None:
     parser.add_argument("--out-by-difficulty-report", default=None, help="Optional OUT-by-difficulty report path.")
     parser.add_argument("--global-kv-retention-report", default=None, help="Optional Global KV retention report path.")
     parser.add_argument("--long-context-compare-report", default=None, help="Optional long-context comparison report path.")
+    parser.add_argument("--parallel-passing-report", default=None, help="Optional parallel-passing safety report path.")
     parser.add_argument("--parallel-compare-report", default=None, help="Optional parallel comparison report path.")
     args = parser.parse_args()
     config = load_config(args.config)
@@ -33,6 +34,8 @@ def main() -> None:
         or config.get("global_kv_retention_report_path"),
         long_context_compare_report_path=args.long_context_compare_report
         or config.get("long_context_compare_report_path"),
+        parallel_passing_report_path=args.parallel_passing_report
+        or config.get("parallel_passing_report_path"),
         parallel_compare_report_path=args.parallel_compare_report or config.get("parallel_compare_report_path"),
     )
     print(report)

@@ -4,6 +4,7 @@ cost_control_report_path: null
 out_by_difficulty_report_path: null
 global_kv_retention_report_path: null
 long_context_compare_report_path: null
+parallel_passing_report_path: null
 parallel_compare_report_path: null
 thresholds:
   fixed_route_loss_ratio_max: 1.03

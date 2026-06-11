@@ -1,0 +1,6 @@
+eval_name: parallel_passing_report
+output_path: null
+max_beam_size: 2
+min_parallel_branch_count: 1.5
+min_branch_cost: 0.0
+tolerance: 0.000001

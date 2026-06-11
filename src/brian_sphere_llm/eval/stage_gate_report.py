@@ -31,6 +31,7 @@ def make_stage_gate_report(
     out_by_difficulty_report_path: str | Path | None = None,
     global_kv_retention_report_path: str | Path | None = None,
     long_context_compare_report_path: str | Path | None = None,
+    parallel_passing_report_path: str | Path | None = None,
     parallel_compare_report_path: str | Path | None = None,
 ) -> Path:
     thresholds = {**DEFAULT_THRESHOLDS, **(thresholds or {})}
@@ -43,6 +44,9 @@ def make_stage_gate_report(
     )
     global_kv_retention_report = (
         _read_json_if_exists(Path(global_kv_retention_report_path)) if global_kv_retention_report_path else {}
+    )
+    parallel_passing_report = (
+        _read_json_if_exists(Path(parallel_passing_report_path)) if parallel_passing_report_path else {}
     )
     parallel_compare_report = _read_json_if_exists(Path(parallel_compare_report_path)) if parallel_compare_report_path else {}
     gates = {
@@ -57,7 +61,11 @@ def make_stage_gate_report(
             long_context_compare_report,
             global_kv_retention_report,
         ),
-        "stage6_to_scale": _gate_stage6(by_stage.get("stage6_parallel_passing"), parallel_compare_report),
+        "stage6_to_scale": _gate_stage6(
+            by_stage.get("stage6_parallel_passing"),
+            parallel_compare_report,
+            parallel_passing_report,
+        ),
     }
     report = {
         "run_count": len(summaries),
@@ -72,6 +80,7 @@ def make_stage_gate_report(
             if global_kv_retention_report_path
             else None,
             "long_context_compare_report": str(long_context_compare_report_path) if long_context_compare_report_path else None,
+            "parallel_passing_report": str(parallel_passing_report_path) if parallel_passing_report_path else None,
             "parallel_compare_report": str(parallel_compare_report_path) if parallel_compare_report_path else None,
         },
     }
@@ -109,6 +118,7 @@ def _summarize_run(run_dir: Path) -> dict[str, Any]:
     difficulty_report = _read_json_if_exists(run_dir / "difficulty_step_report.json")
     determinism_report = _read_json_if_exists(run_dir / "eval_determinism_report.json")
     global_kv_retention_report = _read_json_if_exists(run_dir / "global_kv_retention_report.json")
+    parallel_passing_report = _read_json_if_exists(run_dir / "parallel_passing_report.json")
     eval_rows = _read_jsonl(run_dir / "eval_log.jsonl")
     train_rows = _read_jsonl(run_dir / "train_log.jsonl")
     resume_rows = _read_jsonl(run_dir / "resume_events.jsonl")
@@ -154,6 +164,12 @@ def _summarize_run(run_dir: Path) -> dict[str, Any]:
         "global_kv_retention_checks": global_kv_retention_report.get("checks", {}),
         "global_kv_retention_metrics": global_kv_retention_report.get("metrics", {}),
         "global_kv_retention_model": global_kv_retention_report.get("model", {}),
+        "parallel_passing_report": parallel_passing_report,
+        "parallel_passing_report_present": bool(parallel_passing_report),
+        "parallel_passing_status": parallel_passing_report.get("overall_status"),
+        "parallel_passing_checks": parallel_passing_report.get("checks", {}),
+        "parallel_passing_model": parallel_passing_report.get("model", {}),
+        "parallel_passing_routing": parallel_passing_report.get("routing", {}),
         "difficulty_step_correlation": difficulty_corr,
         "difficulty_sample_count": _num(difficulty_report.get("sample_count")),
         "eval_determinism_status": determinism_report.get("overall_status"),
@@ -348,12 +364,23 @@ def _gate_stage5(
     )
 
 
-def _gate_stage6(stage6: dict[str, Any] | None, parallel_compare_report: dict[str, Any] | None = None) -> dict[str, Any]:
+def _gate_stage6(
+    stage6: dict[str, Any] | None,
+    parallel_compare_report: dict[str, Any] | None = None,
+    parallel_passing_report: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     comparisons = parallel_compare_report.get("comparisons", []) if parallel_compare_report else []
     any_parallel_pass = any(item.get("status") == "pass" for item in comparisons if isinstance(item, dict))
+    passing_report = parallel_passing_report or (stage6.get("parallel_passing_report") if stage6 else None) or {}
+    passing_checks = passing_report.get("checks", {}) if isinstance(passing_report.get("checks"), dict) else {}
     checks = {
         "parallel_branch_count_present": _metric_at_least(stage6, "parallel_branch_count_mean", 1.0),
         "parallel_score_margin_present": _finite(_routing_metric(stage6, "parallel_score_margin_mean")),
+        "parallel_passing_report_present": bool(passing_report),
+        "parallel_passing_report_passed": bool(passing_report.get("overall_status") == "pass"),
+        "parallel_beam_bounded": bool(passing_checks.get("beam_size_within_limit", False)),
+        "parallel_branch_count_bounded_by_beam": bool(passing_checks.get("branch_count_bounded_by_beam", False)),
+        "parallel_branch_cost_enabled": bool(passing_checks.get("branch_cost_enabled", False)),
         "global_cache_or_local_route_present": _finite(_routing_metric(stage6, "global_cache_slots_mean"))
         or _finite(_routing_metric(stage6, "average_route_steps")),
         "parallel_compare_report_present": bool(parallel_compare_report),
@@ -364,6 +391,10 @@ def _gate_stage6(stage6: dict[str, Any] | None, parallel_compare_report: dict[st
         "Stage 6 parallel passing is bounded and has comparison evidence",
         checks,
         {
+            "parallel_passing_status": passing_report.get("overall_status") if passing_report else None,
+            "parallel_passing_checks": passing_checks,
+            "parallel_passing_model": passing_report.get("model", {}) if passing_report else {},
+            "parallel_passing_routing": passing_report.get("routing", {}) if passing_report else {},
             "parallel_compare_status": parallel_compare_report.get("overall_status") if parallel_compare_report else None,
             "parallel_compare_candidate_count": parallel_compare_report.get("candidate_count")
             if parallel_compare_report

@@ -23,6 +23,7 @@ def _write_run(
     scheduled_routing_report: dict | None = None,
     difficulty_report: dict | None = None,
     global_kv_retention_report: dict | None = None,
+    parallel_passing_report: dict | None = None,
 ) -> Path:
     run_dir = root / name
     run_dir.mkdir(parents=True)
@@ -69,6 +70,11 @@ def _write_run(
     if global_kv_retention_report is not None:
         (run_dir / "global_kv_retention_report.json").write_text(
             json.dumps(global_kv_retention_report),
+            encoding="utf-8",
+        )
+    if parallel_passing_report is not None:
+        (run_dir / "parallel_passing_report.json").write_text(
+            json.dumps(parallel_passing_report),
             encoding="utf-8",
         )
     return run_dir
@@ -358,6 +364,23 @@ def test_stage6_gate_uses_parallel_compare_report(tmp_path: Path) -> None:
             "global_cache_slots_mean": 2.0,
             "top1_block_histogram": {"0": 1, "1": 1, "2": 1},
         },
+        parallel_passing_report={
+            "overall_status": "pass",
+            "checks": {
+                "stage6_parallel_stage": True,
+                "parallel_passing_enabled": True,
+                "parallel_route_selected": True,
+                "beam_size_present": True,
+                "beam_size_within_limit": True,
+                "branch_cost_enabled": True,
+                "branch_metrics_present": True,
+                "parallel_branch_active": True,
+                "branch_count_bounded_by_beam": True,
+                "score_margin_measured": True,
+            },
+            "model": {"beam_size": 2, "branch_cost": 0.01},
+            "routing": {"parallel_branch_count": {"max": 2.0}},
+        },
     )
     compare_report = tmp_path / "parallel_compare.json"
     compare_report.write_text(
@@ -378,6 +401,9 @@ def test_stage6_gate_uses_parallel_compare_report(tmp_path: Path) -> None:
     report = json.loads(report_path.read_text(encoding="utf-8"))
     gate = report["gates"]["stage6_to_scale"]
     assert gate["status"] == "pass"
+    assert gate["checks"]["parallel_passing_report_present"] is True
+    assert gate["checks"]["parallel_passing_report_passed"] is True
+    assert gate["checks"]["parallel_branch_count_bounded_by_beam"] is True
     assert gate["checks"]["parallel_compare_report_present"] is True
     assert gate["checks"]["parallel_branch_benefit_proxy"] is True
     assert report["supplemental_reports"]["parallel_compare_report"] == str(compare_report)
@@ -399,5 +425,6 @@ def test_stage6_gate_warns_without_parallel_compare_report(tmp_path: Path) -> No
     report_path = make_stage_gate_report([stage6], output_path=tmp_path / "gate.json")
     gate = json.loads(report_path.read_text(encoding="utf-8"))["gates"]["stage6_to_scale"]
     assert gate["status"] == "warn"
+    assert gate["checks"]["parallel_passing_report_present"] is False
     assert gate["checks"]["parallel_compare_report_present"] is False
     assert gate["checks"]["parallel_branch_benefit_proxy"] is False

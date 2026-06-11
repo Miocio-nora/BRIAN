@@ -336,6 +336,10 @@ Compare top-k weighted fusion against parallel passing:
 
 ```bash
 python scripts/eval.py \
+  --config configs/eval/parallel_passing.yaml \
+  --run <stage6_parallel_run>
+
+python scripts/eval.py \
   --config configs/eval/parallel_compare.yaml \
   --baseline-run <stage5_topk_global_kv_run> \
   --runs <stage6_parallel_run> \
@@ -348,6 +352,7 @@ The comparison report checks that parallel branches are active, branch score mar
 python scripts/eval.py \
   --config configs/eval/stage_gate_eval.yaml \
   --runs <stage0_run> <stage1_run> <stage2_run> <stage3_run> <stage4_run> <stage5_run> <stage6_run> \
+  --parallel-passing-report <stage6_parallel_run>/parallel_passing_report.json \
   --parallel-compare-report reports/parallel_compare.json
 ```
 
