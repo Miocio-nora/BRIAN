@@ -203,6 +203,8 @@ def _bounded_ratio(value: float, denominator: float) -> float:
 
 
 def _finite(value: float | None) -> bool:
+    if isinstance(value, bool):
+        return False
     return isinstance(value, (int, float)) and math.isfinite(float(value))
 
 
@@ -213,6 +215,8 @@ def _bool(value: Any) -> bool:
 
 
 def _num(value: Any) -> float | None:
+    if isinstance(value, bool):
+        return None
     if isinstance(value, (int, float)):
         return float(value)
     return None

@@ -161,6 +161,8 @@ def _bool(value: Any) -> bool:
 
 
 def _num(value: Any) -> float | None:
+    if isinstance(value, bool):
+        return None
     if isinstance(value, (int, float)):
         return float(value)
     return None

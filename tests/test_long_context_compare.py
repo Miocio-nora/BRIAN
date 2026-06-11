@@ -116,3 +116,33 @@ def test_long_context_compare_warns_for_inactive_and_worse_candidate(tmp_path: P
     assert row["checks"]["global_kv_active"] is False
     assert row["checks"]["quality_metrics_present"] is True
     assert row["checks"]["quality_not_worse"] is False
+
+
+def test_long_context_compare_rejects_boolean_metrics(tmp_path: Path) -> None:
+    baseline = _write_long_context_report(
+        tmp_path / "local.json",
+        run_dir="runs/local",
+        exact_match=False,
+        teacher_accuracy=False,
+    )
+    candidate = _write_long_context_report(
+        tmp_path / "global.json",
+        run_dir="runs/global",
+        exact_match=True,
+        teacher_accuracy=True,
+        attention_mass=True,
+        sink_attention_mass=True,
+        window_attention_mass=True,
+        read_gate=True,
+        cache_slots=True,
+    )
+
+    output = make_long_context_comparison_report(baseline, [candidate], output_path=tmp_path / "compare.json")
+    row = json.loads(output.read_text(encoding="utf-8"))["comparisons"][0]
+
+    assert row["status"] == "warn"
+    assert row["baseline_exact_match_accuracy"] is None
+    assert row["candidate_exact_match_accuracy"] is None
+    assert row["global_kv"]["global_attention_mass"] is None
+    assert row["checks"]["global_kv_active"] is False
+    assert row["checks"]["quality_metrics_present"] is False

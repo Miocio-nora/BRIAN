@@ -111,3 +111,28 @@ def test_global_kv_retention_report_fails_unbounded_mass_or_gate(tmp_path: Path)
     assert report["checks"]["global_attention_mass_bounded"] is False
     assert report["checks"]["global_read_gate_nonzero"] is True
     assert report["checks"]["global_read_gate_bounded"] is False
+
+
+def test_global_kv_retention_report_rejects_boolean_metrics(tmp_path: Path) -> None:
+    run_dir = _write_run(
+        tmp_path,
+        sink_slots=1,
+        window_slots=3,
+        summary={
+            "global_attention_mass": True,
+            "global_sink_attention_mass": True,
+            "global_window_attention_mass": True,
+            "global_read_gate_mean": True,
+            "global_cache_slots_mean": True,
+        },
+    )
+
+    report_path = make_global_kv_retention_report(run_dir)
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+
+    assert report["overall_status"] == "fail"
+    assert report["metrics"]["global_attention_mass"] is None
+    assert report["checks"]["global_attention_mass_nonzero"] is False
+    assert report["checks"]["global_read_gate_nonzero"] is False
+    assert report["checks"]["sink_attention_mass_measured"] is False
+    assert report["checks"]["window_utilization_measured"] is False
