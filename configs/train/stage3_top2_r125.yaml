@@ -1,0 +1,3 @@
+extends: stage3_scheduled_free_routing.yaml
+model_config: ../model/brian_r125_top2.yaml
+run_name: auto

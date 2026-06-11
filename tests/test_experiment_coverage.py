@@ -16,9 +16,22 @@ def test_r125_formal_package_coverage_passes(tmp_path: Path) -> None:
 
     assert report["overall_status"] == "pass"
     assert report["profile"] == "package_a_r125_route_core"
-    assert [row["id"] for row in report["requirements"]] == ["A0", "A1", "A2", "A3", "A4", "A5", "A6", "A7"]
+    assert [row["id"] for row in report["requirements"]] == [
+        "A0",
+        "A1",
+        "A2",
+        "A3",
+        "A4",
+        "A5",
+        "A6",
+        "A7",
+        "A8",
+        "A9",
+    ]
     assert _requirement(report, "A5")["checks"]["model_flags_match"] is True
     assert _requirement(report, "A7")["checks"]["loss_weights_match"] is True
+    assert _requirement(report, "A8")["checks"]["model_flags_match"] is True
+    assert _requirement(report, "A9")["checks"]["model_flags_match"] is True
 
 
 def test_r350_scaling_package_coverage_passes(tmp_path: Path) -> None:

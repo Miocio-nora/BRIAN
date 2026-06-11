@@ -34,3 +34,11 @@ ablations:
     name: no_location_loss
     train_config: configs/train/ablation_a7_no_location_loss.yaml
     purpose: Hard-output route-core path without location regularization.
+  - id: A8
+    name: top1_routing
+    train_config: configs/train/stage3_scheduled_free_routing.yaml
+    purpose: Stable top-1 scheduled free-routing baseline.
+  - id: A9
+    name: top2_weighted_routing
+    train_config: configs/train/stage3_top2_r125.yaml
+    purpose: Top-2 weighted route fusion expressivity and compute tradeoff.

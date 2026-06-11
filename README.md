@@ -312,7 +312,10 @@ python scripts/run_experiment.py \
   --dry-run
 ```
 
-This manifest covers A0-A7 from the project plan: fixed baseline, fixed route wrapper, sequential router imitation, skip/recur router imitation, scheduled free routing with block-position state, no-position ablation, no hard output-action ablation, and no-location-loss ablation.
+This manifest covers A0-A9 from the project plan: fixed baseline, fixed route wrapper,
+sequential router imitation, skip/recur router imitation, scheduled free routing with
+block-position state, no-position ablation, no hard output-action ablation,
+no-location-loss ablation, top-1 routing, and top-2 weighted routing.
 
 Audit a formal experiment package manifest before training:
 

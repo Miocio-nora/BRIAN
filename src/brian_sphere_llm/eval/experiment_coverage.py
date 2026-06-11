@@ -97,6 +97,8 @@ def _requirements(profile: str, plan: ExperimentPlan, entries: list[dict[str, An
                 ),
                 _req("A6", "no output action ablation", stage="stage4_scheduled_free_routing", mode="scheduled"),
                 _req("A7", "no location loss ablation", mode="scheduled", loss_weights={"location": 0.0}),
+                _req("A8", "top-1 routing baseline", mode="scheduled", model_flags={"top_k": 1}),
+                _req("A9", "top-2 weighted routing", mode="scheduled", model_flags={"top_k": 2}),
             ],
         )
     if profile == "package_b_r350_scaling":
