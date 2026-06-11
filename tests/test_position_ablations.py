@@ -37,10 +37,28 @@ def test_brian_route_config_rejects_boolean_numeric_fields() -> None:
         _config(global_window_slots=True)
 
 
-def test_brian_route_config_parses_string_false_hard_exit() -> None:
-    cfg = _config(hard_exit="false")
+def test_brian_route_config_parses_boolean_strings() -> None:
+    cfg = _config(
+        hard_exit="false",
+        global_kv="enabled",
+        parallel_passing="off",
+        position_to_router="yes",
+        position_to_blocks="0",
+    )
 
     assert cfg.hard_exit is False
+    assert cfg.global_kv is True
+    assert cfg.parallel_passing is False
+    assert cfg.position_to_router is True
+    assert cfg.position_to_blocks is False
+
+
+def test_brian_route_config_rejects_invalid_boolean_fields() -> None:
+    for key in ["hard_exit", "global_kv", "parallel_passing", "position_to_router", "position_to_blocks"]:
+        with pytest.raises(ValueError, match=key):
+            _config(**{key: "maybe"})
+        with pytest.raises(ValueError, match=key):
+            _config(**{key: 1})
 
 
 def test_no_position_ablation_forward_uses_zero_position_state() -> None:

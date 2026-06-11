@@ -78,10 +78,6 @@ class BrianRouteConfig:
             if not base_config:
                 raise ValueError("BRIAN config requires `base` or `base_config`")
             base_data = load_config(config_dir / str(base_config))
-        global_kv_value = data.get("global_kv", False)
-        global_kv = global_kv_value is True or str(global_kv_value).lower() in {"true", "on", "enabled"}
-        parallel_value = data.get("parallel_passing", False)
-        parallel_passing = parallel_value is True or str(parallel_value).lower() in {"true", "on", "enabled"}
         return cls(
             base=BaselineConfig.from_dict(base_data),
             pre_blocks=_int_value(data["pre_blocks"], "pre_blocks", minimum=0),
@@ -92,8 +88,8 @@ class BrianRouteConfig:
             model_name=str(data.get("model_name", "brian_route_core")),
             top_k=_int_value(data.get("top_k", 1), "top_k", minimum=1),
             later_top_k=_int_value(data.get("later_top_k", 2), "later_top_k", minimum=1),
-            hard_exit=_as_bool(data.get("hard_exit", False)),
-            global_kv=global_kv,
+            hard_exit=_bool_value(data.get("hard_exit", False), "hard_exit"),
+            global_kv=_bool_value(data.get("global_kv", False), "global_kv"),
             global_code_dim=_int_value(
                 data.get("global_code_dim", data.get("block_position_dim", 64)),
                 "global_code_dim",
@@ -107,14 +103,14 @@ class BrianRouteConfig:
                 "global_head_delta_rank",
                 minimum=0,
             ),
-            parallel_passing=parallel_passing,
+            parallel_passing=_bool_value(data.get("parallel_passing", False), "parallel_passing"),
             beam_size=_int_value(data.get("beam_size", 2), "beam_size", minimum=1),
             branch_cost=_float_value(data.get("branch_cost", 0.01), "branch_cost", minimum=0.0),
             parallel_exit_policy=str(data.get("parallel_exit_policy", "branch")),
             block_position_mode=str(data.get("block_position_mode", "open_arc")),
             block_position_injection=str(data.get("block_position_injection", "adapter")),
-            position_to_router=_as_bool(data.get("position_to_router", True)),
-            position_to_blocks=_as_bool(data.get("position_to_blocks", True)),
+            position_to_router=_bool_value(data.get("position_to_router", True), "position_to_router"),
+            position_to_blocks=_bool_value(data.get("position_to_blocks", True), "position_to_blocks"),
             location_bias_weight=_float_value(data.get("location_bias_weight", 0.0), "location_bias_weight", minimum=0.0),
         )
 
@@ -739,12 +735,16 @@ class BrianRouteCore(ModuleBase):
         }
 
 
-def _as_bool(value: Any) -> bool:
+def _bool_value(value: Any, name: str) -> bool:
     if isinstance(value, bool):
         return value
     if isinstance(value, str):
-        return value.lower() in {"1", "true", "yes", "on", "enabled"}
-    return bool(value)
+        lowered = value.strip().lower()
+        if lowered in {"1", "true", "yes", "on", "enabled"}:
+            return True
+        if lowered in {"0", "false", "no", "off", "disabled"}:
+            return False
+    raise ValueError(f"{name} must be a boolean.")
 
 
 def _loss_weights_mapping(loss_weights: Mapping[str, Any] | None) -> Mapping[str, Any]:

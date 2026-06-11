@@ -13,6 +13,7 @@ max_route_steps: 8
 top_k: 1
 later_top_k: 2
 location_bias_weight: 0.1
-global_kv: phase_2_only
+global_kv: false
+global_kv_phase: phase_2_only
 parallel_passing: false
 hard_exit: false

@@ -1,6 +1,7 @@
 from pathlib import Path
 from typing import Any
 
+from brian_sphere_llm.model.brian_model import BrianRouteConfig
 from brian_sphere_llm.train.stage_runner import train_mode_for_stage
 from brian_sphere_llm.utils.config import load_config
 
@@ -166,6 +167,10 @@ def _validate_model_config(config: dict[str, Any], path: Path, errors: list[str]
         )
         if "base_config" not in config and not isinstance(config.get("base"), dict):
             errors.append(f"{path}: brian_route_core requires base_config or base")
+        try:
+            BrianRouteConfig.from_dict(config, config_dir=path.parent)
+        except Exception as exc:
+            errors.append(f"{path}: BrianRouteConfig parse failed: {type(exc).__name__}: {exc}")
         return
     errors.append(f"{path}: unknown model architecture {architecture!r}")
 
