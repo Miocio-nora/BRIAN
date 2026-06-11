@@ -1,0 +1,34 @@
+extends: stage4_output_action.yaml
+stage: stage4_output_action
+model_config: ../model/brian_r350_top2.yaml
+data_config: ../data/r350_main_10b.yaml
+batch_size: 1
+max_steps: 10000
+eval_interval: 500
+save_interval: 1000
+learning_rate: 0.0002
+routing:
+  mode: scheduled
+  pseudo_policy: mixed_skip_recur
+  hard_exit: true
+  schedule:
+    - max_step: 1000
+      router_probability: 0.10
+      lambda_route: 1.0
+    - max_step: 3000
+      router_probability: 0.30
+      lambda_route: 0.5
+    - max_step: 6000
+      router_probability: 0.60
+      lambda_route: 0.2
+    - max_step: 8000
+      router_probability: 0.80
+      lambda_route: 0.05
+    - max_step: 10000
+      router_probability: 1.00
+      lambda_route: 0.05
+loss_weights:
+  route: 0.05
+  balance: 0.01
+  cost: 0.01
+  location: 0.02

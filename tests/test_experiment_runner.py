@@ -4,6 +4,8 @@ from pathlib import Path
 import yaml
 
 from brian_sphere_llm.experiments.runner import build_experiment_plan, run_experiment
+from brian_sphere_llm.train.stage_runner import train_mode_for_stage
+from brian_sphere_llm.utils.config import load_config
 
 
 def test_build_experiment_plan_resolves_repo_paths() -> None:
@@ -31,6 +33,24 @@ def test_parallel_experiment_manifest_resolves_repo_paths() -> None:
     assert plan.entries[0].train_config.name == "stage5_tiny_debug.yaml"
     assert [entry.id for entry in plan.entries[1:]] == ["PP0", "PP1"]
     assert plan.entries[2].train_config.name == "stage6_tiny_debug.yaml"
+
+
+def test_r350_scaling_experiment_manifest_resolves_repo_paths() -> None:
+    plan = build_experiment_plan("configs/experiments/route_core_r350_scaling.yaml", include_baseline=True)
+    assert plan.experiment_name == "route_core_r350_scaling"
+    assert plan.entries[0].role == "baseline"
+    assert plan.entries[0].train_config.name == "stage0_r350_baseline.yaml"
+    assert [entry.id for entry in plan.entries[1:]] == ["B0", "B1", "B2", "B3", "B4"]
+    assert plan.entries[2].train_config.name == "stage4_r350_output_action.yaml"
+    assert plan.entries[4].train_config.name == "ablation_b3_r350_no_output_action.yaml"
+    stages = [load_config(entry.train_config)["stage"] for entry in plan.entries[1:]]
+    assert [train_mode_for_stage(stage) for stage in stages] == [
+        "baseline",
+        "scheduled",
+        "scheduled",
+        "scheduled",
+        "pseudo",
+    ]
 
 
 def test_run_experiment_dry_run_writes_resolved_plan(tmp_path: Path) -> None:

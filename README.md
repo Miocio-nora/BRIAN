@@ -253,6 +253,16 @@ python scripts/run_experiment.py \
 
 The fast smoke manifest is `configs/experiments/tiny_parallel_passing.yaml`; the BRIAN-R125 sweep manifest is `configs/experiments/route_core_parallel_passing.yaml`. These cover PP0 top-k weighted fusion and PP1 beam-2 independent branch passing.
 
+Resolve the first BRIAN-R350 scaling package:
+
+```bash
+python scripts/run_experiment.py \
+  --config configs/experiments/route_core_r350_scaling.yaml \
+  --dry-run
+```
+
+This manifest covers the Package B scaffold from the project plan: B0 fixed 350M baseline, B1 routed main, B2 no-position ablation, B3 no hard output-action ablation, and B4 current `mixed_skip_recur` difficulty-pattern pseudo-route curriculum. It uses `configs/data/r350_main_10b.yaml` and B200-compatible bf16 training configs.
+
 Run tests:
 
 ```bash

@@ -1,0 +1,4 @@
+extends: brian_r350.yaml
+model_name: brian_r350_top2
+top_k: 2
+hard_exit: true

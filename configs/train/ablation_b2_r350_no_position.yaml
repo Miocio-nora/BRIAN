@@ -1,0 +1,7 @@
+extends: stage4_r350_output_action.yaml
+model_config: ../model/brian_r350_no_position.yaml
+loss_weights:
+  route: 0.05
+  balance: 0.01
+  cost: 0.01
+  location: 0.0

@@ -1,0 +1,11 @@
+extends: stage4_r350_output_action.yaml
+stage: stage3_pseudo_skip_recur
+routing:
+  mode: pseudo
+  pseudo_policy: mixed_skip_recur
+  hard_exit: false
+loss_weights:
+  route: 1.0
+  balance: 0.01
+  cost: 0.001
+  location: 0.05
