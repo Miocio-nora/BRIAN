@@ -65,3 +65,18 @@ def test_summarize_routes_reports_path_examples_and_position_trajectories() -> N
     assert summary["position_norm_mean"] == pytest.approx(0.75)
     assert summary["location_distance_trajectory"] == [0.25, 0.75]
     assert summary["location_distance_mean"] == pytest.approx(0.5)
+
+
+def test_summarize_routes_derives_global_read_ratios() -> None:
+    route_info = {
+        "global_read_gate": [
+            torch.tensor(0.25),
+            torch.tensor(0.75),
+        ],
+    }
+    summary = summarize_routes(route_info, num_internal_blocks=2)
+
+    assert summary["global_read_gate_mean"] == pytest.approx(0.5)
+    assert summary["local_read_fraction_mean"] == pytest.approx(0.5)
+    assert summary["global_to_local_read_ratio"] == pytest.approx(1.0)
+    assert summary["local_to_global_read_ratio"] == pytest.approx(1.0)

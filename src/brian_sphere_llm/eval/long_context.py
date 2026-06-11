@@ -276,11 +276,17 @@ def _routing_summary(rows: list[dict[str, Any]]) -> dict[str, float | None]:
 
 
 def _global_kv_summary(rows: list[dict[str, Any]]) -> dict[str, float | None]:
+    read_gate = _mean([row.get("routing_global_read_gate_mean") for row in rows])
+    read_gate = min(1.0, max(0.0, read_gate)) if read_gate is not None else None
+    local_fraction = 1.0 - read_gate if read_gate is not None else None
     return {
         "global_attention_mass": _mean([row.get("routing_global_attention_mass") for row in rows]),
         "global_sink_attention_mass": _mean([row.get("routing_global_sink_attention_mass") for row in rows]),
         "global_window_attention_mass": _mean([row.get("routing_global_window_attention_mass") for row in rows]),
-        "global_read_gate_mean": _mean([row.get("routing_global_read_gate_mean") for row in rows]),
+        "global_read_gate_mean": read_gate,
+        "local_read_fraction_mean": local_fraction,
+        "global_to_local_read_ratio": _bounded_ratio(read_gate, local_fraction),
+        "local_to_global_read_ratio": _bounded_ratio(local_fraction, read_gate),
         "global_cache_slots_mean": _mean([row.get("routing_global_cache_slots_mean") for row in rows]),
     }
 
@@ -318,6 +324,11 @@ def _memory_budget_summary(config: dict[str, Any], rows: list[dict[str, Any]]) -
         if global_enabled and global_mean_slots is not None and global_code_dim is not None
         else None
     )
+    global_window_used_slots = (
+        max(0.0, global_mean_slots - global_sink_slots)
+        if global_enabled and global_mean_slots is not None
+        else None
+    )
     return {
         "estimation": "fp16_kv_and_global_code_bytes",
         "context_length": context_length,
@@ -330,8 +341,11 @@ def _memory_budget_summary(config: dict[str, Any], rows: list[dict[str, Any]]) -
         "global_sink_slots": global_sink_slots,
         "global_window_slots": global_window_slots,
         "estimated_global_cache_capacity_slots": global_capacity_slots,
+        "estimated_global_cache_window_used_slots": global_window_used_slots,
         "estimated_global_cache_capacity_bytes_fp16": global_capacity_bytes,
         "estimated_global_cache_mean_bytes_fp16": global_mean_bytes,
+        "estimated_global_cache_window_utilization": _ratio(global_window_used_slots, global_window_slots),
+        "estimated_global_cache_capacity_utilization": _ratio(global_mean_slots, global_capacity_slots),
         "estimated_global_cache_capacity_to_local_context_ratio": _ratio(global_capacity_bytes, local_context_bytes),
         "estimated_global_cache_mean_to_local_context_ratio": _ratio(global_mean_bytes, local_context_bytes),
     }
@@ -359,6 +373,12 @@ def _ratio(numerator: float | None, denominator: float | None) -> float | None:
     if numerator is None or denominator is None or denominator <= 0.0:
         return None
     return numerator / denominator
+
+
+def _bounded_ratio(numerator: float | None, denominator: float | None) -> float | None:
+    if numerator is None or denominator is None:
+        return None
+    return numerator / max(1e-9, denominator)
 
 
 def _as_bool(value: Any) -> bool:

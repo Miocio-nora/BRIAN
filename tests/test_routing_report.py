@@ -19,6 +19,10 @@ def test_routing_report_preserves_latest_route_examples_and_trajectories(tmp_pat
                 "active_block_evals_per_token": 0.5,
                 "average_route_steps": 2.0,
                 "p_output_mean": 0.25,
+                "global_read_gate_mean": 0.25,
+                "local_read_fraction_mean": 0.75,
+                "global_to_local_read_ratio": 1 / 3,
+                "local_to_global_read_ratio": 3.0,
                 "tokens_per_second": 10,
                 "train_step_time_seconds": 0.2,
                 "train_latency_ms_per_token": 20.0,
@@ -36,6 +40,10 @@ def test_routing_report_preserves_latest_route_examples_and_trajectories(tmp_pat
                 "active_block_evals_per_token": 0.25,
                 "average_route_steps": 1.0,
                 "p_output_mean": 0.75,
+                "global_read_gate_mean": 0.75,
+                "local_read_fraction_mean": 0.25,
+                "global_to_local_read_ratio": 3.0,
+                "local_to_global_read_ratio": 1 / 3,
                 "tokens_per_second": 20,
                 "train_step_time_seconds": 0.1,
                 "train_latency_ms_per_token": 5.0,
@@ -66,6 +74,10 @@ def test_routing_report_preserves_latest_route_examples_and_trajectories(tmp_pat
     report = json.loads(output.read_text(encoding="utf-8"))
 
     assert report["summary"]["route_entropy"] == 0.2
+    assert report["summary"]["global_read_gate_mean"] == 0.5
+    assert report["summary"]["local_read_fraction_mean"] == 0.5
+    assert report["summary"]["global_to_local_read_ratio"] == pytest.approx((1 / 3 + 3.0) / 2)
+    assert report["summary"]["local_to_global_read_ratio"] == pytest.approx((3.0 + 1 / 3) / 2)
     assert report["latest_block_histogram"] == {"0": 0, "1": 1, "2": 1}
     assert report["latest_exit_step_distribution"] == [1, 1]
     assert report["latest_first_exit_step_histogram"] == {"1": 1}

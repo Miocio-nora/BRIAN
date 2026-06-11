@@ -107,7 +107,12 @@ def summarize_routes(route_info: dict[str, Any], num_internal_blocks: int) -> di
         summary["global_window_attention_mass"] = float(mass.mean().detach().cpu())
     if "global_read_gate" in route_info and route_info["global_read_gate"]:
         gate = torch.stack(route_info["global_read_gate"])
-        summary["global_read_gate_mean"] = float(gate.mean().detach().cpu())
+        gate_mean = min(1.0, max(0.0, float(gate.mean().detach().cpu())))
+        local_mean = max(0.0, 1.0 - gate_mean)
+        summary["global_read_gate_mean"] = gate_mean
+        summary["local_read_fraction_mean"] = local_mean
+        summary["global_to_local_read_ratio"] = gate_mean / max(1e-9, local_mean)
+        summary["local_to_global_read_ratio"] = local_mean / max(1e-9, gate_mean)
     if "global_cache_slots" in route_info and route_info["global_cache_slots"]:
         slots = torch.stack(route_info["global_cache_slots"])
         summary["global_cache_slots_mean"] = float(slots.mean().detach().cpu())

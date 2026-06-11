@@ -15,6 +15,9 @@ GLOBAL_KV_KEYS = [
     "global_sink_attention_mass",
     "global_window_attention_mass",
     "global_read_gate_mean",
+    "local_read_fraction_mean",
+    "global_to_local_read_ratio",
+    "local_to_global_read_ratio",
     "global_cache_slots_mean",
 ]
 
@@ -45,6 +48,13 @@ def make_global_kv_retention_report(
     window_mass = metrics["global_window_attention_mass"]
     read_gate = metrics["global_read_gate_mean"]
     cache_slots = metrics["global_cache_slots_mean"]
+    _add_derived_metrics(
+        metrics,
+        metric_sources,
+        sink_slots=sink_slots,
+        window_slots=window_slots,
+        retention_capacity=retention_capacity,
+    )
 
     checks = {
         "stage5_global_kv_stage": str(config.get("stage", "")) == "stage5_global_kv",
@@ -61,6 +71,9 @@ def make_global_kv_retention_report(
         "cache_slots_within_retention_capacity": (
             _finite(cache_slots) and retention_capacity > 0 and float(cache_slots) <= retention_capacity + capacity_slack
         ),
+        "read_ratio_measured": _finite(metrics["global_to_local_read_ratio"])
+        and _finite(metrics["local_to_global_read_ratio"]),
+        "window_utilization_measured": _finite(metrics["global_cache_window_utilization"]),
     }
     report = {
         "run_dir": str(run_dir),
@@ -125,6 +138,39 @@ def _global_kv_metrics(
     return metrics, sources
 
 
+def _add_derived_metrics(
+    metrics: dict[str, float | None],
+    sources: dict[str, str | None],
+    *,
+    sink_slots: int,
+    window_slots: int,
+    retention_capacity: int,
+) -> None:
+    read_gate = metrics.get("global_read_gate_mean")
+    if _finite(read_gate):
+        global_fraction = min(1.0, max(0.0, float(read_gate)))
+        local_fraction = 1.0 - global_fraction
+        metrics["local_read_fraction_mean"] = local_fraction
+        metrics["global_to_local_read_ratio"] = _bounded_ratio(global_fraction, local_fraction)
+        metrics["local_to_global_read_ratio"] = _bounded_ratio(local_fraction, global_fraction)
+        sources["local_read_fraction_mean"] = "derived_from_global_read_gate_mean"
+        sources["global_to_local_read_ratio"] = "derived_from_global_read_gate_mean"
+        sources["local_to_global_read_ratio"] = "derived_from_global_read_gate_mean"
+    cache_slots = metrics.get("global_cache_slots_mean")
+    if _finite(cache_slots):
+        cache_slots_float = max(0.0, float(cache_slots))
+        window_used = max(0.0, cache_slots_float - float(max(0, sink_slots)))
+        metrics["global_cache_window_utilization"] = _ratio(window_used, float(window_slots))
+        metrics["global_cache_capacity_utilization"] = _ratio(cache_slots_float, float(retention_capacity))
+        sources["global_cache_window_utilization"] = "derived_from_global_cache_slots_mean"
+        sources["global_cache_capacity_utilization"] = "derived_from_global_cache_slots_mean"
+    else:
+        metrics["global_cache_window_utilization"] = None
+        metrics["global_cache_capacity_utilization"] = None
+        sources["global_cache_window_utilization"] = None
+        sources["global_cache_capacity_utilization"] = None
+
+
 def _at_least(value: float | None, minimum: float) -> bool:
     return _finite(value) and float(value) >= minimum
 
@@ -142,6 +188,16 @@ def _mass_conserved(
     if not (_finite(attention_mass) and _finite(sink_mass) and _finite(window_mass)):
         return False
     return abs(float(attention_mass) - float(sink_mass) - float(window_mass)) <= tolerance
+
+
+def _ratio(value: float | None, denominator: float | None) -> float | None:
+    if not (_finite(value) and _finite(denominator)) or float(denominator) <= 0.0:
+        return None
+    return float(value) / float(denominator)
+
+
+def _bounded_ratio(value: float, denominator: float) -> float:
+    return float(value) / max(1e-9, float(denominator))
 
 
 def _finite(value: float | None) -> bool:

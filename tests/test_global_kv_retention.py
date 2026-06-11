@@ -1,6 +1,7 @@
 import json
 from pathlib import Path
 
+import pytest
 import yaml
 
 from brian_sphere_llm.eval.global_kv_retention import make_global_kv_retention_report
@@ -54,7 +55,15 @@ def test_global_kv_retention_report_passes_sink_window_policy(tmp_path: Path) ->
     assert report["checks"]["window_slots_configured"] is True
     assert report["checks"]["sink_window_mass_conserved"] is True
     assert report["checks"]["cache_slots_within_retention_capacity"] is True
+    assert report["checks"]["read_ratio_measured"] is True
+    assert report["checks"]["window_utilization_measured"] is True
+    assert report["metrics"]["local_read_fraction_mean"] == 0.98
+    assert report["metrics"]["global_to_local_read_ratio"] == pytest.approx(0.02 / 0.98)
+    assert report["metrics"]["local_to_global_read_ratio"] == pytest.approx(0.98 / 0.02)
+    assert report["metrics"]["global_cache_window_utilization"] == pytest.approx(1 / 3)
+    assert report["metrics"]["global_cache_capacity_utilization"] == 0.5
     assert report["metric_sources"]["global_sink_attention_mass"] == "routing_summary"
+    assert report["metric_sources"]["global_cache_window_utilization"] == "derived_from_global_cache_slots_mean"
 
 
 def test_global_kv_retention_report_fails_missing_sink_or_window_metrics(tmp_path: Path) -> None:

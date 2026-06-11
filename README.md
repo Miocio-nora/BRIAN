@@ -547,7 +547,7 @@ Routing behavior is a first-class research output. Every routed model should rep
 - latency/token, train step time, inference timing, and CUDA memory snapshots;
 - difficulty-step correlation;
 - `OUT` probability by difficulty.
-Global KV reports additionally track global read gate, global cache slots, sink attention mass, and window attention mass.
+Global KV reports additionally track global read gate, local/global read ratios, global cache slots, sink/window attention mass, and cache window/capacity utilization.
 
 The most important route-core diagnostic is:
 
