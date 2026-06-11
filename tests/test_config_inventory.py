@@ -127,6 +127,44 @@ def test_planned_data_recipe_ladder_is_declared() -> None:
         assert config["manifest_path"].endswith(f"{recipe_name}.jsonl")
 
 
+def test_scaled_data_recipes_taper_synthetic_routing_share() -> None:
+    by_name = {load_config(path)["recipe_name"]: load_config(path) for path in _yaml_files(CONFIG_ROOT / "data")}
+
+    r125_weights = [
+        _mixture_weight(by_name["r125_smoke"], "synthetic_routing"),
+        _mixture_weight(by_name["r125_main_2b"], "synthetic_routing"),
+        _mixture_weight(by_name["r125_main_5b"], "synthetic_routing"),
+    ]
+    r350_weights = [
+        _mixture_weight(by_name["r350_main_10b"], "synthetic_routing"),
+        _mixture_weight(by_name["r350_main_30b"], "synthetic_routing"),
+    ]
+    r1b_weights = [
+        _mixture_weight(by_name["r1b_pilot_10b"], "synthetic_routing"),
+        _mixture_weight(by_name["r1b_main_50b"], "synthetic_routing"),
+    ]
+
+    assert all(math.isclose(weight, 0.10) for weight in r125_weights)
+    assert all(0.05 <= weight <= 0.10 for weight in r350_weights)
+    assert all(0.02 <= weight <= 0.05 for weight in r1b_weights)
+    assert max(r125_weights) > max(r350_weights) > max(r1b_weights)
+
+
+def test_non_synthetic_data_recipe_mixtures_are_normalized() -> None:
+    for path in _yaml_files(CONFIG_ROOT / "data"):
+        config = load_config(path)
+        if config.get("synthetic_only", {}).get("enabled") is True:
+            continue
+        weights = [
+            float(item["weight"])
+            for item in config.get("mixture", {}).values()
+            if isinstance(item, dict) and "weight" in item
+        ]
+
+        assert weights, f"{path}: non-synthetic recipes must declare mixture weights"
+        assert math.isclose(sum(weights), 1.0, rel_tol=0.0, abs_tol=1e-9), path
+
+
 def test_data_config_validation_rejects_invalid_numeric_and_mixture_values() -> None:
     config = load_config(CONFIG_ROOT / "data" / "r125_smoke.yaml")
     errors: list[str] = []
@@ -160,6 +198,17 @@ def _load_config(path: Path, errors: list[str]) -> dict[str, Any]:
     except Exception as exc:
         errors.append(f"{path}: {type(exc).__name__}: {exc}")
         return {}
+
+
+def _mixture_weight(config: dict[str, Any], tag: str) -> float:
+    mixture = config.get("mixture", {})
+    if not isinstance(mixture, dict):
+        return 0.0
+    item = mixture.get(tag, {})
+    if not isinstance(item, dict):
+        return 0.0
+    value = item.get("weight", 0.0)
+    return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else 0.0
 
 
 def _resolve_reference(
