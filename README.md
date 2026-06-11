@@ -283,6 +283,8 @@ python scripts/eval.py \
   --long-context-compare-report reports/long_context_compare.json
 ```
 
+Stage 5 gates also compare standard validation loss against the Stage 4 run, require the loss ratio to stay within `stage5_loss_ratio_max`, and require the retention report to include bounded attention/read-gate values, sink/window mass conservation, local/global read-ratio diagnostics, and cache-window utilization.
+
 Generate a compute-adjusted comparison report:
 
 ```bash

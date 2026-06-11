@@ -177,6 +177,63 @@ def _hard_exit_compare_report(*, overall_status: str = "pass", checks: dict[str,
     }
 
 
+def _global_kv_retention_report(*, checks: dict[str, bool] | None = None) -> dict:
+    report_checks = {
+        "stage5_global_kv_stage": True,
+        "global_kv_enabled": True,
+        "sink_slots_configured": True,
+        "window_slots_configured": True,
+        "retention_capacity_present": True,
+        "global_attention_mass_nonzero": True,
+        "global_attention_mass_bounded": True,
+        "global_read_gate_nonzero": True,
+        "global_read_gate_bounded": True,
+        "global_cache_slots_present": True,
+        "sink_attention_mass_measured": True,
+        "window_attention_mass_measured": True,
+        "sink_window_mass_conserved": True,
+        "cache_slots_within_retention_capacity": True,
+        "read_ratio_measured": True,
+        "window_utilization_measured": True,
+    }
+    if checks is not None:
+        report_checks |= checks
+    return {
+        "overall_status": "pass" if all(report_checks.values()) else "fail",
+        "model": {
+            "global_kv_enabled": True,
+            "global_sink_slots": 1,
+            "global_window_slots": 3,
+            "retention_capacity_slots": 4,
+        },
+        "metrics": {
+            "global_attention_mass": 1.0,
+            "global_sink_attention_mass": 0.25,
+            "global_window_attention_mass": 0.75,
+            "global_read_gate_mean": 0.01,
+            "global_cache_slots_mean": 2.0,
+        },
+        "checks": report_checks,
+    }
+
+
+def _long_context_compare_report(*, checks: dict[str, bool] | None = None) -> dict:
+    comparison_checks = {
+        "global_kv_active": True,
+        "quality_metrics_present": True,
+        "quality_not_worse": True,
+        "memory_budget_present": True,
+        "global_budget_below_local_context": True,
+    }
+    if checks is not None:
+        comparison_checks |= checks
+    return {
+        "overall_status": "pass" if all(comparison_checks.values()) else "warn",
+        "candidate_count": 1,
+        "comparisons": [{"status": "pass" if all(comparison_checks.values()) else "warn", "checks": comparison_checks}],
+    }
+
+
 def _data_manifest_ref() -> dict:
     return {
         "recipe_name": "unit_data",
@@ -347,6 +404,17 @@ def test_stage_gate_report_writes_json(tmp_path: Path) -> None:
             ],
         },
     )
+    stage4 = _write_run(
+        tmp_path,
+        "stage4",
+        stage="stage4_output_action",
+        val_loss=10.5,
+        train_row={
+            "average_route_steps": 2.0,
+            "first_exit_step_histogram": {"1": 1, "2": 2},
+            "top1_block_histogram": {"0": 1, "1": 1, "2": 1},
+        },
+    )
     stage5 = _write_run(
         tmp_path,
         "global",
@@ -380,12 +448,16 @@ def test_stage_gate_report_writes_json(tmp_path: Path) -> None:
                 "window_slots_configured": True,
                 "retention_capacity_present": True,
                 "global_attention_mass_nonzero": True,
+                "global_attention_mass_bounded": True,
                 "global_read_gate_nonzero": True,
+                "global_read_gate_bounded": True,
                 "global_cache_slots_present": True,
                 "sink_attention_mass_measured": True,
                 "window_attention_mass_measured": True,
                 "sink_window_mass_conserved": True,
                 "cache_slots_within_retention_capacity": True,
+                "read_ratio_measured": True,
+                "window_utilization_measured": True,
             },
         },
     )
@@ -413,12 +485,12 @@ def test_stage_gate_report_writes_json(tmp_path: Path) -> None:
     )
     output = tmp_path / "gate.json"
     report_path = make_stage_gate_report(
-        [baseline, fixed, stage2, stage3, stage5],
+        [baseline, fixed, stage2, stage3, stage4, stage5],
         output_path=output,
         long_context_compare_report_path=long_context_compare,
     )
     report = json.loads(report_path.read_text(encoding="utf-8"))
-    assert report["run_count"] == 5
+    assert report["run_count"] == 6
     assert report["gates"]["stage0_to_1"]["status"] == "pass"
     assert report["gates"]["stage0_to_1"]["checks"]["checkpoint_resume_event"] is True
     assert report["gates"]["stage0_to_1"]["checks"]["checkpoint_resume_event_valid"] is True
@@ -457,7 +529,12 @@ def test_stage_gate_report_writes_json(tmp_path: Path) -> None:
     assert report["gates"]["stage3_to_4"]["checks"]["difficulty_step_correlation_positive"] is True
     assert report["gates"]["stage5_to_6"]["status"] == "pass"
     assert report["gates"]["stage5_to_6"]["checks"]["global_kv_retention_passed"] is True
+    assert report["gates"]["stage5_to_6"]["checks"]["stage4_reference_validation_loss_present"] is True
+    assert report["gates"]["stage5_to_6"]["checks"]["validation_loss_not_worse_than_stage4"] is True
     assert report["gates"]["stage5_to_6"]["checks"]["sink_window_attention_measured"] is True
+    assert report["gates"]["stage5_to_6"]["checks"]["local_global_read_ratio_measured"] is True
+    assert report["gates"]["stage5_to_6"]["checks"]["global_cache_window_utilization_measured"] is True
+    assert report["gates"]["stage5_to_6"]["loss_ratio_vs_stage4"] == 11.0 / 10.5
     assert report["supplemental_reports"]["long_context_compare_report"] == str(long_context_compare)
 
 
@@ -1377,6 +1454,17 @@ def test_stage5_gate_warns_without_long_context_compare_report(tmp_path: Path) -
 
 
 def test_stage5_gate_requires_long_context_compare_key_checks(tmp_path: Path) -> None:
+    stage4 = _write_run(
+        tmp_path,
+        "stage4",
+        stage="stage4_output_action",
+        val_loss=10.0,
+        train_row={
+            "average_route_steps": 2.0,
+            "first_exit_step_histogram": {"1": 1, "2": 2},
+            "top1_block_histogram": {"0": 1, "1": 1, "2": 1},
+        },
+    )
     stage5 = _write_run(
         tmp_path,
         "global",
@@ -1410,12 +1498,16 @@ def test_stage5_gate_requires_long_context_compare_key_checks(tmp_path: Path) ->
                 "window_slots_configured": True,
                 "retention_capacity_present": True,
                 "global_attention_mass_nonzero": True,
+                "global_attention_mass_bounded": True,
                 "global_read_gate_nonzero": True,
+                "global_read_gate_bounded": True,
                 "global_cache_slots_present": True,
                 "sink_attention_mass_measured": True,
                 "window_attention_mass_measured": True,
                 "sink_window_mass_conserved": True,
                 "cache_slots_within_retention_capacity": True,
+                "read_ratio_measured": True,
+                "window_utilization_measured": True,
             },
         },
     )
@@ -1432,7 +1524,7 @@ def test_stage5_gate_requires_long_context_compare_key_checks(tmp_path: Path) ->
     )
 
     report_path = make_stage_gate_report(
-        [stage5],
+        [stage4, stage5],
         output_path=tmp_path / "gate.json",
         long_context_compare_report_path=compare_report,
     )
@@ -1441,6 +1533,91 @@ def test_stage5_gate_requires_long_context_compare_key_checks(tmp_path: Path) ->
     assert gate["status"] == "warn"
     assert gate["checks"]["long_context_compare_passed"] is True
     assert gate["checks"]["long_context_global_kv_benefit_proxy"] is False
+
+
+def test_stage5_gate_requires_lm_loss_not_worse_than_stage4(tmp_path: Path) -> None:
+    stage4 = _write_run(
+        tmp_path,
+        "stage4",
+        stage="stage4_output_action",
+        val_loss=10.0,
+        train_row={
+            "average_route_steps": 2.0,
+            "first_exit_step_histogram": {"1": 1, "2": 2},
+            "top1_block_histogram": {"0": 1, "1": 1, "2": 1},
+        },
+    )
+    stage5 = _write_run(
+        tmp_path,
+        "global",
+        stage="stage5_global_kv",
+        val_loss=11.0,
+        train_row={
+            "global_attention_mass": 1.0,
+            "global_read_gate_mean": 0.01,
+            "global_cache_slots_mean": 2.0,
+            "top1_block_histogram": {"0": 1, "1": 1, "2": 1},
+        },
+        global_kv_retention_report=_global_kv_retention_report(),
+    )
+    compare_report = tmp_path / "long_context_compare.json"
+    compare_report.write_text(json.dumps(_long_context_compare_report()), encoding="utf-8")
+
+    report_path = make_stage_gate_report(
+        [stage4, stage5],
+        output_path=tmp_path / "gate.json",
+        long_context_compare_report_path=compare_report,
+    )
+    gate = json.loads(report_path.read_text(encoding="utf-8"))["gates"]["stage5_to_6"]
+
+    assert gate["status"] == "warn"
+    assert gate["checks"]["stage4_reference_validation_loss_present"] is True
+    assert gate["checks"]["validation_loss_not_worse_than_stage4"] is False
+    assert gate["loss_ratio_vs_stage4"] == 1.1
+
+
+def test_stage5_gate_requires_local_global_adapter_diagnostics(tmp_path: Path) -> None:
+    stage4 = _write_run(
+        tmp_path,
+        "stage4",
+        stage="stage4_output_action",
+        val_loss=10.0,
+        train_row={
+            "average_route_steps": 2.0,
+            "first_exit_step_histogram": {"1": 1, "2": 2},
+            "top1_block_histogram": {"0": 1, "1": 1, "2": 1},
+        },
+    )
+    retention_report = _global_kv_retention_report()
+    retention_report["checks"]["read_ratio_measured"] = False
+    retention_report["checks"]["window_utilization_measured"] = False
+    stage5 = _write_run(
+        tmp_path,
+        "global",
+        stage="stage5_global_kv",
+        val_loss=10.0,
+        train_row={
+            "global_attention_mass": 1.0,
+            "global_read_gate_mean": 0.01,
+            "global_cache_slots_mean": 2.0,
+            "top1_block_histogram": {"0": 1, "1": 1, "2": 1},
+        },
+        global_kv_retention_report=retention_report,
+    )
+    compare_report = tmp_path / "long_context_compare.json"
+    compare_report.write_text(json.dumps(_long_context_compare_report()), encoding="utf-8")
+
+    report_path = make_stage_gate_report(
+        [stage4, stage5],
+        output_path=tmp_path / "gate.json",
+        long_context_compare_report_path=compare_report,
+    )
+    gate = json.loads(report_path.read_text(encoding="utf-8"))["gates"]["stage5_to_6"]
+
+    assert gate["status"] == "warn"
+    assert gate["checks"]["global_kv_retention_passed"] is True
+    assert gate["checks"]["local_global_read_ratio_measured"] is False
+    assert gate["checks"]["global_cache_window_utilization_measured"] is False
 
 
 def test_stage6_gate_uses_parallel_compare_report(tmp_path: Path) -> None:

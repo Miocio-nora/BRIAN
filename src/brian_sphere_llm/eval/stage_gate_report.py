@@ -13,6 +13,7 @@ from brian_sphere_llm.utils.logging import write_json
 DEFAULT_THRESHOLDS = {
     "fixed_route_loss_ratio_max": 1.03,
     "stage3_loss_ratio_max": 1.20,
+    "stage5_loss_ratio_max": 1.05,
     "route_imitation_fixed_min": 0.98,
     "route_imitation_mixed_min": 0.90,
     "route_entropy_min": 0.05,
@@ -72,6 +73,7 @@ def make_stage_gate_report(
             thresholds,
             long_context_compare_report,
             global_kv_retention_report,
+            by_stage.get("stage4_output_action"),
         ),
         "stage6_to_scale": _gate_stage6(
             parallel_stage,
@@ -476,7 +478,16 @@ def _gate_stage5(
     thresholds: dict[str, float],
     long_context_compare_report: dict[str, Any] | None = None,
     global_kv_retention_report: dict[str, Any] | None = None,
+    stage4_reference: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    loss_ratio = None
+    if (
+        stage5
+        and stage4_reference
+        and _finite(stage5.get("validation_loss"))
+        and _finite(stage4_reference.get("validation_loss"))
+    ):
+        loss_ratio = stage5["validation_loss"] / max(1e-9, stage4_reference["validation_loss"])
     comparisons = long_context_compare_report.get("comparisons", []) if long_context_compare_report else []
     long_context_key_checks = [
         "global_kv_active",
@@ -493,11 +504,19 @@ def _gate_stage5(
         "global_cache_slots_present": _metric_at_least(stage5, "global_cache_slots_mean", 1.0),
         "global_kv_retention_report_present": bool(retention_report),
         "global_kv_retention_passed": bool(retention_report.get("overall_status") == "pass"),
+        "stage4_reference_validation_loss_present": loss_ratio is not None,
+        "validation_loss_not_worse_than_stage4": loss_ratio is not None
+        and loss_ratio <= thresholds["stage5_loss_ratio_max"],
         "sink_window_retention_configured": bool(retention_checks.get("sink_slots_configured", False))
         and bool(retention_checks.get("window_slots_configured", False)),
         "sink_window_attention_measured": bool(retention_checks.get("sink_attention_mass_measured", False))
         and bool(retention_checks.get("window_attention_mass_measured", False)),
+        "global_attention_mass_bounded": bool(retention_checks.get("global_attention_mass_bounded", False)),
+        "global_read_gate_bounded": bool(retention_checks.get("global_read_gate_bounded", False)),
+        "sink_window_mass_conserved": bool(retention_checks.get("sink_window_mass_conserved", False)),
         "cache_slots_within_retention_capacity": bool(retention_checks.get("cache_slots_within_retention_capacity", False)),
+        "local_global_read_ratio_measured": bool(retention_checks.get("read_ratio_measured", False)),
+        "global_cache_window_utilization_measured": bool(retention_checks.get("window_utilization_measured", False)),
         "long_context_compare_report_present": bool(long_context_compare_report),
         "long_context_compare_passed": bool(
             long_context_compare_report and long_context_compare_report.get("overall_status") == "pass"
@@ -518,6 +537,8 @@ def _gate_stage5(
             "global_kv_retention_checks": retention_checks,
             "global_kv_retention_metrics": retention_report.get("metrics", {}) if retention_report else {},
             "global_kv_retention_model": retention_report.get("model", {}) if retention_report else {},
+            "loss_ratio_vs_stage4": loss_ratio,
+            "stage5_loss_ratio_max": thresholds["stage5_loss_ratio_max"],
             "long_context_compare_status": long_context_compare_report.get("overall_status") if long_context_compare_report else None,
             "long_context_compare_candidate_count": long_context_compare_report.get("candidate_count")
             if long_context_compare_report
