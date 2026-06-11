@@ -139,6 +139,8 @@ def _ratio(value: Any, baseline: Any) -> float | None:
 
 
 def _num(value: Any) -> float | None:
+    if isinstance(value, bool):
+        return None
     if isinstance(value, (int, float)):
         return float(value)
     return None

@@ -155,6 +155,79 @@ def test_summarize_run_marks_stage4_output_action_as_hard_exit_by_default(tmp_pa
     assert summary["hard_exit_enabled"] is True
 
 
+def test_summarize_run_rejects_boolean_numeric_metrics(tmp_path: Path) -> None:
+    run_dir = tmp_path / "boolean_metrics"
+    run_dir.mkdir()
+    (run_dir / "config_resolved.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "stage": "stage3_scheduled_free_routing",
+                "batch_size": 2,
+                "data_config_resolved": {"sequence_length": 8},
+                "model_config_resolved": {"top_k": True},
+            }
+        ),
+        encoding="utf-8",
+    )
+    _write_json(
+        run_dir / "model_stats.json",
+        {"model_name": "boolean_metrics", "parameter_count": 100, "pre_blocks": 1, "route_pool_blocks": 2, "post_blocks": 1},
+    )
+    (run_dir / "train_log.jsonl").write_text(
+        json.dumps(
+            {
+                "step": 2,
+                "loss": True,
+                "tokens_per_second": True,
+                "train_step_time_seconds": True,
+                "train_latency_ms_per_token": True,
+                "cuda_memory_allocated_mb": True,
+                "cuda_max_memory_allocated_mb": True,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (run_dir / "eval_log.jsonl").write_text(
+        json.dumps(
+            {
+                "step": 2,
+                "validation_loss": True,
+                "perplexity": True,
+                "inference_time_seconds": True,
+                "inference_tokens_per_second": True,
+                "inference_latency_ms_per_token": True,
+                "cuda_memory_allocated_mb": True,
+                "cuda_max_memory_allocated_mb": True,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    _write_json(
+        run_dir / "routing_report.json",
+        {
+            "summary": {
+                "average_route_steps": True,
+                "active_block_evals_per_token": True,
+                "weighted_fusion_ratio": True,
+                "parallel_branch_count_mean": True,
+                "parallel_score_margin_mean": True,
+            }
+        },
+    )
+
+    summary = summarize_run(run_dir)
+
+    assert summary["validation_loss"] is None
+    assert summary["train_loss"] is None
+    assert summary["tokens_per_second_mean"] is None
+    assert summary["inference_latency_ms_per_token_latest"] is None
+    assert summary["train_cuda_max_memory_allocated_mb_latest"] is None
+    assert summary["routing"]["average_route_steps"] is None
+    assert summary["routing"]["parallel_branch_count_mean"] is None
+
+
 def test_make_compute_report_compares_to_baseline(tmp_path: Path) -> None:
     baseline = _write_run(
         tmp_path,

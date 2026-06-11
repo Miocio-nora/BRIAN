@@ -125,3 +125,40 @@ def test_parallel_compare_warns_without_parallel_metrics(tmp_path: Path) -> None
     assert row["checks"]["parallel_branch_active"] is False
     assert row["checks"]["parallel_score_margin_present"] is False
     assert row["checks"]["quality_not_worse"] is False
+
+
+def test_parallel_compare_rejects_boolean_parallel_metrics(tmp_path: Path) -> None:
+    baseline = _write_run(
+        tmp_path,
+        "topk",
+        stage="stage5_global_kv",
+        validation_loss=10.0,
+        tokens_per_second=100,
+        routing_summary={
+            "average_route_steps": 2.0,
+            "active_block_evals_per_token": 0.5,
+            "weighted_fusion_ratio": 1.0,
+        },
+    )
+    candidate = _write_run(
+        tmp_path,
+        "parallel_bool",
+        stage="stage6_parallel_passing",
+        validation_loss=9.9,
+        tokens_per_second=120,
+        routing_summary={
+            "average_route_steps": 2.0,
+            "active_block_evals_per_token": 0.25,
+            "parallel_branch_count_mean": True,
+            "parallel_score_margin_mean": True,
+        },
+    )
+
+    output = make_parallel_comparison_report(baseline, [candidate], output_path=tmp_path / "parallel_compare.json")
+    row = json.loads(output.read_text(encoding="utf-8"))["comparisons"][0]
+
+    assert row["status"] == "warn"
+    assert row["parallel"]["parallel_branch_count_mean"] is None
+    assert row["parallel"]["parallel_score_margin_mean"] is None
+    assert row["checks"]["parallel_branch_active"] is False
+    assert row["checks"]["parallel_score_margin_present"] is False

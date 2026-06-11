@@ -154,6 +154,8 @@ def _status(checks: dict[str, bool]) -> str:
 
 
 def _num(value: Any) -> float | None:
+    if isinstance(value, bool):
+        return None
     if isinstance(value, (int, float)):
         return float(value)
     return None

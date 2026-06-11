@@ -278,6 +278,8 @@ def _mean(values: list[float | None]) -> float | None:
 
 
 def _num(value: Any) -> float | None:
+    if isinstance(value, bool):
+        return None
     if isinstance(value, (int, float)):
         return float(value)
     return None
