@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 from collections import defaultdict
 from pathlib import Path
 from typing import Any
@@ -68,6 +69,7 @@ def make_routing_report(run_dir: str | Path) -> Path:
         "latest_route_path_examples": latest_route_path_examples or [],
         "latest_position_norm_trajectory": latest_position_norm_trajectory or [],
         "latest_location_distance_trajectory": latest_location_distance_trajectory or [],
+        "cost_quality_curve": _cost_quality_curve(rows, eval_rows),
         "latest_eval": eval_rows[-1] if eval_rows else {},
     }
     output = run_dir / "routing_report.json"
@@ -84,3 +86,126 @@ def _read_jsonl(path: Path) -> list[dict[str, Any]]:
             if line.strip():
                 rows.append(json.loads(line))
     return rows
+
+
+def _cost_quality_curve(rows: list[dict[str, Any]], eval_rows: list[dict[str, Any]]) -> dict[str, Any]:
+    train_points = [_train_curve_point(row) for row in rows]
+    train_points = [point for point in train_points if point is not None]
+    eval_points = []
+    for eval_row in eval_rows:
+        train_row = _matching_train_row(rows, eval_row)
+        point = _eval_curve_point(eval_row, train_row)
+        if point is not None:
+            eval_points.append(point)
+    return {
+        "train_points": train_points,
+        "eval_points": eval_points,
+        "summary": {
+            "train_point_count": len(train_points),
+            "eval_point_count": len(eval_points),
+            "active_compute_range": _range(
+                [_num(point.get("active_block_evals_per_token")) for point in train_points + eval_points]
+            ),
+            "average_route_steps_range": _range(
+                [_num(point.get("average_route_steps")) for point in train_points + eval_points]
+            ),
+            "train_loss_range": _range([_num(point.get("train_loss")) for point in train_points]),
+            "validation_loss_range": _range([_num(point.get("validation_loss")) for point in eval_points]),
+            "train_loss_vs_active_compute_correlation": _curve_correlation(
+                train_points,
+                x_key="active_block_evals_per_token",
+                y_key="train_loss",
+            ),
+            "validation_loss_vs_active_compute_correlation": _curve_correlation(
+                eval_points,
+                x_key="active_block_evals_per_token",
+                y_key="validation_loss",
+            ),
+        },
+    }
+
+
+def _train_curve_point(row: dict[str, Any]) -> dict[str, Any] | None:
+    train_loss = _num(row.get("loss"))
+    if train_loss is None:
+        return None
+    cost = _cost_metrics(row)
+    if not cost:
+        return None
+    return {
+        "step": _num(row.get("step")),
+        "train_loss": train_loss,
+        **cost,
+    }
+
+
+def _eval_curve_point(eval_row: dict[str, Any], train_row: dict[str, Any] | None) -> dict[str, Any] | None:
+    validation_loss = _num(eval_row.get("validation_loss"))
+    if validation_loss is None or train_row is None:
+        return None
+    cost = _cost_metrics(train_row)
+    if not cost:
+        return None
+    return {
+        "step": _num(eval_row.get("step")) or _num(train_row.get("step")),
+        "validation_loss": validation_loss,
+        "perplexity": _num(eval_row.get("perplexity")),
+        **cost,
+    }
+
+
+def _cost_metrics(row: dict[str, Any]) -> dict[str, float]:
+    metrics = {
+        "active_block_evals_per_token": _num(row.get("active_block_evals_per_token")),
+        "average_route_steps": _num(row.get("average_route_steps")),
+        "p_output_mean": _num(row.get("p_output_mean")),
+        "tokens_per_second": _num(row.get("tokens_per_second")),
+    }
+    return {key: value for key, value in metrics.items() if value is not None}
+
+
+def _matching_train_row(rows: list[dict[str, Any]], eval_row: dict[str, Any]) -> dict[str, Any] | None:
+    if not rows:
+        return None
+    eval_step = _num(eval_row.get("step"))
+    if eval_step is None:
+        return rows[-1]
+    candidates = [row for row in rows if (_num(row.get("step")) is not None and _num(row.get("step")) <= eval_step)]
+    if candidates:
+        return candidates[-1]
+    return rows[0]
+
+
+def _curve_correlation(points: list[dict[str, Any]], *, x_key: str, y_key: str) -> float | None:
+    pairs = []
+    for point in points:
+        x_value = _num(point.get(x_key))
+        y_value = _num(point.get(y_key))
+        if x_value is not None and y_value is not None:
+            pairs.append((x_value, y_value))
+    if len(pairs) < 2:
+        return None
+    x_values = [x for x, _ in pairs]
+    y_values = [y for _, y in pairs]
+    x_mean = sum(x_values) / len(x_values)
+    y_mean = sum(y_values) / len(y_values)
+    x_dev = [value - x_mean for value in x_values]
+    y_dev = [value - y_mean for value in y_values]
+    x_denom = math.sqrt(sum(value * value for value in x_dev))
+    y_denom = math.sqrt(sum(value * value for value in y_dev))
+    if x_denom == 0.0 or y_denom == 0.0:
+        return None
+    return sum(x * y for x, y in zip(x_dev, y_dev)) / (x_denom * y_denom)
+
+
+def _range(values: list[float | None]) -> float | None:
+    finite = [value for value in values if value is not None and math.isfinite(value)]
+    if not finite:
+        return None
+    return max(finite) - min(finite)
+
+
+def _num(value: Any) -> float | None:
+    if isinstance(value, (int, float)):
+        return float(value)
+    return None
