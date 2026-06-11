@@ -23,6 +23,8 @@ ROUTING_KEYS = {
     "global_attention_mass",
     "global_read_gate_mean",
     "global_cache_slots_mean",
+    "parallel_branch_count_mean",
+    "parallel_score_margin_mean",
 }
 
 

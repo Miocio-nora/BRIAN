@@ -34,4 +34,6 @@ def train_mode_for_stage(stage: str) -> str:
         "stage5_global_kv",
     }:
         return "scheduled"
+    if stage in {"stage6_parallel_passing", "stage7_parallel_passing"}:
+        return "parallel"
     raise ValueError(f"Unsupported executable stage: {stage}")

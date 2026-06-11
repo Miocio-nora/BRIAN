@@ -21,6 +21,7 @@ from brian_sphere_llm.model.llama_backbone import (
 from brian_sphere_llm.model.route_block import RouteBlock
 from brian_sphere_llm.routing.block_position import BlockPositionTable
 from brian_sphere_llm.routing.metrics import summarize_routes
+from brian_sphere_llm.routing.parallel_passing import prune_branches
 from brian_sphere_llm.routing.pseudo_policy import actions_for_policy
 from brian_sphere_llm.routing.router import LatentRouter
 from brian_sphere_llm.utils.config import load_config
@@ -52,6 +53,9 @@ class BrianRouteConfig:
     global_code_dim: int = 64
     global_sink_slots: int = 4
     global_window_slots: int = 32
+    parallel_passing: bool = False
+    beam_size: int = 2
+    branch_cost: float = 0.01
 
     @classmethod
     def from_dict(cls, data: dict[str, Any], *, config_dir: str | Path | None = None) -> "BrianRouteConfig":
@@ -66,6 +70,8 @@ class BrianRouteConfig:
             base_data = load_config(config_dir / str(base_config))
         global_kv_value = data.get("global_kv", False)
         global_kv = global_kv_value is True or str(global_kv_value).lower() in {"true", "on", "enabled"}
+        parallel_value = data.get("parallel_passing", False)
+        parallel_passing = parallel_value is True or str(parallel_value).lower() in {"true", "on", "enabled"}
         return cls(
             base=BaselineConfig.from_dict(base_data),
             pre_blocks=int(data["pre_blocks"]),
@@ -80,6 +86,9 @@ class BrianRouteConfig:
             global_code_dim=int(data.get("global_code_dim", data.get("block_position_dim", 64))),
             global_sink_slots=int(data.get("global_sink_slots", 4)),
             global_window_slots=int(data.get("global_window_slots", 32)),
+            parallel_passing=parallel_passing,
+            beam_size=int(data.get("beam_size", 2)),
+            branch_cost=float(data.get("branch_cost", 0.01)),
         )
 
 
@@ -169,7 +178,11 @@ class BrianRouteCore(ModuleBase):
             )
             global_state = self.global_cache.write(global_state, self.global_write(hidden))
 
-        for step in range(max_steps):
+        if route_mode == "parallel" or self.config.parallel_passing:
+            hidden, position, route_info = self._run_parallel_route(hidden, position, route_info, hard_exit, global_state)
+            global_state = None
+
+        for step in range(max_steps if route_mode != "parallel" and not self.config.parallel_passing else 0):
             if self.config.global_kv and global_state is not None:
                 assert self.global_read is not None
                 hidden, global_metrics = self.global_read(hidden, global_state.codes)
@@ -273,6 +286,137 @@ class BrianRouteCore(ModuleBase):
                 device=device,
             )
         return []
+
+    def _run_parallel_route(
+        self,
+        hidden: torch.Tensor,
+        position: torch.Tensor,
+        route_info: dict[str, Any],
+        hard_exit: bool,
+        global_state: Any,
+    ) -> tuple[torch.Tensor, torch.Tensor, dict[str, Any]]:
+        batch_size = hidden.size(0)
+        branch_hidden = hidden.unsqueeze(1)
+        branch_position = position.unsqueeze(1)
+        branch_scores = torch.zeros(batch_size, 1, device=hidden.device, dtype=hidden.dtype)
+        branch_exited = torch.zeros(batch_size, 1, device=hidden.device, dtype=torch.bool)
+        branch_delta_codes = None
+        if self.config.global_kv:
+            branch_delta_codes = torch.empty(
+                batch_size,
+                1,
+                0,
+                self.config.global_code_dim,
+                device=hidden.device,
+                dtype=hidden.dtype,
+            )
+        beam_size = max(1, self.config.beam_size)
+        top_k = max(1, min(self.config.top_k, self.config.route_pool_blocks + 1))
+
+        for _step in range(self.config.max_route_steps):
+            current_beam = branch_hidden.size(1)
+            flat_hidden = branch_hidden.reshape(batch_size * current_beam, *branch_hidden.shape[2:])
+            flat_position = branch_position.reshape(batch_size * current_beam, branch_position.size(-1))
+            if self.config.global_kv and global_state is not None:
+                assert self.global_read is not None
+                assert branch_delta_codes is not None
+                base_codes = global_state.codes.unsqueeze(1).expand(-1, current_beam, -1, -1)
+                combined_codes = torch.cat([base_codes, branch_delta_codes], dim=2)
+                flat_codes = combined_codes.reshape(batch_size * current_beam, combined_codes.size(2), combined_codes.size(3))
+                flat_hidden, global_metrics = self.global_read(flat_hidden, flat_codes)
+                route_info["global_attention_mass"].append(global_metrics["global_attention_mass"])
+                route_info["global_read_gate"].append(global_metrics["global_read_gate"])
+                route_info["global_cache_slots"].append(
+                    torch.tensor(float(flat_codes.size(1)), device=hidden.device, dtype=hidden.dtype)
+                )
+            logits = self.router(flat_hidden, flat_position)
+            probs = F.softmax(logits, dim=-1).view(batch_size, current_beam, -1)
+            log_probs = F.log_softmax(logits, dim=-1)
+            top_log_probs, top_actions = log_probs.topk(top_k, dim=-1)
+            top_actions = top_actions.view(batch_size, current_beam, top_k)
+            top_log_probs = top_log_probs.view(batch_size, current_beam, top_k)
+
+            expanded_actions = top_actions
+            expanded_log_probs = top_log_probs
+            if torch.any(branch_exited):
+                out = torch.full_like(expanded_actions, self.out_action)
+                zeros = torch.zeros_like(expanded_log_probs)
+                expanded_actions = torch.where(branch_exited.unsqueeze(-1), out, expanded_actions)
+                expanded_log_probs = torch.where(branch_exited.unsqueeze(-1), zeros, expanded_log_probs)
+
+            internal = expanded_actions != self.out_action
+            candidate_scores = branch_scores.unsqueeze(-1) + expanded_log_probs - self.config.branch_cost * internal.float()
+            candidate_actions = expanded_actions.reshape(batch_size, current_beam * top_k)
+            candidate_scores_flat = candidate_scores.reshape(batch_size, current_beam * top_k)
+            pruned = prune_branches(candidate_actions, candidate_scores_flat, beam_size)
+            selected_indices = candidate_scores_flat.topk(min(beam_size, candidate_scores_flat.size(-1)), dim=-1).indices
+            parent_indices = torch.div(selected_indices, top_k, rounding_mode="floor")
+            selected_actions = pruned.actions
+            selected_scores = pruned.scores
+
+            gather_hidden_index = parent_indices.view(batch_size, -1, 1, 1).expand(-1, -1, branch_hidden.size(2), branch_hidden.size(3))
+            gather_position_index = parent_indices.view(batch_size, -1, 1).expand(-1, -1, branch_position.size(2))
+            next_hidden = branch_hidden.gather(1, gather_hidden_index)
+            next_position = branch_position.gather(1, gather_position_index)
+            next_delta_codes = None
+            if branch_delta_codes is not None:
+                if branch_delta_codes.size(2) == 0:
+                    next_delta_codes = branch_delta_codes.expand(batch_size, selected_actions.size(1), 0, self.config.global_code_dim)
+                else:
+                    gather_delta_index = parent_indices.view(batch_size, -1, 1, 1).expand(
+                        -1,
+                        -1,
+                        branch_delta_codes.size(2),
+                        branch_delta_codes.size(3),
+                    )
+                    next_delta_codes = branch_delta_codes.gather(1, gather_delta_index)
+            parent_exited = branch_exited.gather(1, parent_indices)
+            flat_next_hidden = next_hidden.reshape(batch_size * selected_actions.size(1), *next_hidden.shape[2:])
+            flat_next_position = next_position.reshape(batch_size * selected_actions.size(1), next_position.size(-1))
+            flat_actions = selected_actions.reshape(-1)
+            flat_parent_exited = parent_exited.reshape(-1)
+            apply_actions = torch.where(flat_parent_exited, torch.full_like(flat_actions, self.out_action), flat_actions)
+            routed = self._apply_selected_blocks(flat_next_hidden, flat_next_position, apply_actions)
+            routed_position = self.position_table.by_action(apply_actions)
+            flat_exit = flat_parent_exited | (apply_actions == self.out_action)
+
+            branch_count = selected_actions.size(1)
+            branch_hidden = routed.reshape(batch_size, branch_count, *hidden.shape[1:])
+            branch_position = routed_position.reshape(batch_size, branch_count, position.size(-1))
+            branch_scores = selected_scores
+            branch_exited = flat_exit.reshape(batch_size, branch_count)
+            if self.config.global_kv and next_delta_codes is not None:
+                assert self.global_write is not None
+                delta_write = self.global_write(routed).reshape(batch_size, branch_count, self.config.global_code_dim)
+                branch_delta_codes = torch.cat([next_delta_codes, delta_write.unsqueeze(2)], dim=2)
+                if self.config.global_window_slots:
+                    branch_delta_codes = branch_delta_codes[:, :, -self.config.global_window_slots :, :]
+
+            branch_weights = F.softmax(branch_scores, dim=-1)
+            route_info["route_logits"].append((probs * branch_weights.unsqueeze(-1)).sum(dim=1).log().clamp_min(-50.0))
+            route_info["route_probs"].append((probs * branch_weights.unsqueeze(-1)).sum(dim=1))
+            route_info["selected_actions"].append(selected_actions[:, 0])
+            route_info["topk_actions"].append(selected_actions)
+            route_info["topk_weights"].append(branch_weights)
+            route_info["used_weighted_fusion"].append(torch.zeros(batch_size, dtype=torch.bool, device=hidden.device))
+            route_info["exit_flags"].append(branch_exited[:, 0])
+            route_info["position_norms"].append(branch_position[:, 0, :].norm(dim=-1).mean())
+            route_info["location_distance"].append(self.position_table.location_distance(branch_position[:, 0, :], route_info["route_probs"][-1]))
+            route_info.setdefault("parallel_branch_count", []).append(
+                torch.tensor(float(branch_count), device=hidden.device, dtype=hidden.dtype)
+            )
+            if branch_count > 1:
+                margin = branch_scores[:, 0] - branch_scores[:, 1]
+            else:
+                margin = torch.zeros(batch_size, device=hidden.device, dtype=hidden.dtype)
+            route_info.setdefault("parallel_score_margin", []).append(margin.mean())
+            if hard_exit and torch.all(branch_exited):
+                break
+
+        weights = F.softmax(branch_scores, dim=-1)
+        merged_hidden = (branch_hidden * weights.view(batch_size, -1, 1, 1)).sum(dim=1)
+        merged_position = F.normalize((branch_position * weights.view(batch_size, -1, 1)).sum(dim=1), dim=-1)
+        return merged_hidden, merged_position, route_info
 
     def _scheduled_select(
         self,

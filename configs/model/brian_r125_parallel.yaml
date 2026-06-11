@@ -1,0 +1,5 @@
+extends: brian_r125_global_kv.yaml
+model_name: brian_r125_parallel
+parallel_passing: true
+beam_size: 2
+branch_cost: 0.01

@@ -81,6 +81,12 @@ def summarize_routes(route_info: dict[str, Any], num_internal_blocks: int) -> di
     if "global_cache_slots" in route_info and route_info["global_cache_slots"]:
         slots = torch.stack(route_info["global_cache_slots"])
         summary["global_cache_slots_mean"] = float(slots.mean().detach().cpu())
+    if "parallel_branch_count" in route_info and route_info["parallel_branch_count"]:
+        counts = torch.stack(route_info["parallel_branch_count"])
+        summary["parallel_branch_count_mean"] = float(counts.mean().detach().cpu())
+    if "parallel_score_margin" in route_info and route_info["parallel_score_margin"]:
+        margins = torch.stack(route_info["parallel_score_margin"])
+        summary["parallel_score_margin_mean"] = float(margins.mean().detach().cpu())
     if "route_targets" in route_info and route_info["route_targets"] and actions:
         correct = []
         for selected, target in zip(actions, route_info["route_targets"]):

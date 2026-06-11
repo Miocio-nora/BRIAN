@@ -1,4 +1,11 @@
 extends: stage5_global_kv.yaml
 stage: stage6_parallel_passing
-enabled: false
-note: "Planning config only. Implement after global KV gates pass."
+model_config: ../model/brian_r125_parallel.yaml
+routing:
+  mode: parallel
+  hard_exit: true
+loss_weights:
+  route: 0.0
+  balance: 0.01
+  cost: 0.01
+  location: 0.02
