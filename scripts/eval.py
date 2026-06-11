@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+from brian_sphere_llm.eval.compute_report import make_compute_report
 from brian_sphere_llm.eval.difficulty_report import make_difficulty_report
 from brian_sphere_llm.eval.routing_report import make_routing_report
 from brian_sphere_llm.eval.stage_gate_report import make_stage_gate_report
@@ -23,6 +24,8 @@ def main() -> None:
     parser.add_argument("--split", default=None, help="Dataset split override.")
     parser.add_argument("--max-batches", type=int, default=None, help="Maximum eval batches override.")
     parser.add_argument("--batch-size", type=int, default=None, help="Batch size override.")
+    parser.add_argument("--tflops-per-gpu", type=float, default=None, help="Reference TFLOPs/GPU for compute reports.")
+    parser.add_argument("--utilization", type=float, default=None, help="Reference utilization for compute reports.")
     args = parser.parse_args()
     config = load_config(args.config)
     eval_name = config.get("eval_name", "routing_eval")
@@ -51,6 +54,17 @@ def main() -> None:
             device_name=str(config.get("device", "auto")),
             baseline_checkpoint=str(config.get("baseline_checkpoint", "checkpoint_best")),
             routed_checkpoint=str(config.get("routed_checkpoint", "checkpoint_best")),
+        )
+    elif eval_name == "compute_report":
+        runs = args.runs or ([args.run] if args.run else config.get("runs", []))
+        if not runs:
+            raise SystemExit("compute_report requires --runs or --run")
+        report = make_compute_report(
+            runs,
+            baseline_run=args.baseline_run or config.get("baseline_run"),
+            output_path=args.output or config.get("output_path"),
+            tflops_per_gpu=float(args.tflops_per_gpu or config.get("tflops_per_gpu", 989.0)),
+            utilization=float(args.utilization or config.get("utilization", 0.35)),
         )
     else:
         if not args.run:

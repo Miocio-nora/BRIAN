@@ -1,0 +1,4 @@
+eval_name: compute_report
+output_path: reports/compute_report.json
+tflops_per_gpu: 989.0
+utilization: 0.35

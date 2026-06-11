@@ -103,6 +103,17 @@ python scripts/eval.py \
 
 This writes `difficulty_step_report.json` and per-sample JSONL rows into the routed run directory. The key metric is `difficulty_step_correlation = corr(baseline_cross_entropy, route_steps)`.
 
+Generate a compute-adjusted comparison report:
+
+```bash
+python scripts/eval.py \
+  --config configs/eval/compute_report.yaml \
+  --baseline-run <stage0_baseline_run> \
+  --runs <stage0_baseline_run> <routed_run_1> <routed_run_2>
+```
+
+This writes `reports/compute_report.json` with parameter ratios, active layer eval ratios, estimated FLOPs/token, estimated GPU-hours, validation loss deltas, and throughput ratios.
+
 Run tests:
 
 ```bash
