@@ -40,6 +40,7 @@ def make_parallel_passing_report(
         "stage6_parallel_stage": parallel_stage,
         "parallel_passing_enabled": _bool(model_config.get("parallel_passing", False)),
         "parallel_route_selected": parallel_stage or _routing_mode(config) == "parallel",
+        "shared_base_global_memory_enabled": global_kv_enabled,
         "beam_size_present": beam_size >= 1,
         "beam_size_within_limit": beam_size >= 1 and beam_size <= max_beam_size,
         "branch_cost_enabled": branch_cost is not None and branch_cost > min_branch_cost,
@@ -49,6 +50,7 @@ def make_parallel_passing_report(
             bool(branch_counts) and beam_size >= 1 and float(_max(branch_counts) or 0.0) <= beam_size + tolerance
         ),
         "score_margin_measured": bool(score_margins),
+        "branch_delta_memory_measured": global_kv_enabled and bool(delta_cache_slots),
         "delta_memory_policy_present": (not global_kv_enabled) or bool(delta_cache_slots),
         "delta_cache_bounded_by_window": (not global_kv_enabled)
         or (
@@ -68,6 +70,7 @@ def make_parallel_passing_report(
             "global_kv_enabled": global_kv_enabled,
             "global_sink_slots": int(_num(model_config.get("global_sink_slots")) or 0),
             "global_window_slots": global_window_slots,
+            "memory_policy": "shared_base_global_kv_with_branch_delta" if global_kv_enabled else "local_only",
         },
         "routing": {
             "mode": _routing_mode(config),

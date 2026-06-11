@@ -33,11 +33,14 @@ def test_parallel_passing_report_passes_bounded_beam_and_cost(tmp_path: Path) ->
     assert report["overall_status"] == "pass"
     assert report["checks"]["parallel_passing_enabled"] is True
     assert report["checks"]["parallel_route_selected"] is True
+    assert report["checks"]["shared_base_global_memory_enabled"] is True
     assert report["checks"]["beam_size_within_limit"] is True
     assert report["checks"]["branch_cost_enabled"] is True
     assert report["checks"]["branch_count_bounded_by_beam"] is True
+    assert report["checks"]["branch_delta_memory_measured"] is True
     assert report["checks"]["delta_memory_policy_present"] is True
     assert report["checks"]["delta_cache_bounded_by_window"] is True
+    assert report["model"]["memory_policy"] == "shared_base_global_kv_with_branch_delta"
     assert report["model"]["parallel_exit_policy"] == "branch"
     assert report["routing"]["parallel_branch_count"]["max"] == 2.0
     assert report["routing"]["parallel_delta_cache_slots"]["max"] == 2.0
@@ -67,6 +70,29 @@ def test_parallel_passing_report_fails_unbounded_branch_and_delta_cache(tmp_path
     assert report["checks"]["delta_cache_bounded_by_window"] is False
 
 
+def test_parallel_passing_report_fails_missing_branch_delta_memory(tmp_path: Path) -> None:
+    run_dir = _write_run(
+        tmp_path,
+        beam_size=2,
+        branch_cost=0.01,
+        window_slots=3,
+        train_rows=[
+            {
+                "parallel_branch_count_mean": 2.0,
+                "parallel_score_margin_mean": 0.2,
+            },
+        ],
+        include_eval_delta=False,
+    )
+
+    report_path = make_parallel_passing_report(run_dir)
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+
+    assert report["overall_status"] == "fail"
+    assert report["checks"]["shared_base_global_memory_enabled"] is True
+    assert report["checks"]["branch_delta_memory_measured"] is False
+
+
 def test_parallel_passing_eval_config_resolves() -> None:
     config = load_config("configs/eval/parallel_passing.yaml")
     assert config["eval_name"] == "parallel_passing_report"
@@ -79,6 +105,7 @@ def _write_run(
     branch_cost: float,
     window_slots: int,
     train_rows: list[dict],
+    include_eval_delta: bool = True,
 ) -> Path:
     run_dir = root / "parallel"
     run_dir.mkdir()
@@ -99,28 +126,18 @@ def _write_run(
         "\n".join(json.dumps({"step": index + 1, **row}) for index, row in enumerate(train_rows)) + "\n",
         encoding="utf-8",
     )
-    (run_dir / "eval_log.jsonl").write_text(
-        json.dumps(
-            {
-                "step": len(train_rows),
-                "parallel_branch_count_mean": 2.0,
-                "parallel_score_margin_mean": 0.1,
-                "parallel_delta_cache_slots_max": min(float(window_slots), 2.0),
-            }
-        )
-        + "\n",
-        encoding="utf-8",
-    )
-    (run_dir / "routing_report.json").write_text(
-        json.dumps(
-            {
-                "summary": {
-                    "parallel_branch_count_mean": 2.0,
-                    "parallel_score_margin_mean": 0.1,
-                    "parallel_delta_cache_slots_max": min(float(window_slots), 2.0),
-                }
-            }
-        ),
-        encoding="utf-8",
-    )
+    eval_row = {
+        "step": len(train_rows),
+        "parallel_branch_count_mean": 2.0,
+        "parallel_score_margin_mean": 0.1,
+    }
+    routing_summary = {
+        "parallel_branch_count_mean": 2.0,
+        "parallel_score_margin_mean": 0.1,
+    }
+    if include_eval_delta:
+        eval_row["parallel_delta_cache_slots_max"] = min(float(window_slots), 2.0)
+        routing_summary["parallel_delta_cache_slots_max"] = min(float(window_slots), 2.0)
+    (run_dir / "eval_log.jsonl").write_text(json.dumps(eval_row) + "\n", encoding="utf-8")
+    (run_dir / "routing_report.json").write_text(json.dumps({"summary": routing_summary}), encoding="utf-8")
     return run_dir

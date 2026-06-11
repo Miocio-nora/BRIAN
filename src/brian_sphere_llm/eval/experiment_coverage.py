@@ -299,6 +299,14 @@ def _parallel_requirements(entries: list[dict[str, Any]]) -> list[dict[str, Any]
             and entry["model"].get("parallel_passing") is True
             and entry["model"].get("parallel_exit_policy") == "any_topk",
         ),
+        _group_requirement(
+            "PP7",
+            "shared base Global KV plus branch delta memory",
+            entries,
+            lambda entry: entry["model"].get("parallel_passing") is True
+            and entry["model"].get("global_kv") is True
+            and (_num(entry["model"].get("global_window_slots")) or 0) > 0,
+        ),
     ]
 
 
