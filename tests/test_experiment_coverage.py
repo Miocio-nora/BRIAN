@@ -58,8 +58,11 @@ def test_r350_scaling_package_coverage_passes(tmp_path: Path) -> None:
     assert report["checks"]["planned_parameter_estimates_in_range"] is True
     assert [row["id"] for row in report["requirements"]] == ["B0", "B1", "B2", "B3", "B4"]
     assert _requirement(report, "B2")["checks"]["model_flags_match"] is True
+    for entry_id in ["B0", "B1", "B2", "B3", "B4"]:
+        assert _requirement(report, entry_id)["checks"]["train_flags_match"] is True
     assert _entry(report, "B0")["model"]["estimated_parameter_count_in_plan_range"] is True
     assert _entry(report, "B1")["model"]["estimated_parameter_count_in_plan_range"] is True
+    assert _entry(report, "B1")["train"]["precision"] == "bf16"
 
 
 def test_r1b_pilot_package_coverage_passes(tmp_path: Path) -> None:
@@ -77,6 +80,8 @@ def test_r1b_pilot_package_coverage_passes(tmp_path: Path) -> None:
     assert _requirement(report, "D0")["checks"]["train_flags_match"] is True
     assert _requirement(report, "D1")["checks"]["model_flags_match"] is True
     assert _requirement(report, "D1")["checks"]["train_flags_match"] is True
+    assert _entry(report, "D0")["train"]["precision"] == "bf16"
+    assert _entry(report, "D1")["train"]["precision"] == "bf16"
     assert _entry(report, "D0")["model"]["estimated_parameter_count_in_plan_range"] is True
     assert _entry(report, "D1")["model"]["estimated_parameter_count_in_plan_range"] is True
     assert 800_000_000 <= _entry(report, "D0")["model"]["estimated_parameter_count"] <= 1_300_000_000
@@ -130,6 +135,8 @@ def test_r1b_main_validation_coverage_passes_with_checkpointing(tmp_path: Path) 
     assert _requirement(report, "D3")["checks"]["model_flags_match"] is True
     assert _requirement(report, "D3")["checks"]["data_flags_match"] is True
     assert _requirement(report, "D3")["checks"]["train_flags_match"] is True
+    assert _entry(report, "D2")["train"]["precision"] == "bf16"
+    assert _entry(report, "D3")["train"]["precision"] == "bf16"
     assert report["checks"]["baseline_data_config_consistent"] is True
 
 
@@ -320,6 +327,34 @@ def test_experiment_coverage_fails_out_of_range_planned_parameters(tmp_path: Pat
     assert report["overall_status"] == "fail"
     assert report["checks"]["planned_parameter_estimates_in_range"] is False
     assert _entry(report, "D0")["model"]["estimated_parameter_count_in_plan_range"] is False
+
+
+def test_r1b_pilot_coverage_requires_bf16_precision(tmp_path: Path) -> None:
+    source = load_config("configs/experiments/route_core_r1b_pilot.yaml")
+    fp32_train = tmp_path / "fp32_r1b_pilot.yaml"
+    fp32_train.write_text(
+        yaml.safe_dump(
+            {
+                "extends": str(Path("configs/train/stage5_r1b_global_kv_pilot.yaml").resolve()),
+                "precision": "fp32",
+            }
+        ),
+        encoding="utf-8",
+    )
+    source["ablations"][1]["train_config"] = str(fp32_train)
+    manifest = tmp_path / "fp32_manifest.yaml"
+    manifest.write_text(yaml.safe_dump(source), encoding="utf-8")
+
+    output = make_experiment_coverage_report(
+        manifest,
+        output_path=tmp_path / "coverage.json",
+        profile="route_core_r1b_pilot",
+    )
+    report = json.loads(output.read_text(encoding="utf-8"))
+
+    assert report["overall_status"] == "fail"
+    assert _requirement(report, "D1")["checks"]["train_flags_match"] is False
+    assert _entry(report, "D1")["train"]["precision"] == "fp32"
 
 
 def test_global_kv_package_coverage_passes_window_and_sink_requirements(tmp_path: Path) -> None:

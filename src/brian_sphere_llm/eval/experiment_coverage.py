@@ -149,8 +149,20 @@ def _requirements(profile: str, plan: ExperimentPlan, entries: list[dict[str, An
         return _exact_id_requirements(
             entries,
             [
-                _req("B0", "350M fixed baseline", stage="stage0_baseline", mode="baseline"),
-                _req("B1", "350M routed main", stage="stage4_output_action", mode="scheduled"),
+                _req(
+                    "B0",
+                    "350M fixed baseline",
+                    stage="stage0_baseline",
+                    mode="baseline",
+                    train_flags={"precision": "bf16"},
+                ),
+                _req(
+                    "B1",
+                    "350M routed main",
+                    stage="stage4_output_action",
+                    mode="scheduled",
+                    train_flags={"precision": "bf16"},
+                ),
                 _req(
                     "B2",
                     "350M routed no-position",
@@ -160,9 +172,21 @@ def _requirements(profile: str, plan: ExperimentPlan, entries: list[dict[str, An
                         "position_to_router": False,
                         "position_to_blocks": False,
                     },
+                    train_flags={"precision": "bf16"},
                 ),
-                _req("B3", "350M routed no-output-action", stage="stage4_scheduled_free_routing", mode="scheduled"),
-                _req("B4", "350M difficulty-conditioned route", mode="pseudo"),
+                _req(
+                    "B3",
+                    "350M routed no-output-action",
+                    stage="stage4_scheduled_free_routing",
+                    mode="scheduled",
+                    train_flags={"precision": "bf16"},
+                ),
+                _req(
+                    "B4",
+                    "350M difficulty-conditioned route",
+                    mode="pseudo",
+                    train_flags={"precision": "bf16"},
+                ),
             ],
         )
     if profile == "block_position_ablation":
@@ -184,6 +208,7 @@ def _requirements(profile: str, plan: ExperimentPlan, entries: list[dict[str, An
                     mode="baseline",
                     model_flags={"model_name": "baseline_1b"},
                     train_flags={
+                        "precision": "bf16",
                         "activation_checkpointing": True,
                         "ddp_find_unused_parameters": False,
                         "gradient_accumulation_steps": 4,
@@ -203,6 +228,7 @@ def _requirements(profile: str, plan: ExperimentPlan, entries: list[dict[str, An
                         "top_k": 2,
                     },
                     train_flags={
+                        "precision": "bf16",
                         "activation_checkpointing": True,
                         "ddp_find_unused_parameters": True,
                         "gradient_accumulation_steps": 4,
@@ -298,6 +324,7 @@ def _requirements(profile: str, plan: ExperimentPlan, entries: list[dict[str, An
                         "sequence_length": 4096,
                     },
                     train_flags={
+                        "precision": "bf16",
                         "activation_checkpointing": True,
                         "ddp_find_unused_parameters": False,
                         "gradient_accumulation_steps": 4,
@@ -322,6 +349,7 @@ def _requirements(profile: str, plan: ExperimentPlan, entries: list[dict[str, An
                         "sequence_length": 4096,
                     },
                     train_flags={
+                        "precision": "bf16",
                         "activation_checkpointing": True,
                         "ddp_find_unused_parameters": True,
                         "gradient_accumulation_steps": 4,
@@ -750,6 +778,7 @@ def _summarize_train_config(train_config_path: Path) -> dict[str, Any]:
         "train_mode": train_mode,
         "routing_mode": routing.get("mode"),
         "train": {
+            "precision": train_config.get("precision", "fp32"),
             "activation_checkpointing": train_config.get("activation_checkpointing", False),
             "ddp_find_unused_parameters": train_config.get("ddp_find_unused_parameters", False),
             "gradient_accumulation_steps": train_config.get("gradient_accumulation_steps", 1),
