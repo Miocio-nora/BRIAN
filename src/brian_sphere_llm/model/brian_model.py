@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -190,12 +191,12 @@ class BrianRouteCore(ModuleBase):
         *,
         route_mode: str = "free",
         pseudo_policy: str = "sequential",
-        loss_weights: dict[str, float] | None = None,
+        loss_weights: Mapping[str, Any] | None = None,
         hard_exit: bool | None = None,
         router_probability: float | None = None,
         global_step: int = 0,
     ) -> dict[str, Any]:
-        loss_weights = loss_weights or {}
+        loss_weights = _loss_weights_mapping(loss_weights)
         hard_exit = self.config.hard_exit if hard_exit is None else hard_exit
         batch_size = input_ids.size(0)
         hidden = self.token_embedding(input_ids)
@@ -338,12 +339,16 @@ class BrianRouteCore(ModuleBase):
             balance = block_balance_loss(route_info["route_probs"], self.config.route_pool_blocks).to(lm.device)
             cost = route_cost_loss(route_info["route_probs"], self.config.route_pool_blocks).to(lm.device)
             loc = location_loss(route_info["location_distance"]).to(lm.device)
+            route_weight = _loss_weight(loss_weights, "route")
+            balance_weight = _loss_weight(loss_weights, "balance")
+            cost_weight = _loss_weight(loss_weights, "cost")
+            location_weight = _loss_weight(loss_weights, "location")
             total = (
                 lm
-                + float(loss_weights.get("route", 0.0)) * route
-                + float(loss_weights.get("balance", 0.0)) * balance
-                + float(loss_weights.get("cost", 0.0)) * cost
-                + float(loss_weights.get("location", 0.0)) * loc
+                + route_weight * route
+                + balance_weight * balance
+                + cost_weight * cost
+                + location_weight * loc
             )
             output["loss"] = total
             output["loss_components"] = {
@@ -740,3 +745,15 @@ def _as_bool(value: Any) -> bool:
     if isinstance(value, str):
         return value.lower() in {"1", "true", "yes", "on", "enabled"}
     return bool(value)
+
+
+def _loss_weights_mapping(loss_weights: Mapping[str, Any] | None) -> Mapping[str, Any]:
+    if loss_weights is None:
+        return {}
+    if not isinstance(loss_weights, Mapping):
+        raise ValueError("loss_weights must be a mapping.")
+    return loss_weights
+
+
+def _loss_weight(loss_weights: Mapping[str, Any], key: str) -> float:
+    return _float_value(loss_weights.get(key, 0.0), f"loss_weights.{key}", minimum=0.0)
