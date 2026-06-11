@@ -11,6 +11,7 @@ from brian_sphere_llm.eval.cost_control_report import make_cost_control_report
 from brian_sphere_llm.eval.determinism_report import make_eval_determinism_report
 from brian_sphere_llm.eval.difficulty_report import make_baseline_difficulty_report, make_difficulty_report
 from brian_sphere_llm.eval.fixed_route_stability import make_fixed_route_stability_report
+from brian_sphere_llm.eval.global_kv_ablation import make_global_kv_ablation_report
 from brian_sphere_llm.eval.global_kv_retention import make_global_kv_retention_report
 from brian_sphere_llm.eval.go_no_go_report import make_go_no_go_report
 from brian_sphere_llm.eval.long_context import make_long_context_report
@@ -54,6 +55,7 @@ def main() -> None:
     parser.add_argument("--sample-count", type=int, default=None, help="Sample count for synthetic evals.")
     parser.add_argument("--baseline-report", default=None, help="Baseline report path for comparison evals.")
     parser.add_argument("--reports", nargs="*", default=None, help="Candidate report paths for comparison evals.")
+    parser.add_argument("--experiment-manifest", default=None, help="Experiment manifest path for ablation reports.")
     parser.add_argument("--tolerance", type=float, default=None, help="Numeric tolerance for determinism evals.")
     args = parser.parse_args()
     config = load_config(args.config)
@@ -199,6 +201,17 @@ def main() -> None:
             min_global_read_gate=float(config.get("min_global_read_gate", 1e-6)),
             mass_tolerance=float(config.get("mass_tolerance", 1e-5)),
             capacity_slack=float(config.get("capacity_slack", 1e-6)),
+        )
+    elif eval_name == "global_kv_ablation_report":
+        manifest = args.experiment_manifest or config.get("experiment_manifest")
+        runs = args.runs or ([args.run] if args.run else config.get("runs", []))
+        if not manifest or not runs:
+            raise SystemExit("global_kv_ablation_report requires --experiment-manifest and --runs")
+        report = make_global_kv_ablation_report(
+            manifest,
+            runs,
+            output_path=args.output or config.get("output_path"),
+            long_context_report_paths=args.reports or config.get("long_context_report_paths", []),
         )
     elif eval_name == "parallel_compare":
         baseline_run = args.baseline_run or config.get("baseline_run")

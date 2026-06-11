@@ -1,0 +1,5 @@
+eval_name: global_kv_ablation_report
+output_path: reports/global_kv_ablation_report.json
+experiment_manifest: configs/experiments/tiny_global_kv.yaml
+runs: []
+long_context_report_paths: []
