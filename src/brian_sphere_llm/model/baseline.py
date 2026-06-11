@@ -30,6 +30,7 @@ class BaselineConfig:
     d_model: int
     n_heads: int
     dropout: float = 0.0
+    model_name: str = "baseline"
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "BaselineConfig":
@@ -40,6 +41,7 @@ class BaselineConfig:
             d_model=int(data["d_model"]),
             n_heads=int(data["n_heads"]),
             dropout=float(data.get("dropout", 0.0)),
+            model_name=str(data.get("model_name", "baseline")),
         )
 
     def backbone(self) -> BackboneConfig:
@@ -77,7 +79,7 @@ class BaselineLM(ModuleBase):
 
     def model_stats(self) -> dict[str, int | str]:
         return {
-            "model_name": "baseline",
+            "model_name": self.config.model_name,
             "parameter_count": count_parameters(self),
             "layers": self.config.layers,
             "d_model": self.config.d_model,

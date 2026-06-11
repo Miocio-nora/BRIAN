@@ -122,6 +122,8 @@ def test_train_from_config_writes_routing_report_on_checkpoint(tmp_path: Path) -
     assert (run_dir / "checkpoint_latest" / "state.pt").exists()
     assert (run_dir / "checkpoint_best" / "state.pt").exists()
     assert (run_dir / "routing_report.json").exists()
+    model_stats = json.loads((run_dir / "model_stats.json").read_text(encoding="utf-8"))
+    assert model_stats["model_name"] == "baseline_unit"
     manifest_ref = json.loads((run_dir / "data_manifest_ref.json").read_text(encoding="utf-8"))
     assert manifest_ref["path"] == str(tmp_path / "manifest.jsonl")
     assert manifest_ref["sha256_manifest"] == "abc123"

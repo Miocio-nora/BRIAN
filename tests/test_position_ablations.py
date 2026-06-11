@@ -31,6 +31,7 @@ def _config(**overrides) -> BrianRouteConfig:
 def test_no_position_ablation_forward_uses_zero_position_state() -> None:
     model = BrianRouteCore(
         _config(
+            model_name="brian_no_position_unit",
             block_position_mode="none",
             position_to_router=False,
             position_to_blocks=False,
@@ -40,6 +41,7 @@ def test_no_position_ablation_forward_uses_zero_position_state() -> None:
     output = model(input_ids, targets=input_ids, route_mode="fixed")
     assert output["logits"].shape == (2, 8, 64)
     assert output["routing_summary"]["position_norm_mean"] == 0.0
+    assert model.model_stats()["model_name"] == "brian_no_position_unit"
     assert model.model_stats()["block_position_mode"] == "none"
     assert model.model_stats()["parameter_count"] == BrianRouteCore(_config()).model_stats()["parameter_count"]
 

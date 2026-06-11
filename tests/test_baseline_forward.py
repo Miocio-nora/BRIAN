@@ -11,3 +11,19 @@ def test_baseline_forward_shapes() -> None:
     output = model(input_ids, targets=input_ids)
     assert output["logits"].shape == (2, 8, 64)
     assert output["loss"].ndim == 0
+
+
+def test_baseline_model_stats_preserve_config_name() -> None:
+    config = BaselineConfig.from_dict(
+        {
+            "model_name": "baseline_unit",
+            "vocab_size": 64,
+            "context_length": 8,
+            "layers": 2,
+            "d_model": 32,
+            "n_heads": 4,
+        }
+    )
+    model = BaselineLM(config)
+
+    assert model.model_stats()["model_name"] == "baseline_unit"

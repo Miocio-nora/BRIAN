@@ -46,6 +46,7 @@ class BrianRouteConfig:
     post_blocks: int
     block_position_dim: int
     max_route_steps: int
+    model_name: str = "brian_route_core"
     top_k: int = 1
     later_top_k: int = 2
     hard_exit: bool = False
@@ -87,6 +88,7 @@ class BrianRouteConfig:
             post_blocks=int(data["post_blocks"]),
             block_position_dim=int(data["block_position_dim"]),
             max_route_steps=int(data["max_route_steps"]),
+            model_name=str(data.get("model_name", "brian_route_core")),
             top_k=int(data.get("top_k", 1)),
             later_top_k=int(data.get("later_top_k", 2)),
             hard_exit=bool(data.get("hard_exit", False)),
@@ -698,7 +700,7 @@ class BrianRouteCore(ModuleBase):
 
     def model_stats(self) -> dict[str, int | str]:
         return {
-            "model_name": "brian_route_core",
+            "model_name": self.config.model_name,
             "parameter_count": count_parameters(self),
             "pre_blocks": self.config.pre_blocks,
             "route_pool_blocks": self.config.route_pool_blocks,
