@@ -7,7 +7,7 @@ torch = pytest.importorskip("torch")
 
 from brian_sphere_llm.data.pack import write_index, write_token_bin
 from brian_sphere_llm.model.baseline import BaselineConfig, BaselineLM
-from brian_sphere_llm.train.trainer import evaluate, run_name, train_from_config
+from brian_sphere_llm.train.trainer import _model_stats, evaluate, run_name, train_from_config
 from brian_sphere_llm.utils.config import save_yaml
 
 
@@ -45,6 +45,32 @@ def test_evaluate_reports_inference_timing_metrics() -> None:
     assert row["inference_tokens_per_second"] > 0.0
     assert row["inference_latency_ms_per_token"] > 0.0
     assert row["validation_loss"] >= 0.0
+
+
+def test_model_stats_requires_positive_parameter_count() -> None:
+    class MissingStats:
+        pass
+
+    class MissingParameterCount:
+        def model_stats(self) -> dict:
+            return {"model_name": "missing"}
+
+    class InvalidParameterCount:
+        def model_stats(self) -> dict:
+            return {"model_name": "invalid", "parameter_count": 0}
+
+    class BoolParameterCount:
+        def model_stats(self) -> dict:
+            return {"model_name": "bool", "parameter_count": True}
+
+    with pytest.raises(ValueError, match="must expose model_stats"):
+        _model_stats(MissingStats())
+    with pytest.raises(ValueError, match="must include parameter_count"):
+        _model_stats(MissingParameterCount())
+    with pytest.raises(ValueError, match="positive integer"):
+        _model_stats(InvalidParameterCount())
+    with pytest.raises(ValueError, match="positive integer"):
+        _model_stats(BoolParameterCount())
 
 
 def test_train_from_config_writes_routing_report_on_checkpoint(tmp_path: Path) -> None:
@@ -141,6 +167,7 @@ def test_train_from_config_writes_routing_report_on_checkpoint(tmp_path: Path) -
     assert (run_dir / "routing_report.json").exists()
     model_stats = json.loads((run_dir / "model_stats.json").read_text(encoding="utf-8"))
     assert model_stats["model_name"] == "baseline_unit"
+    assert model_stats["parameter_count"] > 0
     manifest_ref = json.loads((run_dir / "data_manifest_ref.json").read_text(encoding="utf-8"))
     assert manifest_ref["path"] == str(tmp_path / "manifest.jsonl")
     assert manifest_ref["sha256_manifest"] == "abc123"
@@ -190,6 +217,9 @@ def test_train_from_config_logs_routed_behavior(tmp_path: Path) -> None:
     report = json.loads((run_dir / "routing_report.json").read_text(encoding="utf-8"))
     assert report["summary"]["route_entropy"] >= 0.0
     assert report["latest_route_path_examples"]
+    model_stats = json.loads((run_dir / "model_stats.json").read_text(encoding="utf-8"))
+    assert model_stats["model_name"] == "brian_unit_routed"
+    assert model_stats["parameter_count"] > 0
 
 
 def test_train_from_config_records_resume_event(tmp_path: Path) -> None:

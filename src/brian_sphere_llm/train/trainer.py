@@ -72,8 +72,8 @@ def train_from_config(config_path: str | Path) -> Path:
     )
     run_dir.mkdir(parents=True, exist_ok=True)
     save_yaml({**config, "model_config_resolved": model_config, "data_config_resolved": data_config}, run_dir / "config_resolved.yaml")
-    if hasattr(model, "model_stats"):
-        write_json(model.model_stats(), run_dir / "model_stats.json")
+    model_stats = _model_stats(model)
+    write_json(model_stats, run_dir / "model_stats.json")
     write_json(_data_manifest_ref(data_config, tokenized_dir), run_dir / "data_manifest_ref.json")
 
     train_loader = build_dataloader(
@@ -317,3 +317,17 @@ def _data_manifest_ref(data_config: dict[str, Any], tokenized_dir: Path) -> dict
             if key in tokenizer
         }
     return ref
+
+
+def _model_stats(model: Any) -> dict[str, Any]:
+    if not hasattr(model, "model_stats"):
+        raise ValueError("Model must expose model_stats() so parameter counts are recorded.")
+    stats = model.model_stats()
+    if not isinstance(stats, dict):
+        raise ValueError("model_stats() must return a mapping.")
+    if "parameter_count" not in stats:
+        raise ValueError("model_stats() must include parameter_count.")
+    parameter_count = stats["parameter_count"]
+    if type(parameter_count) is not int or parameter_count <= 0:
+        raise ValueError("model_stats().parameter_count must be a positive integer.")
+    return stats
