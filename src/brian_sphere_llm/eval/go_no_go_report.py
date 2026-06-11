@@ -906,14 +906,8 @@ def _compute_report_has_not_worse_candidate(report: dict[str, Any]) -> bool | No
         same_parameter_count = comparison.get("same_parameter_count_view") is True
         same_active = comparison.get("same_active_compute_view") is True
         similar_flops = comparison.get("similar_training_flops_view") is True
-        loss_delta = comparison.get("validation_loss_delta")
-        if (
-            same_parameter_count
-            and same_active
-            and similar_flops
-            and isinstance(loss_delta, (int, float))
-            and loss_delta <= 0.0
-        ):
+        loss_delta = _num(comparison.get("validation_loss_delta"))
+        if same_parameter_count and same_active and similar_flops and loss_delta is not None and loss_delta <= 0.0:
             return True
     return False if found else None
 
@@ -979,14 +973,18 @@ def _reasoning_score(report: dict[str, Any]) -> float | None:
         return None
     exact = overall.get("exact_match_accuracy")
     teacher = overall.get("teacher_forced_token_accuracy")
-    if isinstance(exact, (int, float)):
-        return float(exact)
-    if isinstance(teacher, (int, float)):
-        return float(teacher)
+    exact_score = _num(exact)
+    teacher_score = _num(teacher)
+    if exact_score is not None:
+        return exact_score
+    if teacher_score is not None:
+        return teacher_score
     return None
 
 
 def _num(value: Any) -> float | None:
+    if isinstance(value, bool):
+        return None
     if isinstance(value, (int, float)):
         return float(value)
     return None

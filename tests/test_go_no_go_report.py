@@ -467,6 +467,85 @@ def test_go_no_go_r350_difficulty_uses_any_positive_correlation(tmp_path: Path) 
     assert difficulty["evidence"]["runs"][1]["stage"] == "stage3_scheduled_free_routing"
 
 
+def test_go_no_go_r350_rejects_boolean_difficulty_correlation(tmp_path: Path) -> None:
+    stage_gate_data = _passing_stage_gate()
+    stage_gate_data["runs"] = [
+        {"run_dir": "stage3", "stage": "stage3_scheduled_free_routing", "difficulty_step_correlation": True}
+    ]
+    stage_gate = _write_json(tmp_path / "stage_gate.json", stage_gate_data)
+
+    output = make_go_no_go_report(
+        stage_gate_report_path=stage_gate,
+        phase="r350_to_1b",
+        output_path=tmp_path / "go.json",
+    )
+    report = json.loads(output.read_text(encoding="utf-8"))
+    criteria = {item["name"]: item for item in report["phases"]["r350_to_1b"]["criteria"]}
+    difficulty = criteria["difficulty_step_correlation_positive"]
+
+    assert difficulty["status"] == "missing"
+    assert difficulty["evidence"]["runs"] == []
+
+
+def test_go_no_go_r350_rejects_boolean_compute_loss_delta(tmp_path: Path) -> None:
+    stage_gate = _write_json(tmp_path / "stage_gate.json", _passing_stage_gate())
+    compute = _write_json(
+        tmp_path / "compute.json",
+        {
+            "run_count": 2,
+            "baseline_run": "baseline",
+            "runs": [
+                {"run_dir": "baseline", "validation_loss": 10.0},
+                {
+                    "run_dir": "candidate",
+                    "validation_loss": 10.0,
+                    "baseline_comparison": {
+                        "same_parameter_count_view": True,
+                        "same_active_compute_view": True,
+                        "similar_training_flops_view": True,
+                        "validation_loss_delta": False,
+                    },
+                },
+            ],
+        },
+    )
+
+    output = make_go_no_go_report(
+        stage_gate_report_path=stage_gate,
+        compute_report_path=compute,
+        phase="r350_to_1b",
+        output_path=tmp_path / "go.json",
+    )
+    report = json.loads(output.read_text(encoding="utf-8"))
+    criteria = {item["name"]: item for item in report["phases"]["r350_to_1b"]["criteria"]}
+
+    assert criteria["same_active_compute_routed_not_worse_than_baseline"]["status"] == "fail"
+
+
+def test_go_no_go_r350_rejects_boolean_reasoning_scores(tmp_path: Path) -> None:
+    stage_gate = _write_json(tmp_path / "stage_gate.json", _passing_stage_gate())
+    reasoning_baseline = _write_json(tmp_path / "reasoning_base.json", {"overall": {"exact_match_accuracy": False}})
+    reasoning_candidate = _write_json(
+        tmp_path / "reasoning_candidate.json",
+        {"overall": {"exact_match_accuracy": True}},
+    )
+
+    output = make_go_no_go_report(
+        stage_gate_report_path=stage_gate,
+        reasoning_baseline_report_path=reasoning_baseline,
+        reasoning_candidate_report_paths=[reasoning_candidate],
+        phase="r350_to_1b",
+        output_path=tmp_path / "go.json",
+    )
+    report = json.loads(output.read_text(encoding="utf-8"))
+    criteria = {item["name"]: item for item in report["phases"]["r350_to_1b"]["criteria"]}
+    reasoning = criteria["reasoning_or_synthetic_multistep_improves"]
+
+    assert reasoning["status"] == "missing"
+    assert reasoning["evidence"]["baseline_score"] is None
+    assert reasoning["evidence"]["candidate_scores"] == [None]
+
+
 def test_go_no_go_includes_parallel_compare_as_optional_evidence(tmp_path: Path) -> None:
     stage_gate = _write_json(tmp_path / "stage_gate.json", _passing_stage_gate())
     parallel = _write_json(
