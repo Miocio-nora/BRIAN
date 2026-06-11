@@ -918,6 +918,31 @@ def test_stage3_gate_requires_positive_difficulty_step_correlation(tmp_path: Pat
     assert gate["difficulty_step_correlation"] == -0.2
 
 
+def test_stage3_gate_rejects_boolean_difficulty_step_correlation(tmp_path: Path) -> None:
+    stage3 = _write_run(
+        tmp_path,
+        "stage3",
+        stage="stage3_scheduled_free_routing",
+        val_loss=10.0,
+        train_row={
+            "route_entropy": 0.5,
+            "block_load_entropy": 0.5,
+            "route_path_diversity": 0.5,
+            "average_route_steps": 2.0,
+            "top1_block_histogram": {"0": 1, "1": 1, "2": 1},
+        },
+        difficulty_report={"sample_count": 3, "difficulty_step_correlation": True},
+    )
+
+    report_path = make_stage_gate_report([stage3], output_path=tmp_path / "gate.json")
+    gate = json.loads(report_path.read_text(encoding="utf-8"))["gates"]["stage3_to_4"]
+
+    assert gate["checks"]["difficulty_report_present"] is True
+    assert gate["checks"]["difficulty_step_correlation_finite"] is False
+    assert gate["checks"]["difficulty_step_correlation_positive"] is False
+    assert gate["difficulty_step_correlation"] is None
+
+
 def test_stage5_gate_warns_without_long_context_compare_report(tmp_path: Path) -> None:
     stage5 = _write_run(
         tmp_path,

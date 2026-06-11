@@ -53,8 +53,9 @@ def make_routing_report(run_dir: str | Path) -> Path:
     latest_location_distance_trajectory: list[Any] | None = None
     for row in rows:
         for key in ROUTING_KEYS:
-            if isinstance(row.get(key), (int, float)):
-                aggregates[key].append(float(row[key]))
+            value = _num(row.get(key))
+            if value is not None and math.isfinite(value):
+                aggregates[key].append(value)
         if isinstance(row.get("top1_block_histogram"), dict):
             latest_histogram = row["top1_block_histogram"]
         if isinstance(row.get("exit_step_distribution"), list):

@@ -178,6 +178,59 @@ def test_routing_report_warns_when_route_behavior_is_missing(tmp_path: Path) -> 
     assert report["checks"]["inference_timing_metrics_present"] is False
 
 
+def test_routing_report_rejects_boolean_route_metrics(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    _write_jsonl(
+        run_dir / "train_log.jsonl",
+        [
+            {
+                "step": 1,
+                "loss": 3.0,
+                "route_entropy": True,
+                "block_load_entropy": True,
+                "route_path_diversity": True,
+                "active_block_evals_per_token": True,
+                "average_route_steps": True,
+                "advance_ratio": True,
+                "skip_ratio": True,
+                "recur_ratio": True,
+                "position_norm_mean": True,
+                "location_distance_mean": True,
+                "tokens_per_second": 10.0,
+                "train_step_time_seconds": 0.2,
+                "train_latency_ms_per_token": 20.0,
+                "top1_block_histogram": {"0": 1, "1": 1, "2": 1},
+                "exit_step_distribution": [1, 1],
+                "route_path_examples": [{"sample_index": 0, "actions": [0, 1]}],
+                "position_norm_trajectory": [1.0],
+                "location_distance_trajectory": [0.5],
+            }
+        ],
+    )
+    _write_jsonl(
+        run_dir / "eval_log.jsonl",
+        [
+            {
+                "step": 1,
+                "validation_loss": 2.0,
+                "perplexity": 7.4,
+                "inference_time_seconds": 0.2,
+                "inference_tokens_per_second": 10.0,
+                "inference_latency_ms_per_token": 100.0,
+            }
+        ],
+    )
+
+    report = json.loads(make_routing_report(run_dir).read_text(encoding="utf-8"))
+
+    assert "route_entropy" not in report["summary"]
+    assert report["overall_status"] == "warn"
+    assert report["checks"]["core_route_metrics_present"] is False
+    assert report["checks"]["route_transition_ratios_present"] is False
+    assert report["checks"]["position_location_metrics_present"] is False
+
+
 def test_routing_report_matches_eval_curve_to_previous_train_step(tmp_path: Path) -> None:
     run_dir = tmp_path / "run"
     run_dir.mkdir()

@@ -713,9 +713,11 @@ def _difficulty_step_corr(rows: list[dict[str, Any]]) -> float | None:
     difficulty = []
     steps = []
     for row in rows:
-        if isinstance(row.get("baseline_sample_loss"), (int, float)) and isinstance(row.get("average_route_steps"), (int, float)):
-            difficulty.append(float(row["baseline_sample_loss"]))
-            steps.append(float(row["average_route_steps"]))
+        sample_loss = _num(row.get("baseline_sample_loss"))
+        route_steps = _num(row.get("average_route_steps"))
+        if sample_loss is not None and route_steps is not None:
+            difficulty.append(sample_loss)
+            steps.append(route_steps)
     return pearson_correlation(difficulty, steps)
 
 
@@ -788,6 +790,8 @@ def _nonempty_string(value: Any) -> bool:
 
 
 def _num(value: Any) -> float | None:
+    if isinstance(value, bool):
+        return None
     if isinstance(value, (int, float)):
         return float(value)
     return None
