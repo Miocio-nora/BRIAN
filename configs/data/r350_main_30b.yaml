@@ -1,0 +1,6 @@
+extends: r350_main_10b.yaml
+recipe_name: r350_main_30b
+target_tokens: 30000000000
+validation_tokens: 200000000
+output_dir: data/tokenized/r350_main_30b
+manifest_path: data/manifests/r350_main_30b.jsonl

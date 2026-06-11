@@ -1,0 +1,7 @@
+extends: r1b_pilot.yaml
+recipe_name: r1b_main_50b
+target_tokens: 50000000000
+validation_tokens: 200000000
+sequence_length: 4096
+output_dir: data/tokenized/r1b_main_50b
+manifest_path: data/manifests/r1b_main_50b.jsonl

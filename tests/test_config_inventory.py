@@ -104,6 +104,27 @@ def test_eval_configs_declare_eval_names() -> None:
     assert errors == []
 
 
+def test_planned_data_recipe_ladder_is_declared() -> None:
+    expected = {
+        "r125_smoke": (100_000_000, 2_048),
+        "r125_main_2b": (2_000_000_000, 2_048),
+        "r125_main_5b": (5_000_000_000, 2_048),
+        "r350_main_10b": (10_000_000_000, 4_096),
+        "r350_main_30b": (30_000_000_000, 4_096),
+        "r1b_pilot_10b": (10_000_000_000, 4_096),
+        "r1b_main_50b": (50_000_000_000, 4_096),
+    }
+    by_name = {load_config(path)["recipe_name"]: load_config(path) for path in _yaml_files(CONFIG_ROOT / "data")}
+
+    for recipe_name, (target_tokens, sequence_length) in expected.items():
+        config = by_name[recipe_name]
+        assert config["target_tokens"] == target_tokens
+        assert config["sequence_length"] == sequence_length
+        assert config["validation_tokens"] > 0
+        assert config["output_dir"].endswith(recipe_name)
+        assert config["manifest_path"].endswith(f"{recipe_name}.jsonl")
+
+
 def _yaml_files(root: Path) -> list[Path]:
     return sorted(root.rglob("*.yaml"))
 

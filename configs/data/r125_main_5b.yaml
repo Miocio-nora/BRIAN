@@ -1,0 +1,6 @@
+extends: r125_main_2b.yaml
+recipe_name: r125_main_5b
+target_tokens: 5000000000
+validation_tokens: 100000000
+output_dir: data/tokenized/r125_main_5b
+manifest_path: data/manifests/r125_main_5b.jsonl

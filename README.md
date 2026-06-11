@@ -59,6 +59,20 @@ torchaudio==2.11.0+cu128
 
 This is intended for Blackwell/B200 hosts with a CUDA 12.8-capable driver.
 
+## Data Recipe Ladder
+
+The planned fixed-length data recipes are declared under `configs/data/`:
+
+| Recipe | Target tokens | Sequence length | Purpose |
+|---|---:|---:|---|
+| `r125_smoke` | 100M | 2048 | first baseline and fixed-route checks |
+| `r125_main_2b` | 2B | 2048 | first serious R125 route-core validation |
+| `r125_main_5b` | 5B | 2048 | stronger R125 run if 2B looks promising |
+| `r350_main_10b` | 10B | 4096 | first R350 scaling trend check |
+| `r350_main_30b` | 30B | 4096 | stronger R350 run |
+| `r1b_pilot_10b` | 10B | 4096 | 1B architecture pilot |
+| `r1b_main_50b` | 50B | 4096 | serious 1B validation after R350 evidence |
+
 ## Quick Smoke Run
 
 Prepare a tiny synthetic dataset:
