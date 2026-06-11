@@ -359,13 +359,32 @@ Summarize a completed Stage 5 Global KV ablation package:
 python scripts/eval.py \
   --config configs/eval/global_kv_ablation.yaml \
   --experiment-manifest configs/experiments/tiny_global_kv.yaml \
-  --runs <local_kv_run> <global_no_sink_run> <global_with_sink_run> <global_window_small_run> <global_window_large_run> \
-  --reports <long_context_local.json> <long_context_no_sink.json> <long_context_with_sink.json> <long_context_window_small.json> <long_context_window_large.json>
+  --runs \
+    <local_kv_run> \
+    <global_uncompressed_run> \
+    <global_compressed_run> \
+    <global_no_sink_run> \
+    <global_with_sink_run> \
+    <global_window_small_run> \
+    <global_window_large_run> \
+  --reports \
+    <long_context_local.json> \
+    <long_context_uncompressed.json> \
+    <long_context_compressed.json> \
+    <long_context_no_sink.json> \
+    <long_context_with_sink.json> \
+    <long_context_window_small.json> \
+    <long_context_window_large.json>
 ```
 
-This writes `reports/global_kv_ablation_report.json` with K0/K3/K4/K5 coverage checks, sink/no-sink retention deltas, window-size sweep rows, and optional long-context memory/quality metrics. If the long-context reports do not cover every run, the report stays at `warn` instead of `pass`.
+This writes `reports/global_kv_ablation_report.json` with C0-C5 coverage checks, sink/no-sink retention deltas,
+window-size sweep rows, and optional long-context memory/quality metrics.
+If the long-context reports do not cover every run, the report stays at `warn` instead of `pass`.
 
-The fast smoke manifest is `configs/experiments/tiny_global_kv.yaml`; the BRIAN-R125 sweep manifest is `configs/experiments/route_core_global_kv.yaml`. These cover the local-KV baseline, no-sink Global KV, default sink+window Global KV, and a small cache-window sweep.
+The fast smoke manifest is `configs/experiments/tiny_global_kv.yaml`;
+the BRIAN-R125 sweep manifest is `configs/experiments/route_core_global_kv.yaml`.
+These cover the local-KV baseline, uncompressed and compressed Global KV, no-sink Global KV,
+default sink+window Global KV, and a small cache-window sweep.
 
 Compare top-k weighted fusion against parallel passing:
 

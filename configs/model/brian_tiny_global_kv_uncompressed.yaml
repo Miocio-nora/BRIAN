@@ -1,0 +1,7 @@
+extends: brian_tiny_top2.yaml
+model_name: brian_tiny_global_kv_uncompressed
+global_kv: true
+global_code_dim: 64
+global_sink_slots: 1
+global_window_slots: 3
+hard_exit: true

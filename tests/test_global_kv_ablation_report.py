@@ -12,8 +12,31 @@ def test_global_kv_ablation_report_passes_with_manifest_runs_and_long_context(tm
         _write_run(tmp_path, "local", global_kv=False, sink_slots=0, window_slots=0, validation_loss=10.0),
         _write_run(
             tmp_path,
+            "uncompressed",
+            global_kv=True,
+            global_code_dim=64,
+            sink_slots=1,
+            window_slots=3,
+            validation_loss=10.1,
+            sink_mass=0.5,
+            window_mass=0.5,
+        ),
+        _write_run(
+            tmp_path,
+            "compressed",
+            global_kv=True,
+            global_code_dim=16,
+            sink_slots=1,
+            window_slots=3,
+            validation_loss=10.0,
+            sink_mass=0.6,
+            window_mass=0.4,
+        ),
+        _write_run(
+            tmp_path,
             "no_sink",
             global_kv=True,
+            global_code_dim=16,
             sink_slots=0,
             window_slots=3,
             validation_loss=10.1,
@@ -24,6 +47,7 @@ def test_global_kv_ablation_report_passes_with_manifest_runs_and_long_context(tm
             tmp_path,
             "with_sink",
             global_kv=True,
+            global_code_dim=16,
             sink_slots=1,
             window_slots=3,
             validation_loss=10.0,
@@ -34,6 +58,7 @@ def test_global_kv_ablation_report_passes_with_manifest_runs_and_long_context(tm
             tmp_path,
             "window1",
             global_kv=True,
+            global_code_dim=16,
             sink_slots=1,
             window_slots=1,
             validation_loss=10.2,
@@ -44,6 +69,7 @@ def test_global_kv_ablation_report_passes_with_manifest_runs_and_long_context(tm
             tmp_path,
             "window6",
             global_kv=True,
+            global_code_dim=16,
             sink_slots=1,
             window_slots=6,
             validation_loss=9.9,
@@ -66,10 +92,16 @@ def test_global_kv_ablation_report_passes_with_manifest_runs_and_long_context(tm
 
     assert report["overall_status"] == "pass"
     assert report["checks"]["runs_match_manifest_entries"] is True
+    assert report["checks"]["uncompressed_candidate_present"] is True
+    assert report["checks"]["compressed_candidate_present"] is True
     assert report["checks"]["with_sink_retention_measured"] is True
     assert report["checks"]["no_sink_zero_sink_attention_measured"] is True
     assert report["checks"]["window_slots_vary"] is True
     assert report["comparisons"]["with_sink_vs_no_sink"]["status"] == "present"
+    assert report["comparisons"]["uncompressed_vs_compressed"]["status"] == "present"
+    assert report["comparisons"]["uncompressed_vs_compressed"][
+        "global_code_dim_delta_compressed_minus_uncompressed"
+    ] == -48
     assert report["comparisons"]["with_sink_vs_no_sink"]["sink_attention_mass_delta"] == 0.6
     assert [row["global_window_slots"] for row in report["comparisons"]["window_sweep"]] == [1, 6]
 
@@ -77,8 +109,19 @@ def test_global_kv_ablation_report_passes_with_manifest_runs_and_long_context(tm
 def test_global_kv_ablation_report_fails_without_window_sweep(tmp_path: Path) -> None:
     runs = [
         _write_run(tmp_path, "local", global_kv=False, sink_slots=0, window_slots=0),
-        _write_run(tmp_path, "no_sink", global_kv=True, sink_slots=0, window_slots=3, sink_mass=0.0, window_mass=1.0),
-        _write_run(tmp_path, "with_sink", global_kv=True, sink_slots=1, window_slots=3),
+        _write_run(tmp_path, "uncompressed", global_kv=True, global_code_dim=64, sink_slots=1, window_slots=3),
+        _write_run(tmp_path, "compressed", global_kv=True, global_code_dim=16, sink_slots=1, window_slots=3),
+        _write_run(
+            tmp_path,
+            "no_sink",
+            global_kv=True,
+            global_code_dim=16,
+            sink_slots=0,
+            window_slots=3,
+            sink_mass=0.0,
+            window_mass=1.0,
+        ),
+        _write_run(tmp_path, "with_sink", global_kv=True, global_code_dim=16, sink_slots=1, window_slots=3),
     ]
 
     output = make_global_kv_ablation_report(
@@ -105,6 +148,7 @@ def _write_run(
     global_kv: bool,
     sink_slots: int,
     window_slots: int,
+    global_code_dim: int = 16,
     validation_loss: float = 10.0,
     sink_mass: float | None = 0.5,
     window_mass: float | None = 0.5,
@@ -116,6 +160,7 @@ def _write_run(
         "stage": stage,
         "model_config_resolved": {
             "global_kv": global_kv,
+            "global_code_dim": global_code_dim if global_kv else 0,
             "global_sink_slots": sink_slots,
             "global_window_slots": window_slots,
         },

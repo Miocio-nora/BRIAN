@@ -1,0 +1,2 @@
+extends: stage5_global_kv.yaml
+model_config: ../model/brian_r125_global_kv_compressed.yaml

@@ -164,20 +164,38 @@ def _global_kv_requirements(plan: ExperimentPlan, entries: list[dict[str, Any]])
     )
     return [
         _group_requirement(
-            "K0_or_C0",
+            "C0",
             "local KV only baseline",
             entries,
             lambda entry: entry["model"].get("global_kv") is not True,
         ),
         _group_requirement(
-            "K3_or_C3",
+            "C1",
+            "local plus global uncompressed",
+            entries,
+            lambda entry: entry["model"].get("global_kv") is True
+            and _num(entry["model"].get("global_code_dim")) is not None
+            and _num(entry["model"].get("base_d_model")) is not None
+            and _num(entry["model"].get("global_code_dim")) == _num(entry["model"].get("base_d_model")),
+        ),
+        _group_requirement(
+            "C2",
+            "local plus global compressed",
+            entries,
+            lambda entry: entry["model"].get("global_kv") is True
+            and _num(entry["model"].get("global_code_dim")) is not None
+            and _num(entry["model"].get("base_d_model")) is not None
+            and _num(entry["model"].get("global_code_dim")) < _num(entry["model"].get("base_d_model")),
+        ),
+        _group_requirement(
+            "C3",
             "global KV without sink",
             entries,
             lambda entry: entry["model"].get("global_kv") is True
             and _num(entry["model"].get("global_sink_slots")) == 0,
         ),
         _group_requirement(
-            "K4_or_C4",
+            "C4",
             "global KV with sink and window",
             entries,
             lambda entry: entry["model"].get("global_kv") is True
@@ -185,7 +203,7 @@ def _global_kv_requirements(plan: ExperimentPlan, entries: list[dict[str, Any]])
             and (_num(entry["model"].get("global_window_slots")) or 0) > 0,
         ),
         {
-            "id": "K5_or_C5",
+            "id": "C5",
             "description": "global KV window size sweep",
             "status": "pass" if len(distinct_windows) >= 2 else "fail",
             "matched_entry_ids": [entry["id"] for entry in window_entries],
@@ -311,7 +329,7 @@ def _summarize_entry(entry: Any) -> dict[str, Any]:
         "train_mode": train_mode,
         "routing_mode": routing.get("mode"),
         "model_config": str(model_config_path) if model_config_path else None,
-        "model": _model_summary(model_config),
+        "model": _model_summary(model_config, model_config_path),
         "loss_weights": {key: _num(value) for key, value in loss_weights.items()},
         "checks": {
             "train_config_exists": train_config_path.exists(),
@@ -341,7 +359,7 @@ def _load_optional_config(path: Path | None) -> dict[str, Any]:
     return load_config(path)
 
 
-def _model_summary(config: dict[str, Any]) -> dict[str, Any]:
+def _model_summary(config: dict[str, Any], model_config_path: Path | None) -> dict[str, Any]:
     keys = [
         "model_name",
         "architecture",
@@ -358,13 +376,25 @@ def _model_summary(config: dict[str, Any]) -> dict[str, Any]:
         "later_top_k",
         "hard_exit",
         "global_kv",
+        "global_code_dim",
         "global_sink_slots",
         "global_window_slots",
         "parallel_passing",
         "beam_size",
         "branch_cost",
     ]
-    return {key: config.get(key) for key in keys if key in config}
+    summary = {key: config.get(key) for key in keys if key in config}
+    base_config = config.get("base_config")
+    if base_config and model_config_path is not None:
+        base_path = (model_config_path.parent / str(base_config)).resolve()
+        base = _load_optional_config(base_path)
+        if "d_model" in base:
+            summary["base_d_model"] = base.get("d_model")
+    elif isinstance(config.get("base"), dict):
+        base = config["base"]
+        if "d_model" in base:
+            summary["base_d_model"] = base.get("d_model")
+    return summary
 
 
 def _overall_status(checks: dict[str, bool], requirements: list[dict[str, Any]]) -> str:

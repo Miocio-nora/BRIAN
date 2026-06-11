@@ -50,6 +50,7 @@ def make_global_kv_ablation_report(
         "entries": rows,
         "comparisons": {
             "local_vs_global": _local_vs_global(rows),
+            "uncompressed_vs_compressed": _uncompressed_vs_compressed(rows),
             "with_sink_vs_no_sink": _with_sink_vs_no_sink(rows),
             "window_sweep": _window_sweep(rows),
         },
@@ -61,7 +62,11 @@ def make_global_kv_ablation_report(
     return output_path
 
 
-def _summarize_run(entry: dict[str, Any], run_dir: Path, long_context_by_run: dict[str, dict[str, Any]]) -> dict[str, Any]:
+def _summarize_run(
+    entry: dict[str, Any],
+    run_dir: Path,
+    long_context_by_run: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
     if not (run_dir / "routing_report.json").exists() and (run_dir / "train_log.jsonl").exists():
         make_routing_report(run_dir)
     config = _read_yaml_if_exists(run_dir / "config_resolved.yaml")
@@ -75,6 +80,7 @@ def _summarize_run(entry: dict[str, Any], run_dir: Path, long_context_by_run: di
     routing_summary = routing_report.get("summary", {}) if isinstance(routing_report.get("summary"), dict) else {}
     long_context = long_context_by_run.get(_normalize_run_dir(run_dir), {})
     global_kv_enabled = _bool(model_config.get("global_kv", False))
+    global_code_dim = int(_num(model_config.get("global_code_dim")) or 0)
     sink_slots = int(_num(model_config.get("global_sink_slots")) or 0)
     window_slots = int(_num(model_config.get("global_window_slots")) or 0)
     global_metrics = _global_metrics(routing_summary, latest_eval, long_context)
@@ -84,6 +90,7 @@ def _summarize_run(entry: dict[str, Any], run_dir: Path, long_context_by_run: di
         "stage": str(config.get("stage", "")),
         "model_name": str(model_stats.get("model_name", "")),
         "global_kv_enabled": global_kv_enabled,
+        "global_code_dim": global_code_dim if global_kv_enabled else 0,
         "global_sink_slots": sink_slots,
         "global_window_slots": window_slots,
         "global_retention_capacity_slots": sink_slots + window_slots if global_kv_enabled else 0,
@@ -99,6 +106,8 @@ def _summarize_run(entry: dict[str, Any], run_dir: Path, long_context_by_run: di
 
 def _required_checks(rows: list[dict[str, Any]], *, expected_entry_count: int) -> dict[str, bool]:
     global_rows = [row for row in rows if row["global_kv_enabled"]]
+    uncompressed_rows = [row for row in rows if row["kind"] == "uncompressed"]
+    compressed_rows = [row for row in rows if row["kind"] == "compressed"]
     no_sink_rows = [row for row in rows if row["kind"] == "no_sink"]
     with_sink_rows = [row for row in rows if row["kind"] == "with_sink"]
     window_rows = [row for row in rows if row["kind"] == "window_sweep"]
@@ -106,6 +115,8 @@ def _required_checks(rows: list[dict[str, Any]], *, expected_entry_count: int) -
         "runs_match_manifest_entries": len(rows) == expected_entry_count,
         "local_baseline_present": any(row["kind"] == "local" for row in rows),
         "global_candidate_present": bool(global_rows),
+        "uncompressed_candidate_present": bool(uncompressed_rows),
+        "compressed_candidate_present": bool(compressed_rows),
         "no_sink_candidate_present": bool(no_sink_rows),
         "with_sink_candidate_present": bool(with_sink_rows),
         "with_sink_retention_measured": any(_sink_window_measured(row) for row in with_sink_rows),
@@ -190,8 +201,45 @@ def _with_sink_vs_no_sink(rows: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def _uncompressed_vs_compressed(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    uncompressed = next((row for row in rows if row["kind"] == "uncompressed"), None)
+    compressed = next((row for row in rows if row["kind"] == "compressed"), None)
+    if uncompressed is None or compressed is None:
+        return {"status": "missing"}
+    return {
+        "status": "present",
+        "uncompressed_run": uncompressed["run_dir"],
+        "compressed_run": compressed["run_dir"],
+        "global_code_dim_uncompressed": uncompressed.get("global_code_dim"),
+        "global_code_dim_compressed": compressed.get("global_code_dim"),
+        "global_code_dim_delta_compressed_minus_uncompressed": _delta(
+            compressed.get("global_code_dim"),
+            uncompressed.get("global_code_dim"),
+        ),
+        "validation_loss_delta_compressed_minus_uncompressed": _delta(
+            compressed.get("validation_loss"),
+            uncompressed.get("validation_loss"),
+        ),
+        "exact_match_delta": _delta(
+            compressed["long_context"].get("exact_match_accuracy"),
+            uncompressed["long_context"].get("exact_match_accuracy"),
+        ),
+        "teacher_forced_token_accuracy_delta": _delta(
+            compressed["long_context"].get("teacher_forced_token_accuracy"),
+            uncompressed["long_context"].get("teacher_forced_token_accuracy"),
+        ),
+        "global_cache_capacity_ratio_delta": _delta(
+            compressed["long_context"].get("global_cache_capacity_ratio"),
+            uncompressed["long_context"].get("global_cache_capacity_ratio"),
+        ),
+    }
+
+
 def _window_sweep(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    window_rows = sorted((row for row in rows if row["kind"] == "window_sweep"), key=lambda row: row["global_window_slots"])
+    window_rows = sorted(
+        (row for row in rows if row["kind"] == "window_sweep"),
+        key=lambda row: row["global_window_slots"],
+    )
     return [
         {
             "entry_id": row["id"],
@@ -215,11 +263,15 @@ def _entry_kind(row: dict[str, Any]) -> str:
     name = str(row.get("name", "")).lower()
     if not row["global_kv_enabled"]:
         return "local"
+    if entry_id == "c1" or "uncompressed" in name:
+        return "uncompressed"
+    if entry_id == "c2" or "compressed" in name:
+        return "compressed"
     if "no_sink" in name or row["global_sink_slots"] == 0:
         return "no_sink"
-    if entry_id.startswith("k5") or "window" in name:
+    if entry_id.startswith(("k5", "c5")) or "window" in name:
         return "window_sweep"
-    if "with_sink" in name or entry_id == "k4":
+    if "with_sink" in name or entry_id in {"k4", "c4"}:
         return "with_sink"
     return "global"
 

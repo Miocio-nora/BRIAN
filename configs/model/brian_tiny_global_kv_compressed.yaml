@@ -1,0 +1,2 @@
+extends: brian_tiny_global_kv.yaml
+model_name: brian_tiny_global_kv_compressed

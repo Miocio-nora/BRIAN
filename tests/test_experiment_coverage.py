@@ -43,10 +43,12 @@ def test_global_kv_package_coverage_passes_window_and_sink_requirements(tmp_path
 
     assert report["overall_status"] == "pass"
     assert report["profile"] == "global_kv_ablation"
-    assert _requirement(report, "K0_or_C0")["status"] == "pass"
-    assert _requirement(report, "K3_or_C3")["status"] == "pass"
-    assert _requirement(report, "K4_or_C4")["status"] == "pass"
-    window = _requirement(report, "K5_or_C5")
+    assert _requirement(report, "C0")["status"] == "pass"
+    assert _requirement(report, "C1")["status"] == "pass"
+    assert _requirement(report, "C2")["status"] == "pass"
+    assert _requirement(report, "C3")["status"] == "pass"
+    assert _requirement(report, "C4")["status"] == "pass"
+    window = _requirement(report, "C5")
     assert window["status"] == "pass"
     assert len(window["checks"]["distinct_global_window_slots"]) >= 2
 
