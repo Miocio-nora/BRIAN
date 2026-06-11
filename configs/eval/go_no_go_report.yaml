@@ -12,3 +12,8 @@ global_kv_ablation_report_path: null
 parallel_compare_report_path: null
 min_difficulty_step_correlation: 0.0
 min_reasoning_delta: 0.0
+max_compute_adjusted_loss_delta: 0.0
+min_visible_cot_reduction: 1.0
+max_reasoning_drop_for_cot: 0.0
+max_global_kv_cache_capacity_ratio: 1.0
+max_inference_latency_ratio: 2.0

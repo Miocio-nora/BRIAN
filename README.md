@@ -369,7 +369,21 @@ python scripts/eval.py \
   --parallel-compare-report reports/parallel_compare.json
 ```
 
-This maps the project plan's R125/R350 Go/No-Go criteria to existing evidence. Missing evidence stays explicit as `missing`, failed criteria produce a `stop` recommendation, and supplied parallel-compare evidence is retained as optional evidence without changing the decision.
+This maps the project plan's R125/R350, R350/1B, and R1B success Go/No-Go criteria to existing evidence. Missing evidence stays explicit as `missing`, failed criteria produce a `stop` recommendation, and supplied parallel-compare evidence is retained as optional evidence without changing the decision.
+
+To check the R1B success criteria directly, override the phase:
+
+```bash
+python scripts/eval.py \
+  --config configs/eval/go_no_go_report.yaml \
+  --phase r1b_success \
+  --stage-gate-report reports/stage_gate_report.json \
+  --compute-report reports/compute_report.json \
+  --global-kv-ablation-report reports/global_kv_ablation_report.json \
+  --long-context-compare-report reports/long_context_compare.json
+```
+
+The `r1b_success` phase requires non-collapsed routing, compute-adjusted evaluation evidence, controlled Global KV memory, acceptable inference latency, and at least one stable core advantage: compute-adjusted validation loss, reasoning accuracy, long-context memory efficiency, or lower visible-CoT token use at similar reasoning accuracy.
 
 Run the Stage 6 parallel-passing packages:
 

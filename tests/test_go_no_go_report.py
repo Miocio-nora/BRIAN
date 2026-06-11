@@ -53,6 +53,29 @@ def _passing_stage_gate() -> dict:
     }
 
 
+def _controlled_memory_compare() -> dict:
+    return {
+        "overall_status": "pass",
+        "candidate_count": 1,
+        "comparisons": [
+            {
+                "candidate_report": "candidate_long_context.json",
+                "candidate_run_dir": "r1b_candidate",
+                "status": "pass",
+                "memory_budget": {
+                    "candidate": {
+                        "estimated_global_cache_capacity_to_local_context_ratio": 0.25,
+                    },
+                },
+                "checks": {
+                    "memory_budget_present": True,
+                    "global_budget_below_local_context": True,
+                },
+            }
+        ],
+    }
+
+
 def test_go_no_go_r125_passes_with_required_evidence(tmp_path: Path) -> None:
     stage_gate = _write_json(tmp_path / "stage_gate.json", _passing_stage_gate())
     position = _write_json(tmp_path / "position.json", {"overall_status": "pass", "candidate_count": 3})
@@ -224,3 +247,158 @@ def test_go_no_go_includes_parallel_compare_as_optional_evidence(tmp_path: Path)
     assert evidence["overall_status"] == "pass"
     assert evidence["candidate_count"] == 1
     assert evidence["comparisons"][0]["checks"]["parallel_branch_benefit_proxy"] is True
+
+
+def test_go_no_go_r1b_success_passes_with_compute_adjusted_advantage(tmp_path: Path) -> None:
+    stage_gate = _write_json(tmp_path / "stage_gate.json", _passing_stage_gate())
+    compute = _write_json(
+        tmp_path / "compute.json",
+        {
+            "run_count": 2,
+            "baseline_run": "baseline",
+            "runs": [
+                {
+                    "run_dir": "baseline",
+                    "validation_loss": 10.0,
+                    "inference_latency_ms_per_token_latest": 1.0,
+                },
+                {
+                    "run_dir": "r1b_candidate",
+                    "stage": "stage6_parallel_passing",
+                    "validation_loss": 10.2,
+                    "inference_latency_ms_per_token_latest": 1.5,
+                    "baseline_comparison": {
+                        "estimated_flops_per_token_ratio": 0.9,
+                        "inference_latency_ms_per_token_ratio": 1.5,
+                        "validation_loss_delta": 0.2,
+                    },
+                },
+            ],
+        },
+    )
+    long_context = _write_json(tmp_path / "long_context.json", _controlled_memory_compare())
+
+    output = make_go_no_go_report(
+        stage_gate_report_path=stage_gate,
+        compute_report_path=compute,
+        long_context_compare_report_path=long_context,
+        phase="r1b_success",
+        output_path=tmp_path / "go.json",
+    )
+    report = json.loads(output.read_text(encoding="utf-8"))
+    phase = report["phases"]["r1b_success"]
+    criteria = {item["name"]: item for item in phase["criteria"]}
+
+    assert report["overall_status"] == "pass"
+    assert criteria["routing_does_not_collapse"]["status"] == "pass"
+    assert criteria["compute_adjusted_eval_present"]["status"] == "pass"
+    assert criteria["kv_memory_remains_controlled"]["status"] == "pass"
+    assert criteria["inference_latency_remains_acceptable"]["status"] == "pass"
+    assert criteria["at_least_one_core_advantage_stable"]["status"] == "pass"
+    memory = criteria["kv_memory_remains_controlled"]["evidence"]["long_context_compare"]["memory_candidates"]
+    latency = criteria["inference_latency_remains_acceptable"]["evidence"]["candidates"]
+    adjusted = criteria["at_least_one_core_advantage_stable"]["evidence"]["better_compute_adjusted_perplexity"]
+    assert memory[0]["global_cache_capacity_ratio"] == 0.25
+    assert latency[0]["inference_latency_ms_per_token_ratio"] == 1.5
+    assert adjusted["passed"] is True
+    assert adjusted["evidence"]["candidates"][0]["compute_adjusted_loss_delta"] < 0.0
+
+
+def test_go_no_go_r1b_success_fails_explicit_routing_collapse(tmp_path: Path) -> None:
+    stage_gate_data = _passing_stage_gate()
+    stage_gate_data["gates"]["stage2_to_3"]["checks"]["block_usage_non_degenerate"] = False
+    stage_gate = _write_json(tmp_path / "stage_gate.json", stage_gate_data)
+    compute = _write_json(
+        tmp_path / "compute.json",
+        {
+            "run_count": 2,
+            "baseline_run": "baseline",
+            "runs": [
+                {
+                    "run_dir": "baseline",
+                    "validation_loss": 10.0,
+                    "inference_latency_ms_per_token_latest": 1.0,
+                },
+                {
+                    "run_dir": "r1b_candidate",
+                    "validation_loss": 10.2,
+                    "inference_latency_ms_per_token_latest": 1.5,
+                    "baseline_comparison": {
+                        "estimated_flops_per_token_ratio": 0.9,
+                        "inference_latency_ms_per_token_ratio": 1.5,
+                    },
+                },
+            ],
+        },
+    )
+    long_context = _write_json(tmp_path / "long_context.json", _controlled_memory_compare())
+
+    output = make_go_no_go_report(
+        stage_gate_report_path=stage_gate,
+        compute_report_path=compute,
+        long_context_compare_report_path=long_context,
+        phase="r1b_success",
+        output_path=tmp_path / "go.json",
+    )
+    report = json.loads(output.read_text(encoding="utf-8"))
+    criteria = {item["name"]: item for item in report["phases"]["r1b_success"]["criteria"]}
+
+    assert report["overall_status"] == "fail"
+    assert criteria["routing_does_not_collapse"]["status"] == "fail"
+
+
+def test_go_no_go_r1b_success_accepts_less_visible_cot_advantage(tmp_path: Path) -> None:
+    stage_gate = _write_json(tmp_path / "stage_gate.json", _passing_stage_gate())
+    compute = _write_json(
+        tmp_path / "compute.json",
+        {
+            "run_count": 2,
+            "baseline_run": "baseline",
+            "runs": [
+                {
+                    "run_dir": "baseline",
+                    "validation_loss": 10.0,
+                    "inference_latency_ms_per_token_latest": 1.0,
+                },
+                {
+                    "run_dir": "r1b_candidate",
+                    "validation_loss": 10.1,
+                    "inference_latency_ms_per_token_latest": 1.1,
+                    "baseline_comparison": {
+                        "estimated_flops_per_token_ratio": 1.0,
+                        "inference_latency_ms_per_token_ratio": 1.1,
+                    },
+                },
+            ],
+        },
+    )
+    long_context = _write_json(tmp_path / "long_context.json", _controlled_memory_compare())
+    reasoning_baseline = _write_json(
+        tmp_path / "reasoning_base.json",
+        {"overall": {"exact_match_accuracy": 0.6, "visible_cot_tokens_mean": 40.0}},
+    )
+    reasoning_candidate = _write_json(
+        tmp_path / "reasoning_candidate.json",
+        {"overall": {"exact_match_accuracy": 0.6, "visible_cot_tokens_mean": 20.0}},
+    )
+
+    output = make_go_no_go_report(
+        stage_gate_report_path=stage_gate,
+        compute_report_path=compute,
+        long_context_compare_report_path=long_context,
+        reasoning_baseline_report_path=reasoning_baseline,
+        reasoning_candidate_report_paths=[reasoning_candidate],
+        phase="r1b_success",
+        output_path=tmp_path / "go.json",
+    )
+    report = json.loads(output.read_text(encoding="utf-8"))
+    criteria = {item["name"]: item for item in report["phases"]["r1b_success"]["criteria"]}
+    cot_advantage = criteria["at_least_one_core_advantage_stable"]["evidence"][
+        "less_visible_cot_for_similar_reasoning"
+    ]
+
+    assert report["overall_status"] == "pass"
+    assert criteria["kv_memory_remains_controlled"]["status"] == "pass"
+    assert criteria["inference_latency_remains_acceptable"]["status"] == "pass"
+    assert cot_advantage["passed"] is True
+    assert cot_advantage["evidence"]["candidate_comparisons"][0]["visible_cot_token_delta"] == -20.0

@@ -22,6 +22,11 @@ def make_go_no_go_report(
     parallel_compare_report_path: str | Path | None = None,
     min_difficulty_step_correlation: float = 0.0,
     min_reasoning_delta: float = 0.0,
+    max_compute_adjusted_loss_delta: float = 0.0,
+    min_visible_cot_reduction: float = 1.0,
+    max_reasoning_drop_for_cot: float = 0.0,
+    max_global_kv_cache_capacity_ratio: float = 1.0,
+    max_inference_latency_ratio: float = 2.0,
 ) -> Path:
     stage_gate_report = _read_json(Path(stage_gate_report_path))
     compute_report = _read_json_if_present(compute_report_path)
@@ -51,6 +56,21 @@ def make_go_no_go_report(
             min_difficulty_step_correlation=min_difficulty_step_correlation,
             min_reasoning_delta=min_reasoning_delta,
         )
+    if phase in {"all", "r1b_success"}:
+        phases["r1b_success"] = _r1b_success_decision(
+            stage_gate_report,
+            compute_report=compute_report,
+            reasoning_baseline_report=reasoning_baseline_report,
+            reasoning_candidates=reasoning_candidates,
+            long_context_compare_report=long_context_compare_report,
+            global_kv_ablation_report=global_kv_ablation_report,
+            max_compute_adjusted_loss_delta=max_compute_adjusted_loss_delta,
+            min_reasoning_delta=min_reasoning_delta,
+            min_visible_cot_reduction=min_visible_cot_reduction,
+            max_reasoning_drop_for_cot=max_reasoning_drop_for_cot,
+            max_global_kv_cache_capacity_ratio=max_global_kv_cache_capacity_ratio,
+            max_inference_latency_ratio=max_inference_latency_ratio,
+        )
     if not phases:
         raise ValueError(f"Unsupported go/no-go phase: {phase}")
 
@@ -73,6 +93,11 @@ def make_go_no_go_report(
         "thresholds": {
             "min_difficulty_step_correlation": min_difficulty_step_correlation,
             "min_reasoning_delta": min_reasoning_delta,
+            "max_compute_adjusted_loss_delta": max_compute_adjusted_loss_delta,
+            "min_visible_cot_reduction": min_visible_cot_reduction,
+            "max_reasoning_drop_for_cot": max_reasoning_drop_for_cot,
+            "max_global_kv_cache_capacity_ratio": max_global_kv_cache_capacity_ratio,
+            "max_inference_latency_ratio": max_inference_latency_ratio,
         },
         "optional_evidence": {
             "parallel_compare": _parallel_compare_evidence(parallel_compare_report),
@@ -187,6 +212,70 @@ def _r350_decision(
         ),
     ]
     return _phase("Proceed from BRIAN-R350 to 1B/global serious validation", criteria)
+
+
+def _r1b_success_decision(
+    stage_gate_report: dict[str, Any],
+    *,
+    compute_report: dict[str, Any],
+    reasoning_baseline_report: dict[str, Any],
+    reasoning_candidates: list[dict[str, Any]],
+    long_context_compare_report: dict[str, Any],
+    global_kv_ablation_report: dict[str, Any],
+    max_compute_adjusted_loss_delta: float,
+    min_reasoning_delta: float,
+    min_visible_cot_reduction: float,
+    max_reasoning_drop_for_cot: float,
+    max_global_kv_cache_capacity_ratio: float,
+    max_inference_latency_ratio: float,
+) -> dict[str, Any]:
+    core_advantages = _r1b_core_advantages(
+        compute_report=compute_report,
+        reasoning_baseline_report=reasoning_baseline_report,
+        reasoning_candidates=reasoning_candidates,
+        long_context_compare_report=long_context_compare_report,
+        global_kv_ablation_report=global_kv_ablation_report,
+        max_compute_adjusted_loss_delta=max_compute_adjusted_loss_delta,
+        min_reasoning_delta=min_reasoning_delta,
+        min_visible_cot_reduction=min_visible_cot_reduction,
+        max_reasoning_drop_for_cot=max_reasoning_drop_for_cot,
+    )
+    criteria = [
+        _criterion(
+            "routing_does_not_collapse",
+            _routing_not_collapsed(stage_gate_report),
+            _routing_not_collapsed_evidence(stage_gate_report),
+        ),
+        _criterion(
+            "compute_adjusted_eval_present",
+            _compute_adjusted_eval_present(compute_report),
+            _compute_adjusted_evidence(compute_report, max_compute_adjusted_loss_delta),
+        ),
+        _criterion(
+            "kv_memory_remains_controlled",
+            _kv_memory_controlled(
+                long_context_compare_report,
+                global_kv_ablation_report,
+                max_global_kv_cache_capacity_ratio,
+            ),
+            _kv_memory_evidence(
+                long_context_compare_report,
+                global_kv_ablation_report,
+                max_global_kv_cache_capacity_ratio,
+            ),
+        ),
+        _criterion(
+            "inference_latency_remains_acceptable",
+            _inference_latency_acceptable(compute_report, max_inference_latency_ratio),
+            _inference_latency_evidence(compute_report, max_inference_latency_ratio),
+        ),
+        _criterion(
+            "at_least_one_core_advantage_stable",
+            _at_least_one_core_advantage(core_advantages),
+            core_advantages,
+        ),
+    ]
+    return _phase("Declare BRIAN-R1B/core validation successful", criteria)
 
 
 def _phase(description: str, criteria: list[dict[str, Any]]) -> dict[str, Any]:
@@ -346,6 +435,372 @@ def _global_kv_ablation_benefit_candidates(report: dict[str, Any]) -> list[dict[
     return candidates
 
 
+def _r1b_core_advantages(
+    *,
+    compute_report: dict[str, Any],
+    reasoning_baseline_report: dict[str, Any],
+    reasoning_candidates: list[dict[str, Any]],
+    long_context_compare_report: dict[str, Any],
+    global_kv_ablation_report: dict[str, Any],
+    max_compute_adjusted_loss_delta: float,
+    min_reasoning_delta: float,
+    min_visible_cot_reduction: float,
+    max_reasoning_drop_for_cot: float,
+) -> dict[str, Any]:
+    return {
+        "better_compute_adjusted_perplexity": {
+            "passed": _better_compute_adjusted_perplexity(compute_report, max_compute_adjusted_loss_delta),
+            "evidence": _compute_adjusted_evidence(compute_report, max_compute_adjusted_loss_delta),
+        },
+        "better_reasoning_accuracy": {
+            "passed": _reasoning_improved(reasoning_baseline_report, reasoning_candidates, min_reasoning_delta),
+            "evidence": _reasoning_evidence(reasoning_baseline_report, reasoning_candidates),
+        },
+        "better_long_context_memory_efficiency": {
+            "passed": _global_kv_memory_quality_benefit(long_context_compare_report, global_kv_ablation_report),
+            "evidence": _global_kv_evidence(long_context_compare_report, global_kv_ablation_report),
+        },
+        "less_visible_cot_for_similar_reasoning": {
+            "passed": _visible_cot_reduced(
+                reasoning_baseline_report,
+                reasoning_candidates,
+                min_visible_cot_reduction=min_visible_cot_reduction,
+                max_reasoning_drop=max_reasoning_drop_for_cot,
+            ),
+            "evidence": _visible_cot_evidence(reasoning_baseline_report, reasoning_candidates),
+        },
+    }
+
+
+def _at_least_one_core_advantage(core_advantages: dict[str, Any]) -> bool | None:
+    values = [item.get("passed") for item in core_advantages.values() if isinstance(item, dict)]
+    if any(value is True for value in values):
+        return True
+    if any(value is False for value in values):
+        return False
+    return None
+
+
+def _routing_not_collapsed(stage_gate_report: dict[str, Any]) -> bool | None:
+    gates = stage_gate_report.get("gates", {})
+    checks = [
+        _gate_check(gates, "stage2_to_3", "block_usage_non_degenerate"),
+        _gate_check(gates, "stage2_to_3", "block_load_entropy_present"),
+        _gate_check(gates, "stage3_to_4", "route_entropy_present"),
+        _gate_check(gates, "stage3_to_4", "route_path_diversity_present"),
+        _gate_check(gates, "stage5_to_6", "global_attention_mass_nonzero"),
+        _gate_check(gates, "stage6_to_scale", "parallel_branch_count_present"),
+    ]
+    checks = [check for check in checks if check is not None]
+    if not checks:
+        return None
+    return all(checks)
+
+
+def _routing_not_collapsed_evidence(stage_gate_report: dict[str, Any]) -> dict[str, Any]:
+    gates = stage_gate_report.get("gates", {})
+    return {
+        "stage2_to_3": _gate_evidence(gates, "stage2_to_3", ["status"]),
+        "stage3_to_4": _gate_evidence(gates, "stage3_to_4", ["status"]),
+        "stage5_to_6": _gate_evidence(gates, "stage5_to_6", ["status"]),
+        "stage6_to_scale": _gate_evidence(gates, "stage6_to_scale", ["status"]),
+    }
+
+
+def _kv_memory_controlled(
+    long_context_compare_report: dict[str, Any],
+    global_kv_ablation_report: dict[str, Any],
+    max_global_kv_cache_capacity_ratio: float,
+) -> bool | None:
+    candidates = [
+        *_long_context_memory_candidates(long_context_compare_report, max_global_kv_cache_capacity_ratio),
+        *_global_kv_ablation_memory_candidates(global_kv_ablation_report, max_global_kv_cache_capacity_ratio),
+    ]
+    if not candidates:
+        return None
+    if all(candidate["global_cache_capacity_ratio"] is None for candidate in candidates):
+        return None
+    return any(candidate["passes_memory_control_proxy"] for candidate in candidates)
+
+
+def _kv_memory_evidence(
+    long_context_compare_report: dict[str, Any],
+    global_kv_ablation_report: dict[str, Any],
+    max_global_kv_cache_capacity_ratio: float,
+) -> dict[str, Any]:
+    return {
+        "max_global_kv_cache_capacity_ratio": max_global_kv_cache_capacity_ratio,
+        "long_context_compare": {
+            **_report_evidence(long_context_compare_report),
+            "memory_candidates": _long_context_memory_candidates(
+                long_context_compare_report,
+                max_global_kv_cache_capacity_ratio,
+            ),
+        },
+        "global_kv_ablation": {
+            **_report_evidence(global_kv_ablation_report),
+            "memory_candidates": _global_kv_ablation_memory_candidates(
+                global_kv_ablation_report,
+                max_global_kv_cache_capacity_ratio,
+            ),
+        },
+    }
+
+
+def _long_context_memory_candidates(
+    report: dict[str, Any],
+    max_global_kv_cache_capacity_ratio: float,
+) -> list[dict[str, Any]]:
+    rows = report.get("comparisons", []) if report else []
+    if not isinstance(rows, list):
+        return []
+    candidates = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        memory_budget = row.get("memory_budget", {})
+        candidate_memory = memory_budget.get("candidate", {}) if isinstance(memory_budget, dict) else {}
+        checks = row.get("checks", {}) if isinstance(row.get("checks"), dict) else {}
+        capacity_ratio = _num(candidate_memory.get("estimated_global_cache_capacity_to_local_context_ratio"))
+        passes = (
+            capacity_ratio is not None
+            and capacity_ratio <= max_global_kv_cache_capacity_ratio
+            and bool(checks.get("memory_budget_present", True))
+        )
+        candidates.append(
+            {
+                "candidate_report": row.get("candidate_report"),
+                "candidate_run_dir": row.get("candidate_run_dir"),
+                "status": row.get("status"),
+                "global_cache_capacity_ratio": capacity_ratio,
+                "memory_budget_present": checks.get("memory_budget_present"),
+                "global_budget_below_local_context": checks.get("global_budget_below_local_context"),
+                "passes_memory_control_proxy": passes,
+            }
+        )
+    return candidates
+
+
+def _global_kv_ablation_memory_candidates(
+    report: dict[str, Any],
+    max_global_kv_cache_capacity_ratio: float,
+) -> list[dict[str, Any]]:
+    comparisons = report.get("comparisons", {}) if report else {}
+    rows = comparisons.get("local_vs_global", []) if isinstance(comparisons, dict) else []
+    if not isinstance(rows, list):
+        return []
+    candidates = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        capacity_ratio = _num(row.get("global_cache_capacity_ratio"))
+        candidates.append(
+            {
+                "entry_id": row.get("entry_id"),
+                "entry_name": row.get("entry_name"),
+                "run_dir": row.get("run_dir"),
+                "global_cache_capacity_ratio": capacity_ratio,
+                "passes_memory_control_proxy": capacity_ratio is not None
+                and capacity_ratio <= max_global_kv_cache_capacity_ratio,
+            }
+        )
+    return candidates
+
+
+def _inference_latency_acceptable(report: dict[str, Any], max_inference_latency_ratio: float) -> bool | None:
+    candidates = _inference_latency_candidates(report, max_inference_latency_ratio)
+    if not candidates:
+        return None
+    if all(candidate["inference_latency_ms_per_token_ratio"] is None for candidate in candidates):
+        return None
+    return any(candidate["passes_latency_proxy"] for candidate in candidates)
+
+
+def _inference_latency_evidence(report: dict[str, Any], max_inference_latency_ratio: float) -> dict[str, Any]:
+    if not report:
+        return {}
+    return {
+        "baseline_run": report.get("baseline_run"),
+        "max_inference_latency_ratio": max_inference_latency_ratio,
+        "candidates": _inference_latency_candidates(report, max_inference_latency_ratio),
+    }
+
+
+def _inference_latency_candidates(
+    report: dict[str, Any],
+    max_inference_latency_ratio: float,
+) -> list[dict[str, Any]]:
+    if not report:
+        return []
+    baseline = _baseline_run_summary(report)
+    baseline_latency = _num(baseline.get("inference_latency_ms_per_token_latest")) if baseline else None
+    rows = report.get("runs", [])
+    if not isinstance(rows, list):
+        return []
+    candidates = []
+    for row in rows:
+        if not isinstance(row, dict) or not isinstance(row.get("baseline_comparison"), dict):
+            continue
+        comparison = row["baseline_comparison"]
+        latency = _num(row.get("inference_latency_ms_per_token_latest"))
+        latency_ratio = _num(comparison.get("inference_latency_ms_per_token_ratio"))
+        if latency_ratio is None:
+            latency_ratio = _ratio(latency, baseline_latency)
+        candidates.append(
+            {
+                "run_dir": row.get("run_dir"),
+                "stage": row.get("stage"),
+                "inference_latency_ms_per_token": latency,
+                "baseline_inference_latency_ms_per_token": baseline_latency,
+                "inference_latency_ms_per_token_ratio": latency_ratio,
+                "tokens_per_second_ratio": _num(comparison.get("tokens_per_second_ratio")),
+                "passes_latency_proxy": latency_ratio is not None and latency_ratio <= max_inference_latency_ratio,
+            }
+        )
+    return candidates
+
+
+def _compute_adjusted_eval_present(report: dict[str, Any]) -> bool | None:
+    candidates = _compute_adjusted_candidates(report, max_compute_adjusted_loss_delta=0.0)
+    if not candidates:
+        return None
+    return any(candidate["compute_adjusted_loss_delta"] is not None for candidate in candidates)
+
+
+def _better_compute_adjusted_perplexity(report: dict[str, Any], max_compute_adjusted_loss_delta: float) -> bool | None:
+    candidates = _compute_adjusted_candidates(report, max_compute_adjusted_loss_delta=max_compute_adjusted_loss_delta)
+    if not candidates:
+        return None
+    return any(candidate["passes_compute_adjusted_loss_proxy"] for candidate in candidates)
+
+
+def _compute_adjusted_evidence(report: dict[str, Any], max_compute_adjusted_loss_delta: float) -> dict[str, Any]:
+    if not report:
+        return {}
+    return {
+        "run_count": report.get("run_count"),
+        "baseline_run": report.get("baseline_run"),
+        "max_compute_adjusted_loss_delta": max_compute_adjusted_loss_delta,
+        "candidates": _compute_adjusted_candidates(
+            report,
+            max_compute_adjusted_loss_delta=max_compute_adjusted_loss_delta,
+        ),
+    }
+
+
+def _compute_adjusted_candidates(
+    report: dict[str, Any],
+    *,
+    max_compute_adjusted_loss_delta: float,
+) -> list[dict[str, Any]]:
+    if not report:
+        return []
+    baseline = _baseline_run_summary(report)
+    baseline_loss = _num(baseline.get("validation_loss")) if baseline else None
+    rows = report.get("runs", [])
+    if baseline_loss is None or not isinstance(rows, list):
+        return []
+    candidates = []
+    for row in rows:
+        if not isinstance(row, dict) or not isinstance(row.get("baseline_comparison"), dict):
+            continue
+        comparison = row["baseline_comparison"]
+        flops_ratio = _num(comparison.get("estimated_flops_per_token_ratio"))
+        validation_loss = _num(row.get("validation_loss"))
+        adjusted_delta = None
+        if validation_loss is not None and flops_ratio is not None:
+            adjusted_delta = validation_loss * flops_ratio - baseline_loss
+        candidates.append(
+            {
+                "run_dir": row.get("run_dir"),
+                "stage": row.get("stage"),
+                "validation_loss": validation_loss,
+                "baseline_validation_loss": baseline_loss,
+                "estimated_flops_per_token_ratio": flops_ratio,
+                "validation_loss_delta": _num(comparison.get("validation_loss_delta")),
+                "compute_adjusted_loss_delta": adjusted_delta,
+                "passes_compute_adjusted_loss_proxy": adjusted_delta is not None
+                and adjusted_delta <= max_compute_adjusted_loss_delta,
+            }
+        )
+    return candidates
+
+
+def _baseline_run_summary(report: dict[str, Any]) -> dict[str, Any]:
+    rows = report.get("runs", [])
+    if not isinstance(rows, list):
+        return {}
+    baseline_run = report.get("baseline_run")
+    for row in rows:
+        if isinstance(row, dict) and baseline_run and row.get("run_dir") == baseline_run:
+            return row
+    for row in rows:
+        if isinstance(row, dict) and not isinstance(row.get("baseline_comparison"), dict):
+            return row
+    return {}
+
+
+def _visible_cot_reduced(
+    baseline: dict[str, Any],
+    candidates: list[dict[str, Any]],
+    *,
+    min_visible_cot_reduction: float,
+    max_reasoning_drop: float,
+) -> bool | None:
+    evidence = _visible_cot_evidence(baseline, candidates)
+    rows = evidence.get("candidate_comparisons", [])
+    if not rows:
+        return None
+    return any(
+        row.get("visible_cot_token_delta") is not None
+        and row["visible_cot_token_delta"] <= -min_visible_cot_reduction
+        and row.get("reasoning_score_delta") is not None
+        and row["reasoning_score_delta"] >= -max_reasoning_drop
+        for row in rows
+    )
+
+
+def _visible_cot_evidence(baseline: dict[str, Any], candidates: list[dict[str, Any]]) -> dict[str, Any]:
+    baseline_score = _reasoning_score(baseline) if baseline else None
+    baseline_cot = _visible_cot_tokens(baseline) if baseline else None
+    comparisons = []
+    for candidate in candidates:
+        candidate_score = _reasoning_score(candidate)
+        candidate_cot = _visible_cot_tokens(candidate)
+        comparisons.append(
+            {
+                "run_dir": candidate.get("run_dir"),
+                "baseline_reasoning_score": baseline_score,
+                "candidate_reasoning_score": candidate_score,
+                "reasoning_score_delta": _delta(candidate_score, baseline_score),
+                "baseline_visible_cot_tokens": baseline_cot,
+                "candidate_visible_cot_tokens": candidate_cot,
+                "visible_cot_token_delta": _delta(candidate_cot, baseline_cot),
+            }
+        )
+    return {
+        "baseline_visible_cot_tokens": baseline_cot,
+        "candidate_comparisons": comparisons,
+    }
+
+
+def _visible_cot_tokens(report: dict[str, Any]) -> float | None:
+    overall = report.get("overall", {}) if isinstance(report, dict) else {}
+    if not isinstance(overall, dict):
+        return None
+    for key in (
+        "visible_cot_tokens_mean",
+        "mean_visible_cot_tokens",
+        "visible_cot_token_count_mean",
+        "cot_tokens_mean",
+        "visible_reasoning_tokens_mean",
+    ):
+        value = _num(overall.get(key))
+        if value is not None:
+            return value
+    return None
+
+
 def _compute_report_has_not_worse_candidate(report: dict[str, Any]) -> bool | None:
     runs = report.get("runs") if report else None
     if not isinstance(runs, list):
@@ -435,6 +890,22 @@ def _num(value: Any) -> float | None:
     if isinstance(value, (int, float)):
         return float(value)
     return None
+
+
+def _delta(value: Any, baseline: Any) -> float | None:
+    left = _num(value)
+    right = _num(baseline)
+    if left is None or right is None:
+        return None
+    return left - right
+
+
+def _ratio(value: Any, baseline: Any) -> float | None:
+    left = _num(value)
+    right = _num(baseline)
+    if left is None or right is None or right == 0.0:
+        return None
+    return left / right
 
 
 def _reasoning_evidence(baseline: dict[str, Any], candidates: list[dict[str, Any]]) -> dict[str, Any]:

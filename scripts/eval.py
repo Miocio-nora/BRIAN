@@ -36,6 +36,7 @@ def main() -> None:
     parser.add_argument("--baseline-run", default=None, help="Baseline run directory for difficulty-step eval.")
     parser.add_argument("--routed-run", default=None, help="Routed run directory for difficulty-step eval.")
     parser.add_argument("--output", default=None, help="Optional output path override.")
+    parser.add_argument("--phase", default=None, help="Go/No-Go phase override.")
     parser.add_argument("--split", default=None, help="Dataset split override.")
     parser.add_argument("--max-batches", type=int, default=None, help="Maximum eval batches override.")
     parser.add_argument("--batch-size", type=int, default=None, help="Batch size override.")
@@ -294,7 +295,7 @@ def main() -> None:
         report = make_go_no_go_report(
             stage_gate_report_path=stage_gate_report,
             output_path=args.output or config.get("output_path"),
-            phase=str(config.get("phase", "all")),
+            phase=str(args.phase or config.get("phase", "all")),
             compute_report_path=args.compute_report or config.get("compute_report_path"),
             position_ablation_report_path=args.position_ablation_report or config.get("position_ablation_report_path"),
             out_by_difficulty_report_path=args.out_by_difficulty_report or config.get("out_by_difficulty_report_path"),
@@ -307,6 +308,11 @@ def main() -> None:
             parallel_compare_report_path=args.parallel_compare_report or config.get("parallel_compare_report_path"),
             min_difficulty_step_correlation=float(config.get("min_difficulty_step_correlation", 0.0)),
             min_reasoning_delta=float(config.get("min_reasoning_delta", 0.0)),
+            max_compute_adjusted_loss_delta=float(config.get("max_compute_adjusted_loss_delta", 0.0)),
+            min_visible_cot_reduction=float(config.get("min_visible_cot_reduction", 1.0)),
+            max_reasoning_drop_for_cot=float(config.get("max_reasoning_drop_for_cot", 0.0)),
+            max_global_kv_cache_capacity_ratio=float(config.get("max_global_kv_cache_capacity_ratio", 1.0)),
+            max_inference_latency_ratio=float(config.get("max_inference_latency_ratio", 2.0)),
         )
     else:
         if not args.run:
