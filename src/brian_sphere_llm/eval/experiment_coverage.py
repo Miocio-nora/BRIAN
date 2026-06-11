@@ -361,7 +361,8 @@ def _parallel_requirements(entries: list[dict[str, Any]]) -> list[dict[str, Any]
             "PP7",
             "shared base Global KV plus branch delta memory",
             entries,
-            lambda entry: entry["model"].get("parallel_passing") is True
+            lambda entry: entry["id"] == "PP7"
+            and entry["model"].get("parallel_passing") is True
             and entry["model"].get("global_kv") is True
             and (_num(entry["model"].get("global_window_slots")) or 0) > 0,
         ),

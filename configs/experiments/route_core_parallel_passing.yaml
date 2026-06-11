@@ -30,3 +30,7 @@ ablations:
     name: any_topk_out_terminal_rule
     train_config: configs/train/ablation_pp6_parallel_any_topk_exit.yaml
     purpose: "Contrast terminal rule: exit when OUT appears anywhere in top-k."
+  - id: PP7
+    name: shared_global_kv_branch_delta_memory
+    train_config: configs/train/ablation_pp7_parallel_global_kv_delta.yaml
+    purpose: Verify parallel passing uses shared base Global KV plus bounded branch delta memory.
