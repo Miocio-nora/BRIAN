@@ -92,3 +92,21 @@ def test_lm_eval_report_fails_missing_requested_metric(tmp_path: Path) -> None:
     assert report["overall_status"] == "fail"
     assert report["checks"]["requested_metrics_present"] is False
     assert report["metrics"]["active_block_evals_per_token"] is None
+
+
+def test_lm_eval_report_rejects_boolean_requested_metric(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    _write_jsonl(run_dir / "train_log.jsonl", [{"tokens_per_second": True}])
+    _write_jsonl(run_dir / "eval_log.jsonl", [{"validation_loss": 2.0, "perplexity": 7.4}])
+
+    output = make_lm_eval_report(
+        run_dir,
+        output_path=tmp_path / "lm_eval_report.json",
+        metrics=["validation_loss", "perplexity", "tokens_per_second"],
+    )
+    report = json.loads(output.read_text(encoding="utf-8"))
+
+    assert report["overall_status"] == "fail"
+    assert report["checks"]["requested_metrics_present"] is False
+    assert report["metrics"]["tokens_per_second"] is None

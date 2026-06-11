@@ -613,8 +613,11 @@ def _routed_run_artifact_gate_checks(summary: dict[str, Any] | None) -> dict[str
     }
 
 
-def _validation_report_metrics(_stage: str) -> list[str]:
-    return ["validation_loss", "perplexity"]
+def _validation_report_metrics(stage: str) -> list[str]:
+    metrics = ["validation_loss", "perplexity", "tokens_per_second"]
+    if stage != "stage0_baseline":
+        metrics.append("active_block_evals_per_token")
+    return metrics
 
 
 def _validation_report_gate_checks(summary: dict[str, Any] | None) -> dict[str, bool]:

@@ -118,7 +118,7 @@ python scripts/make_stage_gate_report.py \
   --runs <stage0_run> <stage1_run> <stage2_run> <stage3_run> <stage4_run> <stage5_run> <stage6_run>
 ```
 
-Every stage gate also verifies that each run carries `config_resolved.yaml`, `train_log.jsonl`, `model_stats.json` with a positive integer parameter count, a valid `data_manifest_ref.json` with tokenized-data paths, sequence length, train/validation token counts, manifest hash, and realized source mixture, and a passing `lm_eval_report.json` with validation loss and perplexity. Routed stages also require `checkpoint_best/state.pt`.
+Every stage gate also verifies that each run carries `config_resolved.yaml`, `train_log.jsonl`, `model_stats.json` with a positive integer parameter count, a valid `data_manifest_ref.json` with tokenized-data paths, sequence length, train/validation token counts, manifest hash, and realized source mixture, and a passing `lm_eval_report.json` with validation loss, perplexity, and throughput. Routed stages also require `checkpoint_best/state.pt` and active block evals/token in the validation report.
 
 Include Stage 4 cost-control and OUT-by-difficulty evidence in the stage gate:
 
