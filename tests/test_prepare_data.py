@@ -2,7 +2,7 @@ import json
 from pathlib import Path
 
 from brian_sphere_llm.data.manifest import REQUIRED_MANIFEST_FIELDS
-from brian_sphere_llm.data.prepare import prepare_data
+from brian_sphere_llm.data.prepare import DEFAULT_MANIFEST_CREATED_AT, prepare_data
 from brian_sphere_llm.utils.config import load_yaml, save_yaml
 
 
@@ -16,6 +16,7 @@ def test_prepare_tiny_synthetic_data(tmp_path: Path) -> None:
     config_path = tmp_path / "data.yaml"
     save_yaml(cfg, config_path)
     output_dir = prepare_data(config_path)
+    manifest_text = (output_dir / "manifest.jsonl").read_text(encoding="utf-8")
     assert (output_dir / "train.bin").exists()
     assert (output_dir / "train.idx").exists()
     assert (output_dir / "val.bin").exists()
@@ -48,6 +49,7 @@ def test_prepare_tiny_synthetic_data(tmp_path: Path) -> None:
         assert key in stats
     assert stats["sha256_manifest"]
     assert stats["source_mixture_realized"]
+    assert {row["created_at"] for row in manifest_rows} == {DEFAULT_MANIFEST_CREATED_AT}
     assert manifest_rows[0]["route_metadata"]["pseudo_route_type"] in {
         "advance",
         "early_exit",
@@ -57,3 +59,8 @@ def test_prepare_tiny_synthetic_data(tmp_path: Path) -> None:
         "skip",
     }
     assert "difficulty_bin" in manifest_rows[0]["route_metadata"]
+
+    prepare_data(config_path)
+    rerun_stats = json.loads((output_dir / "stats.json").read_text(encoding="utf-8"))
+    assert (output_dir / "manifest.jsonl").read_text(encoding="utf-8") == manifest_text
+    assert rerun_stats["sha256_manifest"] == stats["sha256_manifest"]

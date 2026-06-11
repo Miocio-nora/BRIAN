@@ -68,6 +68,7 @@ class ManifestRow:
         path: str,
         mixture_tag: str,
         route_metadata: dict[str, str | int] | None = None,
+        created_at: str | None = None,
     ) -> "ManifestRow":
         return cls(
             sample_id=sample_id,
@@ -81,7 +82,7 @@ class ManifestRow:
             license=license,
             path=path,
             mixture_tag=mixture_tag,
-            created_at=utc_now_iso(),
+            created_at=created_at or utc_now_iso(),
             route_metadata=route_metadata,
         )
 

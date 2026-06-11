@@ -15,6 +15,9 @@ from brian_sphere_llm.utils.config import load_config
 from brian_sphere_llm.utils.logging import write_json
 
 
+DEFAULT_MANIFEST_CREATED_AT = "1970-01-01T00:00:00+00:00"
+
+
 def prepare_data(config_path: str | Path) -> Path:
     config_path = Path(config_path)
     config = load_config(config_path)
@@ -48,6 +51,7 @@ def prepare_data(config_path: str | Path) -> Path:
     documents_train: list[list[int]] = []
     documents_val: list[list[int]] = []
     manifest_rows: list[ManifestRow] = []
+    manifest_created_at = str(config.get("manifest_created_at", DEFAULT_MANIFEST_CREATED_AT))
     synthetic_only = bool(config.get("synthetic_only", {}).get("enabled", False))
     if synthetic_only:
         samples = _synthetic_rows(config)
@@ -78,6 +82,7 @@ def prepare_data(config_path: str | Path) -> Path:
             path=str(source_path),
             mixture_tag=str(sample["mixture_tag"]),
             route_metadata=sample.get("route_metadata"),
+            created_at=manifest_created_at,
         )
         manifest_rows.append(row)
         if split == "val":
