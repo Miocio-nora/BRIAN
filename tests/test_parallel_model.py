@@ -31,6 +31,8 @@ def test_parallel_route_forward_reports_branch_metrics() -> None:
     assert output["logits"].shape == (2, 8, 64)
     assert summary["parallel_branch_count_mean"] <= 2.0
     assert "parallel_score_margin_mean" in summary
+    assert "parallel_delta_cache_slots_mean" in summary
+    assert summary["parallel_delta_cache_slots_max"] <= 2.0
     assert "global_attention_mass" in summary
     assert "global_sink_attention_mass" in summary
     assert "global_window_attention_mass" in summary

@@ -12,9 +12,18 @@ def test_parallel_passing_report_passes_bounded_beam_and_cost(tmp_path: Path) ->
         tmp_path,
         beam_size=2,
         branch_cost=0.01,
+        window_slots=3,
         train_rows=[
-            {"parallel_branch_count_mean": 2.0, "parallel_score_margin_mean": 0.2},
-            {"parallel_branch_count_mean": 2.0, "parallel_score_margin_mean": 0.1},
+            {
+                "parallel_branch_count_mean": 2.0,
+                "parallel_score_margin_mean": 0.2,
+                "parallel_delta_cache_slots_max": 1.0,
+            },
+            {
+                "parallel_branch_count_mean": 2.0,
+                "parallel_score_margin_mean": 0.1,
+                "parallel_delta_cache_slots_max": 2.0,
+            },
         ],
     )
 
@@ -27,16 +36,24 @@ def test_parallel_passing_report_passes_bounded_beam_and_cost(tmp_path: Path) ->
     assert report["checks"]["beam_size_within_limit"] is True
     assert report["checks"]["branch_cost_enabled"] is True
     assert report["checks"]["branch_count_bounded_by_beam"] is True
+    assert report["checks"]["delta_memory_policy_present"] is True
+    assert report["checks"]["delta_cache_bounded_by_window"] is True
     assert report["routing"]["parallel_branch_count"]["max"] == 2.0
+    assert report["routing"]["parallel_delta_cache_slots"]["max"] == 2.0
 
 
-def test_parallel_passing_report_fails_unbounded_branch_count(tmp_path: Path) -> None:
+def test_parallel_passing_report_fails_unbounded_branch_and_delta_cache(tmp_path: Path) -> None:
     run_dir = _write_run(
         tmp_path,
         beam_size=2,
         branch_cost=0.0,
+        window_slots=2,
         train_rows=[
-            {"parallel_branch_count_mean": 3.0, "parallel_score_margin_mean": 0.2},
+            {
+                "parallel_branch_count_mean": 3.0,
+                "parallel_score_margin_mean": 0.2,
+                "parallel_delta_cache_slots_max": 4.0,
+            },
         ],
     )
 
@@ -46,6 +63,7 @@ def test_parallel_passing_report_fails_unbounded_branch_count(tmp_path: Path) ->
     assert report["overall_status"] == "fail"
     assert report["checks"]["branch_cost_enabled"] is False
     assert report["checks"]["branch_count_bounded_by_beam"] is False
+    assert report["checks"]["delta_cache_bounded_by_window"] is False
 
 
 def test_parallel_passing_eval_config_resolves() -> None:
@@ -58,6 +76,7 @@ def _write_run(
     *,
     beam_size: int,
     branch_cost: float,
+    window_slots: int,
     train_rows: list[dict],
 ) -> Path:
     run_dir = root / "parallel"
@@ -71,7 +90,7 @@ def _write_run(
             "branch_cost": branch_cost,
             "global_kv": True,
             "global_sink_slots": 1,
-            "global_window_slots": 3,
+            "global_window_slots": window_slots,
         },
     }
     (run_dir / "config_resolved.yaml").write_text(yaml.safe_dump(config), encoding="utf-8")
@@ -80,12 +99,27 @@ def _write_run(
         encoding="utf-8",
     )
     (run_dir / "eval_log.jsonl").write_text(
-        json.dumps({"step": len(train_rows), "parallel_branch_count_mean": 2.0, "parallel_score_margin_mean": 0.1})
+        json.dumps(
+            {
+                "step": len(train_rows),
+                "parallel_branch_count_mean": 2.0,
+                "parallel_score_margin_mean": 0.1,
+                "parallel_delta_cache_slots_max": min(float(window_slots), 2.0),
+            }
+        )
         + "\n",
         encoding="utf-8",
     )
     (run_dir / "routing_report.json").write_text(
-        json.dumps({"summary": {"parallel_branch_count_mean": 2.0, "parallel_score_margin_mean": 0.1}}),
+        json.dumps(
+            {
+                "summary": {
+                    "parallel_branch_count_mean": 2.0,
+                    "parallel_score_margin_mean": 0.1,
+                    "parallel_delta_cache_slots_max": min(float(window_slots), 2.0),
+                }
+            }
+        ),
         encoding="utf-8",
     )
     return run_dir

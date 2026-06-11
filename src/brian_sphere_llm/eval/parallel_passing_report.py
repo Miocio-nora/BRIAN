@@ -30,8 +30,11 @@ def make_parallel_passing_report(
 
     branch_counts = _series(train_rows, eval_rows, summary, latest_eval, "parallel_branch_count_mean")
     score_margins = _series(train_rows, eval_rows, summary, latest_eval, "parallel_score_margin_mean")
+    delta_cache_slots = _series(train_rows, eval_rows, summary, latest_eval, "parallel_delta_cache_slots_max")
     beam_size = int(_num(model_config.get("beam_size")) or 0)
     branch_cost = _num(model_config.get("branch_cost"))
+    global_kv_enabled = _bool(model_config.get("global_kv", False))
+    global_window_slots = int(_num(model_config.get("global_window_slots")) or 0)
     parallel_stage = str(config.get("stage", "")).startswith("stage6") or str(config.get("stage", "")).startswith("stage7")
     checks = {
         "stage6_parallel_stage": parallel_stage,
@@ -46,6 +49,13 @@ def make_parallel_passing_report(
             bool(branch_counts) and beam_size >= 1 and float(_max(branch_counts) or 0.0) <= beam_size + tolerance
         ),
         "score_margin_measured": bool(score_margins),
+        "delta_memory_policy_present": (not global_kv_enabled) or bool(delta_cache_slots),
+        "delta_cache_bounded_by_window": (not global_kv_enabled)
+        or (
+            bool(delta_cache_slots)
+            and global_window_slots >= 0
+            and float(_max(delta_cache_slots) or 0.0) <= global_window_slots + tolerance
+        ),
     }
     report = {
         "run_dir": str(run_dir),
@@ -54,14 +64,15 @@ def make_parallel_passing_report(
             "parallel_passing_enabled": _bool(model_config.get("parallel_passing", False)),
             "beam_size": beam_size,
             "branch_cost": branch_cost,
-            "global_kv_enabled": _bool(model_config.get("global_kv", False)),
+            "global_kv_enabled": global_kv_enabled,
             "global_sink_slots": int(_num(model_config.get("global_sink_slots")) or 0),
-            "global_window_slots": int(_num(model_config.get("global_window_slots")) or 0),
+            "global_window_slots": global_window_slots,
         },
         "routing": {
             "mode": _routing_mode(config),
             "parallel_branch_count": _summary(branch_counts),
             "parallel_score_margin": _summary(score_margins),
+            "parallel_delta_cache_slots": _summary(delta_cache_slots),
         },
         "thresholds": {
             "max_beam_size": max_beam_size,

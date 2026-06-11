@@ -377,9 +377,11 @@ def test_stage6_gate_uses_parallel_compare_report(tmp_path: Path) -> None:
                 "parallel_branch_active": True,
                 "branch_count_bounded_by_beam": True,
                 "score_margin_measured": True,
+                "delta_memory_policy_present": True,
+                "delta_cache_bounded_by_window": True,
             },
             "model": {"beam_size": 2, "branch_cost": 0.01},
-            "routing": {"parallel_branch_count": {"max": 2.0}},
+            "routing": {"parallel_branch_count": {"max": 2.0}, "parallel_delta_cache_slots": {"max": 2.0}},
         },
     )
     compare_report = tmp_path / "parallel_compare.json"
@@ -404,6 +406,7 @@ def test_stage6_gate_uses_parallel_compare_report(tmp_path: Path) -> None:
     assert gate["checks"]["parallel_passing_report_present"] is True
     assert gate["checks"]["parallel_passing_report_passed"] is True
     assert gate["checks"]["parallel_branch_count_bounded_by_beam"] is True
+    assert gate["checks"]["parallel_delta_cache_bounded"] is True
     assert gate["checks"]["parallel_compare_report_present"] is True
     assert gate["checks"]["parallel_branch_benefit_proxy"] is True
     assert report["supplemental_reports"]["parallel_compare_report"] == str(compare_report)

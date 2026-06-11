@@ -346,7 +346,7 @@ python scripts/eval.py \
   --output reports/parallel_compare.json
 ```
 
-The comparison report checks that parallel branches are active, branch score margins are logged, validation loss is not worse than the baseline beyond `max_validation_loss_delta`, and active compute / estimated FLOPs stay under the configured ratios. Pass it into the Stage 6 gate:
+The safety report checks beam size, branch cost, branch count pruning, score-margin diagnostics, and per-branch delta-cache slots against the configured Global KV window. The comparison report checks that parallel branches are active, branch score margins are logged, validation loss is not worse than the baseline beyond `max_validation_loss_delta`, and active compute / estimated FLOPs stay under the configured ratios. Pass both into the Stage 6 gate:
 
 ```bash
 python scripts/eval.py \

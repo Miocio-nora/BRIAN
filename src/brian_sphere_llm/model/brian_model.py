@@ -175,6 +175,7 @@ class BrianRouteCore(ModuleBase):
             "global_window_attention_mass": [],
             "global_read_gate": [],
             "global_cache_slots": [],
+            "parallel_delta_cache_slots": [],
         }
         route_targets = self._targets_for_mode(route_mode, pseudo_policy, batch_size, input_ids.device)
         max_steps = len(route_targets) if route_mode == "fixed" else self.config.max_route_steps
@@ -421,6 +422,9 @@ class BrianRouteCore(ModuleBase):
                 branch_delta_codes = torch.cat([next_delta_codes, delta_write.unsqueeze(2)], dim=2)
                 if self.config.global_window_slots:
                     branch_delta_codes = branch_delta_codes[:, :, -self.config.global_window_slots :, :]
+                route_info.setdefault("parallel_delta_cache_slots", []).append(
+                    torch.tensor(float(branch_delta_codes.size(2)), device=hidden.device, dtype=hidden.dtype)
+                )
 
             branch_weights = F.softmax(branch_scores, dim=-1)
             route_info["route_logits"].append((probs * branch_weights.unsqueeze(-1)).sum(dim=1).log().clamp_min(-50.0))

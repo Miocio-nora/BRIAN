@@ -381,6 +381,7 @@ def _gate_stage6(
         "parallel_beam_bounded": bool(passing_checks.get("beam_size_within_limit", False)),
         "parallel_branch_count_bounded_by_beam": bool(passing_checks.get("branch_count_bounded_by_beam", False)),
         "parallel_branch_cost_enabled": bool(passing_checks.get("branch_cost_enabled", False)),
+        "parallel_delta_cache_bounded": bool(passing_checks.get("delta_cache_bounded_by_window", False)),
         "global_cache_or_local_route_present": _finite(_routing_metric(stage6, "global_cache_slots_mean"))
         or _finite(_routing_metric(stage6, "average_route_steps")),
         "parallel_compare_report_present": bool(parallel_compare_report),
