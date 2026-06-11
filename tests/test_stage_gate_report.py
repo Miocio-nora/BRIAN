@@ -1137,6 +1137,59 @@ def test_stage_gate_report_uses_cost_control_report(tmp_path: Path) -> None:
     assert report["supplemental_reports"]["hard_exit_compare_report"] == str(hard_exit_report)
 
 
+def test_stage2_gate_rejects_boolean_block_histogram_counts(tmp_path: Path) -> None:
+    stage2 = _write_run(
+        tmp_path,
+        "stage2",
+        stage="stage2_router_imitation",
+        val_loss=10.0,
+        train_row={
+            "route_imitation_accuracy": 0.95,
+            "block_load_entropy": 0.5,
+            "top1_block_histogram": {"0": True, "1": 1, "2": 1},
+        },
+        pseudo_route_curriculum_report={
+            "overall_status": "pass",
+            "checks": {
+                "samples_present": True,
+                "easy_uses_skip_or_early_exit": True,
+                "hard_uses_recurrence": True,
+                "out_supervised": True,
+            },
+        },
+    )
+
+    report_path = make_stage_gate_report([stage2], output_path=tmp_path / "gate.json")
+    gate = json.loads(report_path.read_text(encoding="utf-8"))["gates"]["stage2_to_3"]
+
+    assert gate["checks"]["block_usage_non_degenerate"] is False
+    assert gate["checks"]["block_load_entropy_present"] is True
+
+
+def test_stage4_gate_rejects_boolean_exit_histogram_counts(tmp_path: Path) -> None:
+    stage4 = _write_run(
+        tmp_path,
+        "stage4",
+        stage="stage4_output_action",
+        val_loss=10.0,
+        train_row={
+            "average_route_steps": 2.0,
+            "max_route_steps": 4,
+            "forced_max_step_exit_count": 0,
+            "forced_max_step_exit_fraction": 0.0,
+            "first_exit_step_histogram": {"1": True, "2": False},
+            "top1_block_histogram": {"0": 1, "1": 1, "2": 1},
+        },
+    )
+
+    report_path = make_stage_gate_report([stage4], output_path=tmp_path / "gate.json")
+    gate = json.loads(report_path.read_text(encoding="utf-8"))["gates"]["stage4_to_5"]
+
+    assert gate["checks"]["exit_distribution_present"] is False
+    assert gate["checks"]["not_all_immediate_exit"] is False
+    assert gate["checks"]["not_never_exit"] is False
+
+
 def test_stage4_gate_requires_forced_max_step_fallback_metric(tmp_path: Path) -> None:
     stage4 = _write_run(
         tmp_path,

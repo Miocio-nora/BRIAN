@@ -977,11 +977,11 @@ def _block_usage_non_degenerate(summary: dict[str, Any] | None) -> bool:
     if not summary:
         return False
     report = _read_json_if_exists(Path(summary["run_dir"]) / "routing_report.json")
-    hist = report.get("latest_block_histogram", {})
+    hist = _integer_histogram(report.get("latest_block_histogram", {}))
     if not hist:
         return False
-    out_action = max(int(action) for action in hist)
-    internal_counts = [int(count) for action, count in hist.items() if int(action) != out_action]
+    out_action = max(hist)
+    internal_counts = [count for action, count in hist.items() if action != out_action]
     total = sum(internal_counts)
     if total <= 0:
         return False
@@ -995,8 +995,34 @@ def _latest_exit_hist(summary: dict[str, Any] | None) -> dict[str, int]:
     for row in reversed(rows):
         hist = row.get("first_exit_step_histogram")
         if isinstance(hist, dict):
-            return {str(key): int(value) for key, value in hist.items()}
+            parsed = _integer_histogram(hist)
+            return {str(key): value for key, value in parsed.items()} if parsed else {}
     return {}
+
+
+def _integer_histogram(value: Any) -> dict[int, int]:
+    if not isinstance(value, dict):
+        return {}
+    parsed: dict[int, int] = {}
+    for key, count_value in value.items():
+        key_value = _histogram_key(key)
+        count = _int_like(count_value)
+        if key_value is None or count is None or count < 0:
+            return {}
+        parsed[key_value] = count
+    return parsed
+
+
+def _histogram_key(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        stripped = value.strip()
+        if stripped and stripped.lstrip("-").isdigit():
+            return int(stripped)
+    return None
 
 
 def _finite(value: Any) -> bool:
