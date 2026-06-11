@@ -212,6 +212,13 @@ def _global_kv_requirements(plan: ExperimentPlan, entries: list[dict[str, Any]])
                 "distinct_global_window_slots": distinct_windows,
             },
         },
+        _group_requirement(
+            "C6",
+            "global KV per-block adapter",
+            entries,
+            lambda entry: entry["model"].get("global_kv") is True
+            and entry["model"].get("global_adapter_scope") == "per_block",
+        ),
         {
             "id": "baseline_train_config",
             "description": "local baseline train config is declared for compute comparison",
@@ -423,6 +430,7 @@ def _model_summary(config: dict[str, Any], model_config_path: Path | None) -> di
         "global_code_dim",
         "global_sink_slots",
         "global_window_slots",
+        "global_adapter_scope",
         "parallel_passing",
         "beam_size",
         "branch_cost",

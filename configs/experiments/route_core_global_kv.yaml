@@ -30,3 +30,7 @@ ablations:
     name: global_kv_window64
     train_config: configs/train/ablation_k5_global_kv_window64.yaml
     purpose: Larger cache-window point for memory-quality comparison.
+  - id: C6
+    name: global_kv_per_block_adapter
+    train_config: configs/train/ablation_c6_global_kv_per_block.yaml
+    purpose: Test route-block-specific Global KV read/write adapters against the shared compressed adapter.

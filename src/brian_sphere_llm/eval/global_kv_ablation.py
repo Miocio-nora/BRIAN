@@ -53,6 +53,7 @@ def make_global_kv_ablation_report(
             "uncompressed_vs_compressed": _uncompressed_vs_compressed(rows),
             "with_sink_vs_no_sink": _with_sink_vs_no_sink(rows),
             "window_sweep": _window_sweep(rows),
+            "per_block_vs_compressed": _per_block_vs_compressed(rows),
         },
     }
     if output_path is None:
@@ -83,6 +84,7 @@ def _summarize_run(
     global_code_dim = int(_num(model_config.get("global_code_dim")) or 0)
     sink_slots = int(_num(model_config.get("global_sink_slots")) or 0)
     window_slots = int(_num(model_config.get("global_window_slots")) or 0)
+    adapter_scope = str(model_config.get("global_adapter_scope", "shared"))
     global_metrics = _global_metrics(routing_summary, latest_eval, long_context)
     row = {
         **entry,
@@ -93,6 +95,7 @@ def _summarize_run(
         "global_code_dim": global_code_dim if global_kv_enabled else 0,
         "global_sink_slots": sink_slots,
         "global_window_slots": window_slots,
+        "global_adapter_scope": adapter_scope if global_kv_enabled else "none",
         "global_retention_capacity_slots": sink_slots + window_slots if global_kv_enabled else 0,
         "validation_loss": _num(latest_eval.get("validation_loss")),
         "perplexity": _num(latest_eval.get("perplexity")),
@@ -111,6 +114,7 @@ def _required_checks(rows: list[dict[str, Any]], *, expected_entry_count: int) -
     no_sink_rows = [row for row in rows if row["kind"] == "no_sink"]
     with_sink_rows = [row for row in rows if row["kind"] == "with_sink"]
     window_rows = [row for row in rows if row["kind"] == "window_sweep"]
+    per_block_rows = [row for row in rows if row["kind"] == "per_block_adapter"]
     return {
         "runs_match_manifest_entries": len(rows) == expected_entry_count,
         "local_baseline_present": any(row["kind"] == "local" for row in rows),
@@ -123,6 +127,7 @@ def _required_checks(rows: list[dict[str, Any]], *, expected_entry_count: int) -
         "no_sink_zero_sink_attention_measured": any(_zero_sink_attention(row) for row in no_sink_rows),
         "window_sweep_present": len(window_rows) >= 2,
         "window_slots_vary": len({row["global_window_slots"] for row in window_rows}) >= 2,
+        "per_block_adapter_candidate_present": bool(per_block_rows),
         "global_metrics_present": bool(global_rows) and all(_global_metrics_present(row) for row in global_rows),
     }
 
@@ -258,11 +263,47 @@ def _window_sweep(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     ]
 
 
+def _per_block_vs_compressed(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    compressed = next((row for row in rows if row["kind"] == "compressed"), None)
+    per_block = next((row for row in rows if row["kind"] == "per_block_adapter"), None)
+    if compressed is None or per_block is None:
+        return {"status": "missing"}
+    return {
+        "status": "present",
+        "compressed_run": compressed["run_dir"],
+        "per_block_run": per_block["run_dir"],
+        "global_adapter_scope_compressed": compressed.get("global_adapter_scope"),
+        "global_adapter_scope_per_block": per_block.get("global_adapter_scope"),
+        "validation_loss_delta_per_block_minus_compressed": _delta(
+            per_block.get("validation_loss"),
+            compressed.get("validation_loss"),
+        ),
+        "exact_match_delta": _delta(
+            per_block["long_context"].get("exact_match_accuracy"),
+            compressed["long_context"].get("exact_match_accuracy"),
+        ),
+        "teacher_forced_token_accuracy_delta": _delta(
+            per_block["long_context"].get("teacher_forced_token_accuracy"),
+            compressed["long_context"].get("teacher_forced_token_accuracy"),
+        ),
+        "global_read_gate_delta": _delta(
+            per_block["global_metrics"].get("global_read_gate_mean"),
+            compressed["global_metrics"].get("global_read_gate_mean"),
+        ),
+        "global_cache_capacity_ratio_delta": _delta(
+            per_block["long_context"].get("global_cache_capacity_ratio"),
+            compressed["long_context"].get("global_cache_capacity_ratio"),
+        ),
+    }
+
+
 def _entry_kind(row: dict[str, Any]) -> str:
     entry_id = str(row.get("id", "")).lower()
     name = str(row.get("name", "")).lower()
     if not row["global_kv_enabled"]:
         return "local"
+    if entry_id == "c6" or "per_block" in name or row.get("global_adapter_scope") == "per_block":
+        return "per_block_adapter"
     if entry_id == "c1" or "uncompressed" in name:
         return "uncompressed"
     if entry_id == "c2" or "compressed" in name:

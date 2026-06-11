@@ -30,3 +30,7 @@ ablations:
     name: global_kv_window6
     train_config: configs/train/stage5_tiny_global_kv_window6.yaml
     purpose: Larger cache-window point for the memory-quality curve.
+  - id: C6
+    name: global_kv_per_block_adapter
+    train_config: configs/train/stage5_tiny_global_kv_per_block.yaml
+    purpose: Tiny smoke test for route-block-specific Global KV read/write adapters.

@@ -76,6 +76,18 @@ def test_global_kv_ablation_report_passes_with_manifest_runs_and_long_context(tm
             sink_mass=0.4,
             window_mass=0.6,
         ),
+        _write_run(
+            tmp_path,
+            "per_block",
+            global_kv=True,
+            global_code_dim=16,
+            sink_slots=1,
+            window_slots=3,
+            global_adapter_scope="per_block",
+            validation_loss=9.95,
+            sink_mass=0.55,
+            window_mass=0.45,
+        ),
     ]
     long_context_reports = [
         _write_long_context(tmp_path, run, index, exact=0.5 + index * 0.01, teacher=0.6 + index * 0.01)
@@ -97,13 +109,16 @@ def test_global_kv_ablation_report_passes_with_manifest_runs_and_long_context(tm
     assert report["checks"]["with_sink_retention_measured"] is True
     assert report["checks"]["no_sink_zero_sink_attention_measured"] is True
     assert report["checks"]["window_slots_vary"] is True
+    assert report["checks"]["per_block_adapter_candidate_present"] is True
     assert report["comparisons"]["with_sink_vs_no_sink"]["status"] == "present"
     assert report["comparisons"]["uncompressed_vs_compressed"]["status"] == "present"
+    assert report["comparisons"]["per_block_vs_compressed"]["status"] == "present"
     assert report["comparisons"]["uncompressed_vs_compressed"][
         "global_code_dim_delta_compressed_minus_uncompressed"
     ] == -48
     assert report["comparisons"]["with_sink_vs_no_sink"]["sink_attention_mass_delta"] == 0.6
     assert [row["global_window_slots"] for row in report["comparisons"]["window_sweep"]] == [1, 6]
+    assert report["comparisons"]["per_block_vs_compressed"]["global_adapter_scope_per_block"] == "per_block"
 
 
 def test_global_kv_ablation_report_fails_without_window_sweep(tmp_path: Path) -> None:
@@ -152,6 +167,7 @@ def _write_run(
     validation_loss: float = 10.0,
     sink_mass: float | None = 0.5,
     window_mass: float | None = 0.5,
+    global_adapter_scope: str = "shared",
 ) -> Path:
     run_dir = root / name
     run_dir.mkdir()
@@ -163,6 +179,7 @@ def _write_run(
             "global_code_dim": global_code_dim if global_kv else 0,
             "global_sink_slots": sink_slots,
             "global_window_slots": window_slots,
+            "global_adapter_scope": global_adapter_scope,
         },
     }
     routing = {

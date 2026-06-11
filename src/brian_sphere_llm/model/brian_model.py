@@ -53,6 +53,7 @@ class BrianRouteConfig:
     global_code_dim: int = 64
     global_sink_slots: int = 4
     global_window_slots: int = 32
+    global_adapter_scope: str = "shared"
     parallel_passing: bool = False
     beam_size: int = 2
     branch_cost: float = 0.01
@@ -90,6 +91,7 @@ class BrianRouteConfig:
             global_code_dim=int(data.get("global_code_dim", data.get("block_position_dim", 64))),
             global_sink_slots=int(data.get("global_sink_slots", 4)),
             global_window_slots=int(data.get("global_window_slots", 32)),
+            global_adapter_scope=str(data.get("global_adapter_scope", "shared")),
             parallel_passing=parallel_passing,
             beam_size=int(data.get("beam_size", 2)),
             branch_cost=float(data.get("branch_cost", 0.01)),
@@ -126,9 +128,20 @@ class BrianRouteCore(ModuleBase):
             num_actions=config.route_pool_blocks + 1,
         )
         if config.global_kv:
+            if config.global_adapter_scope not in {"shared", "per_block"}:
+                raise ValueError(f"Unknown global_adapter_scope: {config.global_adapter_scope}")
             self.global_cache = CanonicalGlobalCache(config.global_sink_slots, config.global_window_slots)
-            self.global_write = GlobalWriteAdapter(config.base.d_model, config.global_code_dim)
-            self.global_read = GlobalReadAdapter(config.base.d_model, config.global_code_dim)
+            if config.global_adapter_scope == "per_block":
+                adapter_count = config.route_pool_blocks + 1
+                self.global_write = nn.ModuleList(
+                    [GlobalWriteAdapter(config.base.d_model, config.global_code_dim) for _ in range(adapter_count)]
+                )
+                self.global_read = nn.ModuleList(
+                    [GlobalReadAdapter(config.base.d_model, config.global_code_dim) for _ in range(adapter_count)]
+                )
+            else:
+                self.global_write = GlobalWriteAdapter(config.base.d_model, config.global_code_dim)
+                self.global_read = GlobalReadAdapter(config.base.d_model, config.global_code_dim)
         else:
             self.global_cache = None
             self.global_write = None
@@ -191,7 +204,8 @@ class BrianRouteCore(ModuleBase):
                 device=input_ids.device,
                 dtype=hidden.dtype,
             )
-            global_state = self.global_cache.write(global_state, self.global_write(hidden))
+            global_state = self.global_cache.write(global_state, self._global_write(hidden))
+        last_global_actions = None
 
         if route_mode == "parallel" or self.config.parallel_passing:
             hidden, position, route_info = self._run_parallel_route(hidden, position, route_info, hard_exit, global_state)
@@ -200,10 +214,11 @@ class BrianRouteCore(ModuleBase):
         for step in range(max_steps if route_mode != "parallel" and not self.config.parallel_passing else 0):
             if self.config.global_kv and global_state is not None:
                 assert self.global_read is not None
-                hidden, global_metrics = self.global_read(
+                hidden, global_metrics = self._global_read(
                     hidden,
                     global_state.codes,
                     sink_slots=self.config.global_sink_slots,
+                    actions=last_global_actions,
                 )
                 route_info["global_attention_mass"].append(global_metrics["global_attention_mass"])
                 route_info["global_sink_attention_mass"].append(global_metrics["global_sink_attention_mass"])
@@ -241,7 +256,8 @@ class BrianRouteCore(ModuleBase):
             position = self._next_position(selected, top_actions, top_weights, use_weighted_fusion)
             if self.config.global_kv and global_state is not None:
                 assert self.global_write is not None and self.global_cache is not None
-                global_state = self.global_cache.write(global_state, self.global_write(hidden))
+                global_state = self.global_cache.write(global_state, self._global_write(hidden, selected))
+                last_global_actions = selected
 
             route_info["route_logits"].append(logits)
             route_info["route_probs"].append(probs)
@@ -259,10 +275,11 @@ class BrianRouteCore(ModuleBase):
         hidden = self.exit_block(hidden, self._block_position(position))
         if self.config.global_kv and global_state is not None:
             assert self.global_read is not None
-            hidden, global_metrics = self.global_read(
+            hidden, global_metrics = self._global_read(
                 hidden,
                 global_state.codes,
                 sink_slots=self.config.global_sink_slots,
+                actions=last_global_actions,
             )
             route_info["global_attention_mass"].append(global_metrics["global_attention_mass"])
             route_info["global_sink_attention_mass"].append(global_metrics["global_sink_attention_mass"])
@@ -328,6 +345,7 @@ class BrianRouteCore(ModuleBase):
         branch_scores = torch.zeros(batch_size, 1, device=hidden.device, dtype=hidden.dtype)
         branch_exited = torch.zeros(batch_size, 1, device=hidden.device, dtype=torch.bool)
         branch_delta_codes = None
+        branch_last_actions = None
         if self.config.global_kv:
             branch_delta_codes = torch.empty(
                 batch_size,
@@ -336,6 +354,12 @@ class BrianRouteCore(ModuleBase):
                 self.config.global_code_dim,
                 device=hidden.device,
                 dtype=hidden.dtype,
+            )
+            branch_last_actions = torch.full(
+                (batch_size, 1),
+                self.out_action,
+                device=hidden.device,
+                dtype=torch.long,
             )
         beam_size = max(1, self.config.beam_size)
         top_k = max(1, min(self.config.top_k, self.config.route_pool_blocks + 1))
@@ -347,13 +371,15 @@ class BrianRouteCore(ModuleBase):
             if self.config.global_kv and global_state is not None:
                 assert self.global_read is not None
                 assert branch_delta_codes is not None
+                assert branch_last_actions is not None
                 base_codes = global_state.codes.unsqueeze(1).expand(-1, current_beam, -1, -1)
                 combined_codes = torch.cat([base_codes, branch_delta_codes], dim=2)
                 flat_codes = combined_codes.reshape(batch_size * current_beam, combined_codes.size(2), combined_codes.size(3))
-                flat_hidden, global_metrics = self.global_read(
+                flat_hidden, global_metrics = self._global_read(
                     flat_hidden,
                     flat_codes,
                     sink_slots=self.config.global_sink_slots,
+                    actions=branch_last_actions.reshape(-1),
                 )
                 route_info["global_attention_mass"].append(global_metrics["global_attention_mass"])
                 route_info["global_sink_attention_mass"].append(global_metrics["global_sink_attention_mass"])
@@ -430,13 +456,19 @@ class BrianRouteCore(ModuleBase):
             branch_exited = flat_exit.reshape(batch_size, branch_count)
             if self.config.global_kv and next_delta_codes is not None:
                 assert self.global_write is not None
-                delta_write = self.global_write(routed).reshape(batch_size, branch_count, self.config.global_code_dim)
+                delta_write = self._global_write(routed, apply_actions).reshape(
+                    batch_size,
+                    branch_count,
+                    self.config.global_code_dim,
+                )
                 branch_delta_codes = torch.cat([next_delta_codes, delta_write.unsqueeze(2)], dim=2)
                 if self.config.global_window_slots:
                     branch_delta_codes = branch_delta_codes[:, :, -self.config.global_window_slots :, :]
                 route_info.setdefault("parallel_delta_cache_slots", []).append(
                     torch.tensor(float(branch_delta_codes.size(2)), device=hidden.device, dtype=hidden.dtype)
                 )
+            if branch_last_actions is not None:
+                branch_last_actions = apply_actions.reshape(batch_size, branch_count)
 
             branch_weights = F.softmax(branch_scores, dim=-1)
             route_info["route_logits"].append((probs * branch_weights.unsqueeze(-1)).sum(dim=1).log().clamp_min(-50.0))
@@ -572,6 +604,62 @@ class BrianRouteCore(ModuleBase):
             return position
         return torch.zeros_like(position)
 
+    def _global_write(self, hidden: torch.Tensor, actions: torch.Tensor | None = None) -> torch.Tensor:
+        assert self.global_write is not None
+        if not isinstance(self.global_write, nn.ModuleList):
+            return self.global_write(hidden)
+        indices = self._global_adapter_indices(actions, hidden.size(0), hidden.device)
+        codes = hidden.new_empty((hidden.size(0), self.config.global_code_dim))
+        for index, adapter in enumerate(self.global_write):
+            mask = indices == index
+            if torch.any(mask):
+                codes[mask] = adapter(hidden[mask])
+        return codes
+
+    def _global_read(
+        self,
+        hidden: torch.Tensor,
+        codes: torch.Tensor,
+        *,
+        sink_slots: int,
+        actions: torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+        assert self.global_read is not None
+        if not isinstance(self.global_read, nn.ModuleList):
+            return self.global_read(hidden, codes, sink_slots=sink_slots)
+        indices = self._global_adapter_indices(actions, hidden.size(0), hidden.device)
+        updated = hidden.clone()
+        metric_sums: dict[str, torch.Tensor] = {}
+        total = max(1, hidden.size(0))
+        for index, adapter in enumerate(self.global_read):
+            mask = indices == index
+            if not torch.any(mask):
+                continue
+            group_hidden, metrics = adapter(hidden[mask], codes[mask], sink_slots=sink_slots)
+            updated[mask] = group_hidden
+            weight = torch.tensor(float(mask.sum().item()) / float(total), device=hidden.device, dtype=hidden.dtype)
+            for key, value in metrics.items():
+                value = value.to(device=hidden.device, dtype=hidden.dtype)
+                if key not in metric_sums:
+                    metric_sums[key] = torch.zeros((), device=hidden.device, dtype=hidden.dtype)
+                metric_sums[key] = metric_sums[key] + value * weight
+        return updated, metric_sums
+
+    def _global_adapter_indices(
+        self,
+        actions: torch.Tensor | None,
+        batch_size: int,
+        device: torch.device,
+    ) -> torch.Tensor:
+        if actions is None:
+            return torch.full((batch_size,), self.out_action, dtype=torch.long, device=device)
+        indices = actions.to(device=device, dtype=torch.long).reshape(-1)
+        if indices.numel() == 1 and batch_size != 1:
+            indices = indices.expand(batch_size)
+        if indices.numel() != batch_size:
+            raise ValueError("Global adapter action count must match batch size.")
+        return indices.clamp(min=0, max=self.out_action)
+
     def model_stats(self) -> dict[str, int | str]:
         return {
             "model_name": "brian_route_core",
@@ -588,6 +676,7 @@ class BrianRouteCore(ModuleBase):
             "global_code_dim": self.config.global_code_dim,
             "global_sink_slots": self.config.global_sink_slots,
             "global_window_slots": self.config.global_window_slots,
+            "global_adapter_scope": self.config.global_adapter_scope,
             "parallel_passing": str(self.config.parallel_passing),
             "beam_size": self.config.beam_size,
             "branch_cost": str(self.config.branch_cost),
