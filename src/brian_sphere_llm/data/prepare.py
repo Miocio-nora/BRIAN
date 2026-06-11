@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict
+import math
 from pathlib import Path
 from typing import Any
 
@@ -26,8 +27,8 @@ def prepare_data(config_path: str | Path) -> Path:
     tokenizer = load_tokenizer(
         tokenizer_cfg["name"],
         revision=str(tokenizer_cfg.get("revision", "main")),
-        local_files_only=bool(tokenizer_cfg.get("local_files_only", False)),
-        fallback_to_byte=bool(tokenizer_cfg.get("fallback_to_byte", False)),
+        local_files_only=_bool_config(tokenizer_cfg.get("local_files_only", False), "tokenizer.local_files_only"),
+        fallback_to_byte=_bool_config(tokenizer_cfg.get("fallback_to_byte", False), "tokenizer.fallback_to_byte"),
     )
     metadata = tokenizer_metadata(
         tokenizer,
@@ -44,14 +45,15 @@ def prepare_data(config_path: str | Path) -> Path:
     if pad_token_id is None:
         pad_token_id = 0
 
-    target_tokens = int(config.get("target_tokens", 0))
-    val_tokens_target = int(config.get("validation_tokens", 0))
-    sequence_length = int(config["sequence_length"])
+    target_tokens = _int_config(config, "target_tokens", default=0, minimum=0)
+    val_tokens_target = _int_config(config, "validation_tokens", default=0, minimum=0)
+    sequence_length = _int_config(config, "sequence_length", minimum=2)
     documents_train: list[list[int]] = []
     documents_val: list[list[int]] = []
     manifest_rows: list[ManifestRow] = []
     manifest_created_at = str(config.get("manifest_created_at", DEFAULT_MANIFEST_CREATED_AT))
-    synthetic_only = bool(config.get("synthetic_only", {}).get("enabled", False))
+    synthetic_cfg = _mapping_config(config.get("synthetic_only", {}), "synthetic_only")
+    synthetic_only = _bool_config(synthetic_cfg.get("enabled", False), "synthetic_only.enabled")
     if synthetic_only:
         samples = _synthetic_rows(config)
     else:
@@ -121,8 +123,9 @@ def prepare_data(config_path: str | Path) -> Path:
 
 
 def _synthetic_rows(config: dict[str, Any]):
-    count = int(config.get("synthetic_only", {}).get("sample_count", 1000))
-    seed = int(config.get("seed", 1))
+    synthetic_cfg = _mapping_config(config.get("synthetic_only", {}), "synthetic_only")
+    count = _int_config(synthetic_cfg, "sample_count", default=1000, minimum=1)
+    seed = _int_config(config, "seed", default=1, minimum=0)
     for index, sample in enumerate(generate_synthetic_samples(count, seed)):
         yield {
             "sample_id": f"synthetic-{index}",
@@ -136,9 +139,12 @@ def _synthetic_rows(config: dict[str, Any]):
 
 
 def _mixture_rows(config: dict[str, Any]):
-    synthetic_cfg = config.get("mixture", {}).get("synthetic_routing", {})
-    synthetic_count = max(1000, int(config.get("target_tokens", 0) // 1000))
-    for index, sample in enumerate(generate_synthetic_samples(synthetic_count, int(config.get("seed", 1)))):
+    mixture_cfg = _mapping_config(config.get("mixture", {}), "mixture")
+    synthetic_cfg = _mapping_config(mixture_cfg.get("synthetic_routing", {}), "mixture.synthetic_routing")
+    target_tokens = _int_config(config, "target_tokens", default=0, minimum=0)
+    seed = _int_config(config, "seed", default=1, minimum=0)
+    synthetic_count = max(1000, target_tokens // 1000)
+    for index, sample in enumerate(generate_synthetic_samples(synthetic_count, seed)):
         yield {
             "sample_id": f"synthetic-{index}",
             "text": sample.text,
@@ -148,9 +154,10 @@ def _mixture_rows(config: dict[str, Any]):
             "mixture_tag": "synthetic_routing",
             "route_metadata": sample.metadata,
         }
-    for tag, item in config.get("mixture", {}).items():
+    for tag, item in mixture_cfg.items():
         if tag == "synthetic_routing":
             continue
+        item = _mapping_config(item, f"mixture.{tag}")
         source_dataset = str(item["source_dataset"])
         split = str(item.get("split", "train"))
         for row in iter_hf_text_dataset(dataset_name=source_dataset, split=split, streaming=True):
@@ -169,3 +176,47 @@ def _realized_mixture(rows: list[ManifestRow]) -> dict[str, int]:
     for row in rows:
         counts[row.mixture_tag] = counts.get(row.mixture_tag, 0) + row.token_count
     return counts
+
+
+def _mapping_config(value: Any, name: str) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise ValueError(f"{name} must be a mapping.")
+    return value
+
+
+def _bool_config(value: Any, name: str) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.lower()
+        if normalized in {"1", "true", "yes", "on", "enabled"}:
+            return True
+        if normalized in {"0", "false", "no", "off", "disabled"}:
+            return False
+    raise ValueError(f"{name} must be a boolean.")
+
+
+def _int_config(
+    config: dict[str, Any],
+    key: str,
+    *,
+    default: int | None = None,
+    minimum: int | None = None,
+) -> int:
+    if key in config:
+        value = config[key]
+    elif default is not None:
+        value = default
+    else:
+        raise KeyError(key)
+    if isinstance(value, bool):
+        raise ValueError(f"{key} must be an integer, not a boolean.")
+    if isinstance(value, int):
+        number = value
+    elif isinstance(value, float) and math.isfinite(value) and value.is_integer():
+        number = int(value)
+    else:
+        raise ValueError(f"{key} must be an integer.")
+    if minimum is not None and number < minimum:
+        raise ValueError(f"{key} must be >= {minimum}.")
+    return number

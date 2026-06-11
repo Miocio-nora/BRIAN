@@ -1,8 +1,10 @@
 import json
 from pathlib import Path
 
+import pytest
+
 from brian_sphere_llm.data.manifest import REQUIRED_MANIFEST_FIELDS, sha256_text
-from brian_sphere_llm.data.prepare import DEFAULT_MANIFEST_CREATED_AT, prepare_data
+from brian_sphere_llm.data.prepare import DEFAULT_MANIFEST_CREATED_AT, _bool_config, prepare_data
 from brian_sphere_llm.utils.config import load_yaml, save_yaml
 
 
@@ -65,3 +67,51 @@ def test_prepare_tiny_synthetic_data(tmp_path: Path) -> None:
     rerun_stats = json.loads((output_dir / "stats.json").read_text(encoding="utf-8"))
     assert (output_dir / "manifest.jsonl").read_text(encoding="utf-8") == manifest_text
     assert rerun_stats["sha256_manifest"] == stats["sha256_manifest"]
+
+
+def test_prepare_data_rejects_boolean_numeric_config(tmp_path: Path) -> None:
+    cfg = load_yaml("configs/data/r125_tiny_debug.yaml")
+    cfg["output_dir"] = str(tmp_path / "tokenized")
+    cfg["manifest_path"] = str(tmp_path / "manifest.jsonl")
+    cfg["target_tokens"] = True
+    config_path = tmp_path / "data.yaml"
+    save_yaml(cfg, config_path)
+
+    with pytest.raises(ValueError, match="target_tokens"):
+        prepare_data(config_path)
+
+
+def test_prepare_data_rejects_boolean_synthetic_sample_count(tmp_path: Path) -> None:
+    cfg = load_yaml("configs/data/r125_tiny_debug.yaml")
+    cfg["output_dir"] = str(tmp_path / "tokenized")
+    cfg["manifest_path"] = str(tmp_path / "manifest.jsonl")
+    cfg["target_tokens"] = 1000
+    cfg["validation_tokens"] = 100
+    cfg["synthetic_only"]["sample_count"] = False
+    config_path = tmp_path / "data.yaml"
+    save_yaml(cfg, config_path)
+
+    with pytest.raises(ValueError, match="sample_count"):
+        prepare_data(config_path)
+
+
+def test_prepare_data_rejects_non_mapping_mixture_config(tmp_path: Path) -> None:
+    cfg = load_yaml("configs/data/r125_tiny_debug.yaml")
+    cfg["output_dir"] = str(tmp_path / "tokenized")
+    cfg["manifest_path"] = str(tmp_path / "manifest.jsonl")
+    cfg["target_tokens"] = 1000
+    cfg["validation_tokens"] = 100
+    cfg["synthetic_only"]["enabled"] = False
+    cfg["mixture"] = True
+    config_path = tmp_path / "data.yaml"
+    save_yaml(cfg, config_path)
+
+    with pytest.raises(ValueError, match="mixture"):
+        prepare_data(config_path)
+
+
+def test_prepare_bool_config_parses_false_string_without_truthiness() -> None:
+    assert _bool_config("false", "field") is False
+    assert _bool_config("true", "field") is True
+    with pytest.raises(ValueError, match="field"):
+        _bool_config("maybe", "field")
