@@ -9,6 +9,7 @@ from brian_sphere_llm.data.pack import write_index, write_token_bin
 from brian_sphere_llm.model.baseline import BaselineConfig, BaselineLM
 from brian_sphere_llm.train.trainer import (
     _bool_config,
+    _device,
     _float_config,
     _forward_for_stage,
     _int_config,
@@ -17,6 +18,7 @@ from brian_sphere_llm.train.trainer import (
     _mapping_config,
     _model_stats,
     _schedule_values,
+    _set_sampler_epoch,
     evaluate,
     run_name,
     train_from_config,
@@ -132,6 +134,16 @@ def test_forward_for_stage_parses_string_false_hard_exit() -> None:
     assert model.hard_exit is False
 
 
+def test_distributed_cuda_device_uses_local_rank(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("WORLD_SIZE", "2")
+    monkeypatch.setenv("LOCAL_RANK", "1")
+
+    device = _device("cuda")
+
+    assert device.type == "cuda"
+    assert device.index == 1
+
+
 def test_evaluate_reports_inference_timing_metrics() -> None:
     model = BaselineLM(BaselineConfig(vocab_size=64, context_length=4, layers=1, d_model=16, n_heads=4))
     val_loader = [
@@ -180,6 +192,21 @@ def test_model_stats_requires_positive_parameter_count() -> None:
         _model_stats(InvalidParameterCount())
     with pytest.raises(ValueError, match="positive integer"):
         _model_stats(BoolParameterCount())
+
+
+def test_set_sampler_epoch_for_distributed_sampler_like_loader() -> None:
+    class Sampler:
+        epoch = None
+
+        def set_epoch(self, epoch: int) -> None:
+            self.epoch = epoch
+
+    class Loader:
+        sampler = Sampler()
+
+    loader = Loader()
+    _set_sampler_epoch(loader, 4)
+    assert loader.sampler.epoch == 4
 
 
 def test_train_from_config_writes_routing_report_on_checkpoint(tmp_path: Path) -> None:

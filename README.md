@@ -96,6 +96,12 @@ python scripts/train.py --config configs/train/stage5_tiny_debug.yaml
 python scripts/train.py --config configs/train/stage6_tiny_debug.yaml
 ```
 
+For multi-GPU jobs, launch the same training entrypoint with `torchrun`; the trainer reads `WORLD_SIZE`, `RANK`, and `LOCAL_RANK`, uses a distributed train sampler, wraps the model with DDP, and writes checkpoints/reports only from rank 0:
+
+```bash
+torchrun --nproc_per_node=<gpu_count> scripts/train.py --config configs/train/stage0_r1b_baseline.yaml
+```
+
 Generate a routing report:
 
 ```bash

@@ -8,9 +8,11 @@ from brian_sphere_llm.data.pack import read_token_bin
 try:
     import torch
     from torch.utils.data import DataLoader, Dataset
+    from torch.utils.data.distributed import DistributedSampler
 except ModuleNotFoundError:  # pragma: no cover
     torch = None
     DataLoader = None
+    DistributedSampler = None
     Dataset = object
 
 
@@ -44,9 +46,32 @@ def build_dataloader(
     batch_size: int,
     shuffle: bool,
     num_workers: int = 0,
+    distributed: bool = False,
+    rank: int = 0,
+    world_size: int = 1,
+    seed: int = 0,
 ) -> "DataLoader":
     if torch is None or DataLoader is None:
         raise ModuleNotFoundError("PyTorch is required for dataloaders.")
     tokenized_dir = Path(tokenized_dir)
     dataset = PackedTokenDataset(tokenized_dir / f"{split}.bin", tokenized_dir / f"{split}.idx")
-    return DataLoader(dataset, batch_size=batch_size, shuffle=shuffle, drop_last=True, num_workers=num_workers)
+    sampler = None
+    if distributed:
+        if DistributedSampler is None:
+            raise ModuleNotFoundError("PyTorch DistributedSampler is required for distributed dataloaders.")
+        sampler = DistributedSampler(
+            dataset,
+            num_replicas=world_size,
+            rank=rank,
+            shuffle=shuffle,
+            seed=seed,
+            drop_last=True,
+        )
+    return DataLoader(
+        dataset,
+        batch_size=batch_size,
+        shuffle=shuffle if sampler is None else False,
+        sampler=sampler,
+        drop_last=True,
+        num_workers=num_workers,
+    )

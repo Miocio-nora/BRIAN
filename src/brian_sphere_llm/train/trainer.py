@@ -14,21 +14,29 @@ from brian_sphere_llm.train.checkpoint import load_checkpoint, save_checkpoint
 from brian_sphere_llm.train.stage_runner import build_model_from_config, train_mode_for_stage
 from brian_sphere_llm.routing.schedule import scheduled_value
 from brian_sphere_llm.utils.config import load_config, save_yaml
+from brian_sphere_llm.utils import distributed as dist_utils
 from brian_sphere_llm.utils.logging import JsonlLogger, write_json
 from brian_sphere_llm.utils.seed import set_seed
 
 try:
     import torch
+    from torch.nn.parallel import DistributedDataParallel
 except ModuleNotFoundError:  # pragma: no cover
     torch = None
+    DistributedDataParallel = None
 
 
 def _device(name: str) -> "torch.device":
     if torch is None:
         raise ModuleNotFoundError("PyTorch is required for training.")
     if name == "auto":
+        if dist_utils.is_distributed() and torch.cuda.is_available():
+            return torch.device("cuda", dist_utils.local_rank())
         return torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    return torch.device(name)
+    device = torch.device(name)
+    if dist_utils.is_distributed() and device.type == "cuda" and device.index is None:
+        return torch.device("cuda", dist_utils.local_rank())
+    return device
 
 
 def _autocast_context(device: "torch.device", precision: str):
@@ -77,6 +85,8 @@ def train_from_config(config_path: str | Path) -> Path:
     model = build_model_from_config(model_config_path)
     _set_activation_checkpointing(model, _bool_config(config, "activation_checkpointing", default=False))
     device = _device(str(config.get("device", "auto")))
+    distributed = dist_utils.init_distributed(device)
+    is_main_process = dist_utils.is_main_process()
     model.to(device)
 
     run_dir = Path(config.get("output_root", "runs")) / run_name(
@@ -86,16 +96,34 @@ def train_from_config(config_path: str | Path) -> Path:
         context_length=_int_config(data_config, "sequence_length", default=0, minimum=0) or 0,
     )
     run_dir.mkdir(parents=True, exist_ok=True)
-    save_yaml({**config, "model_config_resolved": model_config, "data_config_resolved": data_config}, run_dir / "config_resolved.yaml")
+    resolved_config = {
+        **config,
+        "model_config_resolved": model_config,
+        "data_config_resolved": data_config,
+        "distributed": {
+            "enabled": distributed,
+            "world_size": dist_utils.world_size(),
+            "rank": dist_utils.rank(),
+            "local_rank": dist_utils.local_rank(),
+        },
+    }
+    if is_main_process:
+        save_yaml(resolved_config, run_dir / "config_resolved.yaml")
     model_stats = _model_stats(model)
-    write_json(model_stats, run_dir / "model_stats.json")
-    write_json(_data_manifest_ref(data_config, tokenized_dir), run_dir / "data_manifest_ref.json")
+    if is_main_process:
+        write_json(model_stats, run_dir / "model_stats.json")
+        write_json(_data_manifest_ref(data_config, tokenized_dir), run_dir / "data_manifest_ref.json")
+    dist_utils.barrier()
 
     train_loader = build_dataloader(
         tokenized_dir=tokenized_dir,
         split="train",
         batch_size=batch_size,
         shuffle=True,
+        distributed=distributed,
+        rank=dist_utils.rank(),
+        world_size=dist_utils.world_size(),
+        seed=seed,
     )
     val_loader = build_dataloader(
         tokenized_dir=tokenized_dir,
@@ -116,21 +144,25 @@ def train_from_config(config_path: str | Path) -> Path:
         payload = load_checkpoint(latest, model=model, optimizer=optimizer)
         start_step = int(payload.get("step", 0))
         best_eval_loss = payload.get("best_eval_loss")
-        JsonlLogger(run_dir / "resume_events.jsonl").write(
-            {
-                "checkpoint": str(latest),
-                "resumed_from_step": start_step,
-                "target_max_steps": max_steps,
-                "optimizer_state_loaded": "optimizer" in payload,
-                "best_eval_loss": best_eval_loss,
-            }
-        )
+        if is_main_process:
+            JsonlLogger(run_dir / "resume_events.jsonl").write(
+                {
+                    "checkpoint": str(latest),
+                    "resumed_from_step": start_step,
+                    "target_max_steps": max_steps,
+                    "optimizer_state_loaded": "optimizer" in payload,
+                    "best_eval_loss": best_eval_loss,
+                }
+            )
+    model = _wrap_distributed_model(model, device, distributed=distributed)
 
-    train_log = JsonlLogger(run_dir / "train_log.jsonl")
-    eval_log = JsonlLogger(run_dir / "eval_log.jsonl")
+    train_log = JsonlLogger(run_dir / "train_log.jsonl") if is_main_process else None
+    eval_log = JsonlLogger(run_dir / "eval_log.jsonl") if is_main_process else None
     write_routing_report = _bool_config(config, "write_routing_report_on_checkpoint", default=True)
     stage_mode = train_mode_for_stage(config["stage"])
+    _set_sampler_epoch(train_loader, 0)
     iterator = iter(train_loader)
+    data_epoch = 0
     model.train()
     for step in range(start_step + 1, max_steps + 1):
         if device.type == "cuda":
@@ -157,6 +189,8 @@ def train_from_config(config_path: str | Path) -> Path:
             try:
                 batch = next(iterator)
             except StopIteration:
+                data_epoch += 1
+                _set_sampler_epoch(train_loader, data_epoch)
                 iterator = iter(train_loader)
                 batch = next(iterator)
             batch = batch.to(device)
@@ -195,22 +229,33 @@ def train_from_config(config_path: str | Path) -> Path:
             row.update(schedule_values)
         if routing_summary or routing_numeric_values:
             row.update(_finalize_routing_summary(routing_summary, routing_numeric_values))
-        train_log.write(row)
+        if train_log is not None:
+            train_log.write(row)
 
         if step % eval_interval == 0 or step == max_steps:
             eval_row = evaluate(model, val_loader, config=config, device=device, route_mode=stage_mode, global_step=step)
             eval_row["step"] = step
-            eval_log.write(eval_row)
+            if eval_log is not None:
+                eval_log.write(eval_row)
             eval_loss = float(eval_row["validation_loss"])
             if best_eval_loss is None or eval_loss < best_eval_loss:
                 best_eval_loss = eval_loss
-                save_checkpoint(run_dir / "checkpoint_best", model=model, optimizer=optimizer, step=step, best_eval_loss=best_eval_loss)
+                if is_main_process:
+                    save_checkpoint(
+                        run_dir / "checkpoint_best",
+                        model=dist_utils.unwrap_model(model),
+                        optimizer=optimizer,
+                        step=step,
+                        best_eval_loss=best_eval_loss,
+                    )
         if step % save_interval == 0 or step == max_steps:
-            save_checkpoint(latest, model=model, optimizer=optimizer, step=step, best_eval_loss=best_eval_loss)
-            if write_routing_report:
+            if is_main_process:
+                save_checkpoint(latest, model=dist_utils.unwrap_model(model), optimizer=optimizer, step=step, best_eval_loss=best_eval_loss)
+            if is_main_process and write_routing_report:
                 make_routing_report(run_dir)
-    if not (run_dir / "routing_report.json").exists():
+    if is_main_process and not (run_dir / "routing_report.json").exists():
         make_routing_report(run_dir)
+    dist_utils.barrier()
     return run_dir
 
 
@@ -246,6 +291,23 @@ def _forward_for_stage(model: Any, batch: "torch.Tensor", *, config: dict[str, A
 def _set_activation_checkpointing(model: Any, enabled: bool) -> None:
     if hasattr(model, "activation_checkpointing"):
         model.activation_checkpointing = enabled
+
+
+def _wrap_distributed_model(model: Any, device: "torch.device", *, distributed: bool) -> Any:
+    if not distributed:
+        return model
+    if DistributedDataParallel is None:
+        raise ModuleNotFoundError("DistributedDataParallel is required for distributed training.")
+    if device.type == "cuda":
+        device_index = device.index if device.index is not None else dist_utils.local_rank()
+        return DistributedDataParallel(model, device_ids=[device_index], output_device=device_index)
+    return DistributedDataParallel(model)
+
+
+def _set_sampler_epoch(loader: Any, epoch: int) -> None:
+    sampler = getattr(loader, "sampler", None)
+    if hasattr(sampler, "set_epoch"):
+        sampler.set_epoch(epoch)
 
 
 def _set_optimizer_lr(optimizer: Any, learning_rate: float) -> None:

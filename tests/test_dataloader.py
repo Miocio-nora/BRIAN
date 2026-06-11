@@ -31,6 +31,33 @@ def test_validation_dataloader_preserves_fixed_order(tmp_path: Path) -> None:
     assert second_batches == first_batches
 
 
+def test_train_dataloader_uses_distributed_sampler_when_requested(tmp_path: Path) -> None:
+    tokenized = tmp_path / "tokenized"
+    sequences = [
+        [1, 2, 3],
+        [4, 5, 6],
+        [7, 8, 9],
+        [10, 11, 12],
+    ]
+    write_token_bin(sequences, tokenized / "train.bin")
+    write_index(tokenized / "train.idx", sequence_length=3, num_sequences=len(sequences))
+
+    loader = build_dataloader(
+        tokenized_dir=tokenized,
+        split="train",
+        batch_size=1,
+        shuffle=False,
+        distributed=True,
+        rank=1,
+        world_size=2,
+        seed=7,
+    )
+
+    assert loader.sampler.num_replicas == 2
+    assert loader.sampler.rank == 1
+    assert [batch.tolist() for batch in loader] == [[[4, 5, 6]], [[10, 11, 12]]]
+
+
 def test_packed_dataset_rejects_token_index_mismatch(tmp_path: Path) -> None:
     tokenized = tmp_path / "tokenized"
     write_token_bin([[1, 2, 3]], tokenized / "train.bin")
