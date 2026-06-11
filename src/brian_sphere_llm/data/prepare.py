@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Iterator
 from dataclasses import asdict
 import math
 from pathlib import Path
@@ -140,35 +141,70 @@ def _synthetic_rows(config: dict[str, Any]):
 
 def _mixture_rows(config: dict[str, Any]):
     mixture_cfg = _mapping_config(config.get("mixture", {}), "mixture")
-    synthetic_cfg = _mapping_config(mixture_cfg.get("synthetic_routing", {}), "mixture.synthetic_routing")
     target_tokens = _int_config(config, "target_tokens", default=0, minimum=0)
     seed = _int_config(config, "seed", default=1, minimum=0)
     synthetic_count = max(1000, target_tokens // 1000)
-    for index, sample in enumerate(generate_synthetic_samples(synthetic_count, seed)):
+    sources: list[dict[str, Any]] = []
+    for order, (tag, item) in enumerate(mixture_cfg.items()):
+        item = _mapping_config(item, f"mixture.{tag}")
+        weight = _float_config(item, "weight", minimum=0.0)
+        if weight <= 0.0:
+            continue
+        if tag == "synthetic_routing":
+            row_iter = _synthetic_mixture_rows(item, synthetic_count, seed)
+        else:
+            row_iter = _hf_mixture_rows(tag, item)
+        sources.append({"order": order, "weight": weight, "emitted": 0, "rows": row_iter})
+    while sources:
+        source = min(sources, key=lambda entry: (entry["emitted"] / entry["weight"], entry["order"]))
+        try:
+            yield next(source["rows"])
+        except StopIteration:
+            sources.remove(source)
+            continue
+        source["emitted"] += 1
+
+
+def _synthetic_mixture_rows(item: dict[str, Any], count: int, seed: int) -> Iterator[dict[str, Any]]:
+    for index, sample in enumerate(generate_synthetic_samples(count, seed)):
         yield {
             "sample_id": f"synthetic-{index}",
             "text": sample.text,
-            "source_dataset": synthetic_cfg.get("source_dataset", "brian_synthetic_routing"),
+            "source_dataset": item.get("source_dataset", "brian_synthetic_routing"),
             "source_url_or_id": f"synthetic-{index}",
             "license": "internal-test",
             "mixture_tag": "synthetic_routing",
             "route_metadata": sample.metadata,
         }
-    for tag, item in mixture_cfg.items():
-        if tag == "synthetic_routing":
-            continue
-        item = _mapping_config(item, f"mixture.{tag}")
-        source_dataset = str(item["source_dataset"])
-        split = str(item.get("split", "train"))
-        for row in iter_hf_text_dataset(dataset_name=source_dataset, split=split, streaming=True):
-            yield {
-                "sample_id": f"{tag}-{row['sample_id']}",
-                "text": row["text"],
-                "source_dataset": source_dataset,
-                "source_url_or_id": row["source_url_or_id"],
-                "license": str(item.get("license", "unknown")),
-                "mixture_tag": tag,
-            }
+
+
+def _hf_mixture_rows(tag: str, item: dict[str, Any]) -> Iterator[dict[str, Any]]:
+    source_dataset = str(item["source_dataset"])
+    split = str(item.get("split", "train"))
+    for row in iter_hf_text_dataset(dataset_name=source_dataset, split=split, streaming=True):
+        yield {
+            "sample_id": f"{tag}-{row['sample_id']}",
+            "text": row["text"],
+            "source_dataset": source_dataset,
+            "source_url_or_id": row["source_url_or_id"],
+            "license": str(item.get("license", "unknown")),
+            "mixture_tag": tag,
+        }
+
+
+def _float_config(
+    config: dict[str, Any],
+    key: str,
+    *,
+    minimum: float | None = None,
+) -> float:
+    value = config[key]
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(float(value)):
+        raise ValueError(f"{key} must be a finite numeric value.")
+    number = float(value)
+    if minimum is not None and number < minimum:
+        raise ValueError(f"{key} must be >= {minimum}.")
+    return number
 
 
 def _realized_mixture(rows: list[ManifestRow]) -> dict[str, int]:

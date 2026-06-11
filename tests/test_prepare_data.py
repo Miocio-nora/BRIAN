@@ -1,10 +1,11 @@
 import json
+from itertools import islice
 from pathlib import Path
 
 import pytest
 
 from brian_sphere_llm.data.manifest import REQUIRED_MANIFEST_FIELDS, sha256_text
-from brian_sphere_llm.data.prepare import DEFAULT_MANIFEST_CREATED_AT, _bool_config, prepare_data
+from brian_sphere_llm.data.prepare import DEFAULT_MANIFEST_CREATED_AT, _bool_config, _mixture_rows, prepare_data
 from brian_sphere_llm.utils.config import load_yaml, save_yaml
 
 
@@ -108,6 +109,51 @@ def test_prepare_data_rejects_non_mapping_mixture_config(tmp_path: Path) -> None
 
     with pytest.raises(ValueError, match="mixture"):
         prepare_data(config_path)
+
+
+def test_mixture_rows_interleave_sources_by_weight(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fake_hf_rows(*, dataset_name: str, split: str, streaming: bool):
+        for index in range(20):
+            yield {
+                "sample_id": f"{dataset_name}-{index}",
+                "text": f"{dataset_name} row {index}",
+                "source_url_or_id": f"{split}-{index}",
+            }
+
+    monkeypatch.setattr("brian_sphere_llm.data.prepare.iter_hf_text_dataset", fake_hf_rows)
+    rows = list(
+        islice(
+            _mixture_rows(
+                {
+                    "target_tokens": 1000,
+                    "seed": 1,
+                    "mixture": {
+                        "synthetic_routing": {
+                            "weight": 0.5,
+                            "source_dataset": "brian_synthetic_routing",
+                        },
+                        "fineweb_edu": {
+                            "weight": 0.25,
+                            "source_dataset": "fineweb",
+                            "split": "train",
+                        },
+                        "code_structured": {
+                            "weight": 0.25,
+                            "source_dataset": "code",
+                            "split": "train",
+                        },
+                    },
+                }
+            ),
+            16,
+        )
+    )
+    tag_counts = {tag: [row["mixture_tag"] for row in rows].count(tag) for tag in {row["mixture_tag"] for row in rows}}
+
+    assert tag_counts == {"synthetic_routing": 8, "fineweb_edu": 4, "code_structured": 4}
+    assert rows[0]["mixture_tag"] == "synthetic_routing"
+    assert rows[1]["mixture_tag"] == "fineweb_edu"
+    assert rows[2]["mixture_tag"] == "code_structured"
 
 
 def test_prepare_bool_config_parses_false_string_without_truthiness() -> None:
