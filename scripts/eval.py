@@ -9,6 +9,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from brian_sphere_llm.eval.compute_report import make_compute_report
 from brian_sphere_llm.eval.cost_control_report import make_cost_control_report
 from brian_sphere_llm.eval.difficulty_report import make_difficulty_report
+from brian_sphere_llm.eval.long_context import make_long_context_report
 from brian_sphere_llm.eval.reasoning import make_reasoning_report
 from brian_sphere_llm.eval.routing_report import make_routing_report
 from brian_sphere_llm.eval.stage_gate_report import make_stage_gate_report
@@ -94,6 +95,19 @@ def main() -> None:
             device_name=str(config.get("device", "auto")),
             task_families=list(config.get("task_families", ["copy", "reverse", "arithmetic", "rewrite"])),
             difficulties=list(config.get("difficulties", ["easy", "medium", "hard"])),
+        )
+    elif eval_name == "long_context_eval":
+        if not args.run:
+            raise SystemExit("long_context_eval requires --run")
+        report = make_long_context_report(
+            args.run,
+            output_path=args.output or config.get("output_path"),
+            sample_count=int(args.sample_count or config.get("sample_count", 12)),
+            seed=int(config.get("seed", 1)),
+            checkpoint=str(args.checkpoint or config.get("checkpoint", "checkpoint_best")),
+            device_name=str(config.get("device", "auto")),
+            task_families=list(config.get("task_families", ["needle_retrieval", "two_hop_tracing"])),
+            difficulties=list(config.get("difficulties", ["near", "middle", "far"])),
         )
     else:
         if not args.run:

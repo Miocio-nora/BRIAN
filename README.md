@@ -125,6 +125,17 @@ python scripts/eval.py \
 
 This writes a reasoning report with exact-match accuracy, teacher-forced target token accuracy, per-task/per-difficulty summaries, and routed compute diagnostics.
 
+Run the lightweight long-context / Global KV eval:
+
+```bash
+python scripts/eval.py \
+  --config configs/eval/long_context_eval.yaml \
+  --run <stage5_global_kv_run> \
+  --sample-count 12
+```
+
+This writes a needle-retrieval / two-hop tracing report with exact-match accuracy, teacher-forced target token accuracy, truncation rate, and Global KV routing diagnostics.
+
 Generate a compute-adjusted comparison report:
 
 ```bash

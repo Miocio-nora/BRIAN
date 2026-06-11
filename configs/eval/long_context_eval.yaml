@@ -1,5 +1,16 @@
 eval_name: long_context_eval
 enabled_after: stage5_global_kv
+sample_count: 12
+seed: 1
+checkpoint: checkpoint_best
+device: auto
+task_families:
+  - needle_retrieval
+  - two_hop_tracing
+difficulties:
+  - near
+  - middle
+  - far
 metrics:
   - needle_retrieval
   - synthetic_multihop_tracing
