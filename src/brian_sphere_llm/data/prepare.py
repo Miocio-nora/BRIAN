@@ -77,6 +77,7 @@ def prepare_data(config_path: str | Path) -> Path:
             license=str(sample.get("license", metadata.license)),
             path=str(source_path),
             mixture_tag=str(sample["mixture_tag"]),
+            route_metadata=sample.get("route_metadata"),
         )
         manifest_rows.append(row)
         if split == "val":
@@ -124,6 +125,7 @@ def _synthetic_rows(config: dict[str, Any]):
             "source_url_or_id": f"synthetic-{index}",
             "license": "internal-test",
             "mixture_tag": str(sample.metadata["task_family"]),
+            "route_metadata": sample.metadata,
         }
 
 
@@ -138,6 +140,7 @@ def _mixture_rows(config: dict[str, Any]):
             "source_url_or_id": f"synthetic-{index}",
             "license": "internal-test",
             "mixture_tag": "synthetic_routing",
+            "route_metadata": sample.metadata,
         }
     for tag, item in config.get("mixture", {}).items():
         if tag == "synthetic_routing":

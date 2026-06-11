@@ -27,6 +27,20 @@ def test_prepare_tiny_synthetic_data(tmp_path: Path) -> None:
     assert (output_dir / "stats.json").exists()
     tokenizer_config = json.loads((output_dir / "tokenizer_config.json").read_text(encoding="utf-8"))
     stats = json.loads((output_dir / "stats.json").read_text(encoding="utf-8"))
+    manifest_rows = [
+        json.loads(line)
+        for line in (output_dir / "manifest.jsonl").read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
     assert tokenizer_config["tokenizer_class"] == "SimpleByteTokenizer"
     assert stats["sha256_manifest"]
     assert stats["source_mixture_realized"]
+    assert manifest_rows[0]["route_metadata"]["pseudo_route_type"] in {
+        "advance",
+        "early_exit",
+        "late_exit",
+        "mixed",
+        "recur",
+        "skip",
+    }
+    assert "difficulty_bin" in manifest_rows[0]["route_metadata"]

@@ -52,6 +52,7 @@ class ManifestRow:
     path: str
     mixture_tag: str
     created_at: str
+    route_metadata: dict[str, str | int] | None = None
 
     @classmethod
     def from_sample(
@@ -66,6 +67,7 @@ class ManifestRow:
         license: str,
         path: str,
         mixture_tag: str,
+        route_metadata: dict[str, str | int] | None = None,
     ) -> "ManifestRow":
         return cls(
             sample_id=sample_id,
@@ -80,6 +82,7 @@ class ManifestRow:
             path=path,
             mixture_tag=mixture_tag,
             created_at=utc_now_iso(),
+            route_metadata=route_metadata,
         )
 
     def validate(self) -> None:

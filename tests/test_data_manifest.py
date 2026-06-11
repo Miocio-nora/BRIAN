@@ -14,9 +14,11 @@ def test_manifest_roundtrip(tmp_path: Path) -> None:
         license="test",
         path="memory",
         mixture_tag="synthetic",
+        route_metadata={"pseudo_route_type": "skip", "pseudo_route_length": 2},
     )
     path = tmp_path / "manifest.jsonl"
     write_manifest([row], path)
     rows = read_manifest(path)
     assert rows[0]["sample_id"] == "sample-1"
     assert rows[0]["token_count"] == 3
+    assert rows[0]["route_metadata"]["pseudo_route_type"] == "skip"
