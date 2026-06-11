@@ -12,7 +12,13 @@ from typing import Any
 from brian_sphere_llm.data.dataloader import build_dataloader
 from brian_sphere_llm.data.manifest import sha256_text
 from brian_sphere_llm.eval.routing_report import make_routing_report
-from brian_sphere_llm.train.checkpoint import load_checkpoint, save_checkpoint
+from brian_sphere_llm.train.checkpoint import (
+    load_checkpoint,
+    load_rank_state,
+    rank_state_path,
+    save_checkpoint,
+    save_rank_state,
+)
 from brian_sphere_llm.train.stage_runner import build_model_from_config, train_mode_for_stage
 from brian_sphere_llm.routing.schedule import scheduled_value
 from brian_sphere_llm.utils.config import load_config, save_yaml
@@ -157,6 +163,20 @@ def train_from_config(config_path: str | Path) -> Path:
         best_eval_loss = payload.get("best_eval_loss")
         data_epoch = _payload_int(payload, "data_epoch", default=0, minimum=0)
         microbatch_in_epoch = _payload_int(payload, "microbatch_in_epoch", default=0, minimum=0)
+        rank_payload, rank_state_loaded = _load_rank_training_state(
+            latest,
+            rank=dist_utils.rank(),
+            distributed=distributed,
+        )
+        if rank_payload:
+            data_epoch = _payload_int(rank_payload, "data_epoch", default=data_epoch, minimum=0)
+            microbatch_in_epoch = _payload_int(
+                rank_payload,
+                "microbatch_in_epoch",
+                default=microbatch_in_epoch,
+                minimum=0,
+            )
+        loaded_rank_state_path = rank_state_path(latest, rank=dist_utils.rank()) if rank_state_loaded else None
         if is_main_process:
             JsonlLogger(run_dir / "resume_events.jsonl").write(
                 {
@@ -165,6 +185,8 @@ def train_from_config(config_path: str | Path) -> Path:
                     "target_max_steps": max_steps,
                     "optimizer_state_loaded": "optimizer" in payload,
                     "rng_state_loaded": "rng_state" in payload,
+                    "rank_state_loaded": rank_state_loaded,
+                    "rank_state_path": str(loaded_rank_state_path) if loaded_rank_state_path is not None else None,
                     "data_epoch": data_epoch,
                     "microbatch_in_epoch": microbatch_in_epoch,
                     "best_eval_loss": best_eval_loss,
@@ -299,6 +321,13 @@ def train_from_config(config_path: str | Path) -> Path:
                         best_eval_loss=best_eval_loss,
                         extra=_checkpoint_training_state(data_epoch, microbatch_in_epoch),
                     )
+                _save_rank_training_state(
+                    run_dir / "checkpoint_best",
+                    step=step,
+                    best_eval_loss=best_eval_loss,
+                    data_epoch=data_epoch,
+                    microbatch_in_epoch=microbatch_in_epoch,
+                )
         if step % save_interval == 0 or step == max_steps:
             if is_main_process:
                 save_checkpoint(
@@ -309,6 +338,13 @@ def train_from_config(config_path: str | Path) -> Path:
                     best_eval_loss=best_eval_loss,
                     extra=_checkpoint_training_state(data_epoch, microbatch_in_epoch),
                 )
+            _save_rank_training_state(
+                latest,
+                step=step,
+                best_eval_loss=best_eval_loss,
+                data_epoch=data_epoch,
+                microbatch_in_epoch=microbatch_in_epoch,
+            )
             if is_main_process and write_routing_report:
                 make_routing_report(run_dir)
     if is_main_process and not (run_dir / "routing_report.json").exists():
@@ -441,6 +477,31 @@ def _checkpoint_training_state(data_epoch: int, microbatch_in_epoch: int) -> dic
         "data_epoch": data_epoch,
         "microbatch_in_epoch": microbatch_in_epoch,
     }
+
+
+def _save_rank_training_state(
+    checkpoint_dir: Path,
+    *,
+    step: int,
+    best_eval_loss: float | None,
+    data_epoch: int,
+    microbatch_in_epoch: int,
+) -> Path:
+    return save_rank_state(
+        checkpoint_dir,
+        rank=dist_utils.rank(),
+        step=step,
+        data_epoch=data_epoch,
+        microbatch_in_epoch=microbatch_in_epoch,
+        best_eval_loss=best_eval_loss,
+    )
+
+
+def _load_rank_training_state(checkpoint_dir: Path, *, rank: int, distributed: bool) -> tuple[dict[str, Any], bool]:
+    state_path = rank_state_path(checkpoint_dir, rank=rank)
+    if not distributed or not state_path.exists():
+        return {}, False
+    return load_rank_state(checkpoint_dir, rank=rank, restore_rng_state=True), True
 
 
 def _loader_length(loader: Any) -> int:

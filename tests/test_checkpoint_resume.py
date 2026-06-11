@@ -7,7 +7,13 @@ import pytest
 torch = pytest.importorskip("torch")
 
 from brian_sphere_llm.model.baseline import BaselineConfig, BaselineLM
-from brian_sphere_llm.train.checkpoint import load_checkpoint, save_checkpoint
+from brian_sphere_llm.train.checkpoint import (
+    load_checkpoint,
+    load_rank_state,
+    rank_state_path,
+    save_checkpoint,
+    save_rank_state,
+)
 
 
 def test_checkpoint_roundtrip(tmp_path: Path) -> None:
@@ -46,6 +52,38 @@ def test_checkpoint_restores_rng_state_and_extra_training_state(tmp_path: Path) 
 
     assert payload["data_epoch"] == 2
     assert payload["microbatch_in_epoch"] == 5
+    assert random.random() == expected_python
+    assert float(np.random.rand()) == expected_numpy
+    assert float(torch.rand(())) == expected_torch
+
+
+def test_rank_state_roundtrip_restores_rank_local_rng_and_loader_offset(tmp_path: Path) -> None:
+    random.seed(123)
+    np.random.seed(123)
+    torch.manual_seed(123)
+    path = save_rank_state(
+        tmp_path / "ckpt",
+        rank=3,
+        step=7,
+        data_epoch=2,
+        microbatch_in_epoch=5,
+        best_eval_loss=1.5,
+    )
+    expected_python = random.random()
+    expected_numpy = float(np.random.rand())
+    expected_torch = float(torch.rand(()))
+
+    random.seed(999)
+    np.random.seed(999)
+    torch.manual_seed(999)
+    payload = load_rank_state(tmp_path / "ckpt", rank=3, restore_rng_state=True)
+
+    assert path == rank_state_path(tmp_path / "ckpt", rank=3)
+    assert payload["rank"] == 3
+    assert payload["step"] == 7
+    assert payload["data_epoch"] == 2
+    assert payload["microbatch_in_epoch"] == 5
+    assert payload["best_eval_loss"] == 1.5
     assert random.random() == expected_python
     assert float(np.random.rand()) == expected_numpy
     assert float(torch.rand(())) == expected_torch

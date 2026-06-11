@@ -58,6 +58,49 @@ def load_checkpoint(
     return payload
 
 
+def save_rank_state(
+    path: str | Path,
+    *,
+    rank: int,
+    step: int,
+    data_epoch: int,
+    microbatch_in_epoch: int,
+    best_eval_loss: float | None = None,
+) -> Path:
+    if torch is None:
+        raise ModuleNotFoundError("PyTorch is required for checkpointing.")
+    path = Path(path)
+    path.mkdir(parents=True, exist_ok=True)
+    state_path = path / _rank_state_name(rank)
+    torch.save(
+        {
+            "rank": int(rank),
+            "step": int(step),
+            "data_epoch": int(data_epoch),
+            "microbatch_in_epoch": int(microbatch_in_epoch),
+            "best_eval_loss": best_eval_loss,
+            "rng_state": capture_rng_state(),
+        },
+        state_path,
+    )
+    return state_path
+
+
+def load_rank_state(path: str | Path, *, rank: int, restore_rng_state: bool = False) -> dict[str, Any]:
+    if torch is None:
+        raise ModuleNotFoundError("PyTorch is required for checkpointing.")
+    payload = _load_state(Path(path) / _rank_state_name(rank))
+    if int(payload.get("rank", rank)) != int(rank):
+        raise ValueError(f"Rank state rank mismatch: expected {rank}, found {payload.get('rank')}.")
+    if restore_rng_state and "rng_state" in payload:
+        restore_rng(payload["rng_state"])
+    return payload
+
+
+def rank_state_path(path: str | Path, *, rank: int) -> Path:
+    return Path(path) / _rank_state_name(rank)
+
+
 def capture_rng_state() -> dict[str, Any]:
     if torch is None:
         raise ModuleNotFoundError("PyTorch is required for checkpointing.")
@@ -88,6 +131,10 @@ def _load_state(path: Path) -> dict[str, Any]:
         return torch.load(path, map_location="cpu", weights_only=False)
     except TypeError:  # pragma: no cover - older PyTorch compatibility
         return torch.load(path, map_location="cpu")
+
+
+def _rank_state_name(rank: int) -> str:
+    return f"rank_state_{int(rank):05d}.pt"
 
 
 def _pack_numpy_state(state: tuple[Any, ...]) -> tuple[Any, ...]:

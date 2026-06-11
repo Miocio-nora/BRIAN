@@ -583,13 +583,21 @@ def test_train_from_config_records_resume_event(tmp_path: Path) -> None:
     assert events[-1]["target_max_steps"] == 2
     assert events[-1]["optimizer_state_loaded"] is True
     assert events[-1]["rng_state_loaded"] is True
+    assert events[-1]["rank_state_loaded"] is False
+    assert events[-1]["rank_state_path"] is None
     assert events[-1]["data_epoch"] == 0
     assert events[-1]["microbatch_in_epoch"] == 1
     assert (run_dir / "checkpoint_latest" / "state.pt").exists()
+    assert (run_dir / "checkpoint_latest" / "rank_state_00000.pt").exists()
     payload = torch.load(run_dir / "checkpoint_latest" / "state.pt", map_location="cpu", weights_only=False)
+    rank_payload = torch.load(run_dir / "checkpoint_latest" / "rank_state_00000.pt", map_location="cpu", weights_only=False)
     assert payload["data_epoch"] == 1
     assert payload["microbatch_in_epoch"] == 0
     assert "rng_state" in payload
+    assert rank_payload["rank"] == 0
+    assert rank_payload["data_epoch"] == 1
+    assert rank_payload["microbatch_in_epoch"] == 0
+    assert "rng_state" in rank_payload
     train_rows = [json.loads(line) for line in (run_dir / "train_log.jsonl").read_text(encoding="utf-8").splitlines()]
     assert train_rows[-1]["step"] == 2
 
