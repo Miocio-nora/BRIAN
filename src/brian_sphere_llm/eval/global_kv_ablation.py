@@ -119,6 +119,7 @@ def _required_checks(rows: list[dict[str, Any]], *, expected_entry_count: int) -
     window_rows = [row for row in rows if row["kind"] == "window_sweep"]
     per_block_rows = [row for row in rows if row["kind"] == "per_block_adapter"]
     head_delta_rows = [row for row in rows if row["kind"] == "head_delta_adapter"]
+    per_block_head_delta_rows = [row for row in rows if row["kind"] == "per_block_head_delta_adapter"]
     return {
         "runs_match_manifest_entries": len(rows) == expected_entry_count,
         "local_baseline_present": any(row["kind"] == "local" for row in rows),
@@ -133,6 +134,7 @@ def _required_checks(rows: list[dict[str, Any]], *, expected_entry_count: int) -
         "window_slots_vary": len({row["global_window_slots"] for row in window_rows}) >= 2,
         "per_block_adapter_candidate_present": bool(per_block_rows),
         "head_delta_adapter_candidate_present": bool(head_delta_rows),
+        "per_block_head_delta_adapter_candidate_present": bool(per_block_head_delta_rows),
         "global_metrics_present": bool(global_rows) and all(_global_metrics_present(row) for row in global_rows),
     }
 
@@ -304,7 +306,7 @@ def _per_block_vs_compressed(rows: list[dict[str, Any]]) -> dict[str, Any]:
 
 def _head_delta_vs_per_block(rows: list[dict[str, Any]]) -> dict[str, Any]:
     per_block = next((row for row in rows if row["kind"] == "per_block_adapter"), None)
-    head_delta = next((row for row in rows if row["kind"] == "head_delta_adapter"), None)
+    head_delta = next((row for row in rows if row["kind"] == "per_block_head_delta_adapter"), None)
     if per_block is None or head_delta is None:
         return {"status": "missing"}
     return {
@@ -341,6 +343,12 @@ def _entry_kind(row: dict[str, Any]) -> str:
     name = str(row.get("name", "")).lower()
     if not row["global_kv_enabled"]:
         return "local"
+    if (
+        entry_id == "c8"
+        or "per_block_head_delta" in name
+        or (row.get("global_adapter_scope") == "per_block" and (int(_num(row.get("global_head_delta_rank")) or 0) > 0))
+    ):
+        return "per_block_head_delta_adapter"
     if (
         entry_id == "c7"
         or "head_delta" in name

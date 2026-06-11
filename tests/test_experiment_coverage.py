@@ -346,7 +346,10 @@ def test_global_kv_package_coverage_passes_window_and_sink_requirements(tmp_path
     assert _requirement(report, "C6")["status"] == "pass"
     assert _requirement(report, "C7")["status"] == "pass"
     assert _requirement(report, "C7")["matched_entry_ids"] == ["C7"]
-    assert _requirement(report, "C7")["plan_aliases"] == ["K8"]
+    assert _requirement(report, "C7")["plan_aliases"] == ["K7"]
+    assert _requirement(report, "C8")["status"] == "pass"
+    assert _requirement(report, "C8")["matched_entry_ids"] == ["C8"]
+    assert _requirement(report, "C8")["plan_aliases"] == ["K8"]
 
 
 def test_parallel_package_coverage_passes_weighted_and_beam2_requirements(tmp_path: Path) -> None:
@@ -513,6 +516,26 @@ def test_global_kv_coverage_requires_dedicated_window_sweep_entries(tmp_path: Pa
     assert window["status"] == "fail"
     assert window["matched_entry_ids"] == []
     assert window["checks"]["global_window_entry_ids"]
+
+
+def test_global_kv_coverage_requires_per_block_head_delta_entry(tmp_path: Path) -> None:
+    manifest = tmp_path / "missing_c8.yaml"
+    source = load_config("configs/experiments/route_core_global_kv.yaml")
+    source["ablations"] = [row for row in source["ablations"] if row["id"] != "C8"]
+    manifest.write_text(yaml.safe_dump(source), encoding="utf-8")
+
+    output = make_experiment_coverage_report(
+        manifest,
+        output_path=tmp_path / "coverage.json",
+        profile="global_kv_ablation",
+    )
+    report = json.loads(output.read_text(encoding="utf-8"))
+    combined = _requirement(report, "C8")
+
+    assert report["overall_status"] == "fail"
+    assert combined["status"] == "fail"
+    assert combined["matched_entry_ids"] == []
+    assert combined["checks"]["matched"] is False
 
 
 def test_experiment_coverage_fails_unknown_profile(tmp_path: Path) -> None:

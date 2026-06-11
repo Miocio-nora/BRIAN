@@ -1,0 +1,3 @@
+extends: brian_r125_global_kv.yaml
+model_name: brian_r125_global_kv_per_head_delta
+global_head_delta_rank: 4

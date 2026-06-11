@@ -416,6 +416,7 @@ python scripts/eval.py \
     <global_window_large_run> \
     <global_per_block_adapter_run> \
     <global_head_delta_adapter_run> \
+    <global_per_block_head_delta_adapter_run> \
   --reports \
     <long_context_local.json> \
     <long_context_uncompressed.json> \
@@ -425,10 +426,11 @@ python scripts/eval.py \
     <long_context_window_small.json> \
     <long_context_window_large.json> \
     <long_context_per_block_adapter.json> \
-    <long_context_head_delta_adapter.json>
+    <long_context_head_delta_adapter.json> \
+    <long_context_per_block_head_delta_adapter.json>
 ```
 
-This writes `reports/global_kv_ablation_report.json` with C0-C7 coverage checks, sink/no-sink retention deltas,
+This writes `reports/global_kv_ablation_report.json` with C0-C8 coverage checks, sink/no-sink retention deltas,
 window-size sweep rows, per-block and per-head low-rank adapter comparisons, and optional long-context memory/quality metrics.
 If the long-context reports do not cover every run, the report stays at `warn` instead of `pass`.
 
@@ -436,7 +438,7 @@ The fast smoke manifest is `configs/experiments/tiny_global_kv.yaml`;
 the BRIAN-R125 sweep manifest is `configs/experiments/route_core_global_kv.yaml`.
 These cover the local-KV baseline, uncompressed and compressed Global KV, no-sink Global KV,
 default sink+window Global KV, a small cache-window sweep, per-block Global KV adapters,
-and per-head low-rank adapter deltas.
+shared per-head low-rank adapter deltas, and per-block plus per-head low-rank adapter deltas.
 
 Compare top-k weighted fusion against parallel passing:
 

@@ -96,9 +96,21 @@ def test_global_kv_ablation_report_passes_with_manifest_runs_and_long_context(tm
             global_code_dim=16,
             sink_slots=1,
             window_slots=3,
-            global_adapter_scope="per_block",
             global_head_delta_rank=2,
             validation_loss=9.94,
+            sink_mass=0.55,
+            window_mass=0.45,
+        ),
+        _write_run(
+            tmp_path,
+            "per_block_head_delta",
+            global_kv=True,
+            global_code_dim=16,
+            sink_slots=1,
+            window_slots=3,
+            global_adapter_scope="per_block",
+            global_head_delta_rank=2,
+            validation_loss=9.93,
             sink_mass=0.55,
             window_mass=0.45,
         ),
@@ -125,6 +137,7 @@ def test_global_kv_ablation_report_passes_with_manifest_runs_and_long_context(tm
     assert report["checks"]["window_slots_vary"] is True
     assert report["checks"]["per_block_adapter_candidate_present"] is True
     assert report["checks"]["head_delta_adapter_candidate_present"] is True
+    assert report["checks"]["per_block_head_delta_adapter_candidate_present"] is True
     assert report["comparisons"]["with_sink_vs_no_sink"]["status"] == "present"
     assert report["comparisons"]["uncompressed_vs_compressed"]["status"] == "present"
     assert report["comparisons"]["per_block_vs_compressed"]["status"] == "present"

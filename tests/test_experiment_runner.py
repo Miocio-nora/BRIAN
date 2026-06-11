@@ -52,12 +52,24 @@ def test_global_kv_experiment_manifest_resolves_repo_paths() -> None:
     assert plan.experiment_name == "tiny_global_kv"
     assert plan.entries[0].role == "baseline"
     assert plan.entries[0].train_config.name == "stage4_tiny_debug.yaml"
-    assert [entry.id for entry in plan.entries[1:]] == ["C0", "C1", "C2", "C3", "C4", "C5a", "C5b", "C6", "C7"]
+    assert [entry.id for entry in plan.entries[1:]] == [
+        "C0",
+        "C1",
+        "C2",
+        "C3",
+        "C4",
+        "C5a",
+        "C5b",
+        "C6",
+        "C7",
+        "C8",
+    ]
     assert plan.entries[2].train_config.name == "stage5_tiny_global_kv_uncompressed.yaml"
     assert plan.entries[3].train_config.name == "stage5_tiny_global_kv_compressed.yaml"
     assert plan.entries[5].train_config.name == "stage5_tiny_debug.yaml"
     assert plan.entries[8].train_config.name == "stage5_tiny_global_kv_per_block.yaml"
-    assert plan.entries[9].train_config.name == "stage5_tiny_global_kv_head_delta.yaml"
+    assert plan.entries[9].train_config.name == "stage5_tiny_global_kv_per_head_delta.yaml"
+    assert plan.entries[10].train_config.name == "stage5_tiny_global_kv_head_delta.yaml"
 
 
 def test_parallel_experiment_manifest_resolves_repo_paths() -> None:

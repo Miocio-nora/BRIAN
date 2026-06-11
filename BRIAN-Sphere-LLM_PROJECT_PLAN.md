@@ -1528,6 +1528,9 @@ C2: local + global compressed
 C3: global no sink
 C4: global with sink
 C5: window size sweep
+C6: per-block adapter
+C7: shared per-head low-rank delta
+C8: per-block + per-head low-rank delta
 ```
 
 Evaluation:

@@ -35,6 +35,10 @@ ablations:
     train_config: configs/train/ablation_c6_global_kv_per_block.yaml
     purpose: Test route-block-specific Global KV read/write adapters against the shared compressed adapter.
   - id: C7
-    name: global_kv_head_delta_adapter
+    name: global_kv_per_head_delta_adapter
+    train_config: configs/train/ablation_c7_global_kv_per_head_delta.yaml
+    purpose: Test shared Global KV adapters plus per-head low-rank deltas.
+  - id: C8
+    name: global_kv_per_block_head_delta_adapter
     train_config: configs/train/ablation_c7_global_kv_head_delta.yaml
     purpose: Test per-block adapters plus per-head low-rank Global KV deltas.

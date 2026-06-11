@@ -457,9 +457,19 @@ def _global_kv_requirements(plan: ExperimentPlan, entries: list[dict[str, Any]])
         ),
         _group_requirement(
             "C7",
-            "global KV per-block plus per-head low-rank delta",
+            "global KV per-head low-rank delta",
             entries,
             lambda entry: entry["id"] == "C7"
+            and entry["model"].get("global_kv") is True
+            and entry["model"].get("global_adapter_scope", "shared") == "shared"
+            and (_num(entry["model"].get("global_head_delta_rank")) or 0) > 0,
+            plan_aliases=["K7"],
+        ),
+        _group_requirement(
+            "C8",
+            "global KV per-block plus per-head low-rank delta",
+            entries,
+            lambda entry: entry["id"] == "C8"
             and entry["model"].get("global_kv") is True
             and entry["model"].get("global_adapter_scope") == "per_block"
             and (_num(entry["model"].get("global_head_delta_rank")) or 0) > 0,
