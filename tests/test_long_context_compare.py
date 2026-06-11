@@ -31,6 +31,18 @@ def _write_long_context_report(
                     "global_read_gate_mean": read_gate,
                     "global_cache_slots_mean": cache_slots,
                 },
+                "memory_budget": {
+                    "global_kv_enabled": attention_mass is not None,
+                    "estimated_local_raw_kv_context_bytes_fp16": 8192.0,
+                    "estimated_global_cache_capacity_bytes_fp16": 128.0 if attention_mass is not None else 0.0,
+                    "estimated_global_cache_mean_bytes_fp16": 64.0 if attention_mass is not None else 0.0,
+                    "estimated_global_cache_capacity_to_local_context_ratio": 128.0 / 8192.0
+                    if attention_mass is not None
+                    else 0.0,
+                    "estimated_global_cache_mean_to_local_context_ratio": 64.0 / 8192.0
+                    if attention_mass is not None
+                    else 0.0,
+                },
             }
         ),
         encoding="utf-8",
@@ -63,6 +75,9 @@ def test_long_context_compare_passes_active_global_kv_not_worse(tmp_path: Path) 
     assert row["checks"]["global_kv_active"] is True
     assert row["checks"]["quality_metrics_present"] is True
     assert row["checks"]["quality_not_worse"] is True
+    assert row["checks"]["memory_budget_present"] is True
+    assert row["checks"]["global_budget_below_local_context"] is True
+    assert row["memory_budget"]["candidate"]["estimated_global_cache_capacity_bytes_fp16"] == 128.0
     assert row["teacher_forced_token_accuracy_delta"] == pytest.approx(0.05)
 
 

@@ -69,6 +69,9 @@ def _compare_candidate(
     cache_slots = _num(global_kv.get("global_cache_slots_mean"))
     teacher_delta = _delta(candidate_teacher, baseline_teacher)
     exact_delta = _delta(candidate_exact, baseline_exact)
+    candidate_memory = candidate.get("memory_budget", {})
+    baseline_memory = baseline.get("memory_budget", {})
+    candidate_capacity_ratio = _num(candidate_memory.get("estimated_global_cache_capacity_to_local_context_ratio"))
     global_active = (
         attention_mass is not None
         and attention_mass >= min_global_attention_mass
@@ -79,10 +82,14 @@ def _compare_candidate(
     )
     quality_metrics_present = teacher_delta is not None and exact_delta is not None
     quality_not_worse = quality_metrics_present and teacher_delta >= -quality_tolerance and exact_delta >= -quality_tolerance
+    memory_budget_present = bool(candidate_memory.get("global_kv_enabled")) and candidate_capacity_ratio is not None
+    global_budget_below_local_context = memory_budget_present and candidate_capacity_ratio < 1.0
     checks = {
         "global_kv_active": global_active,
         "quality_metrics_present": quality_metrics_present,
         "quality_not_worse": quality_not_worse,
+        "memory_budget_present": memory_budget_present,
+        "global_budget_below_local_context": global_budget_below_local_context,
     }
     return {
         "candidate_report": str(candidate_report_path),
@@ -103,6 +110,10 @@ def _compare_candidate(
             "global_attention_mass": attention_mass,
             "global_read_gate_mean": read_gate,
             "global_cache_slots_mean": cache_slots,
+        },
+        "memory_budget": {
+            "baseline": _memory_summary(baseline_memory),
+            "candidate": _memory_summary(candidate_memory),
         },
         "checks": checks,
         "status": _status(checks),
@@ -138,6 +149,20 @@ def _num(value: Any) -> float | None:
     if isinstance(value, (int, float)):
         return float(value)
     return None
+
+
+def _memory_summary(memory_budget: Any) -> dict[str, Any]:
+    if not isinstance(memory_budget, dict):
+        return {}
+    keys = [
+        "global_kv_enabled",
+        "estimated_local_raw_kv_context_bytes_fp16",
+        "estimated_global_cache_capacity_bytes_fp16",
+        "estimated_global_cache_mean_bytes_fp16",
+        "estimated_global_cache_capacity_to_local_context_ratio",
+        "estimated_global_cache_mean_to_local_context_ratio",
+    ]
+    return {key: memory_budget.get(key) for key in keys}
 
 
 def _read_json(path: Path) -> dict[str, Any]:

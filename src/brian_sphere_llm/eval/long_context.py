@@ -94,6 +94,7 @@ def make_long_context_report(
         "by_difficulty": _group_summary(rows, "difficulty"),
         "routing": _routing_summary(rows),
         "global_kv": _global_kv_summary(rows),
+        "memory_budget": _memory_budget_summary(config, rows),
     }
     write_json(report, output_path)
     return output_path
@@ -280,6 +281,96 @@ def _global_kv_summary(rows: list[dict[str, Any]]) -> dict[str, float | None]:
         "global_read_gate_mean": _mean([row.get("routing_global_read_gate_mean") for row in rows]),
         "global_cache_slots_mean": _mean([row.get("routing_global_cache_slots_mean") for row in rows]),
     }
+
+
+def _memory_budget_summary(config: dict[str, Any], rows: list[dict[str, Any]]) -> dict[str, Any]:
+    model_config = config.get("model_config_resolved", {})
+    model_config = model_config if isinstance(model_config, dict) else {}
+    base_config = _base_model_config(model_config)
+    context_length = _context_length(config)
+    layer_count = _num(base_config.get("layers"))
+    if layer_count is None:
+        layer_count = _num(model_config.get("layers"))
+    if layer_count is None:
+        pre = _num(model_config.get("pre_blocks")) or 0.0
+        route = _num(model_config.get("route_pool_blocks")) or 0.0
+        post = _num(model_config.get("post_blocks")) or 0.0
+        layer_count = pre + route + post if pre + route + post > 0 else None
+    d_model = _num(base_config.get("d_model"))
+    if d_model is None:
+        d_model = _num(model_config.get("d_model"))
+    dtype_bytes = 2.0
+    local_bytes_per_token = layer_count * d_model * 2.0 * dtype_bytes if layer_count and d_model else None
+    local_context_bytes = local_bytes_per_token * context_length if local_bytes_per_token is not None else None
+    global_enabled = _as_bool(model_config.get("global_kv", False))
+    global_code_dim = _num(model_config.get("global_code_dim"))
+    global_sink_slots = _num(model_config.get("global_sink_slots")) or 0.0
+    global_window_slots = _num(model_config.get("global_window_slots")) or 0.0
+    global_capacity_slots = global_sink_slots + global_window_slots if global_enabled else 0.0
+    global_capacity_bytes = (
+        global_capacity_slots * global_code_dim * dtype_bytes if global_enabled and global_code_dim is not None else None
+    )
+    global_mean_slots = _global_kv_summary(rows).get("global_cache_slots_mean")
+    global_mean_bytes = (
+        global_mean_slots * global_code_dim * dtype_bytes
+        if global_enabled and global_mean_slots is not None and global_code_dim is not None
+        else None
+    )
+    return {
+        "estimation": "fp16_kv_and_global_code_bytes",
+        "context_length": context_length,
+        "base_layer_count": layer_count,
+        "base_d_model": d_model,
+        "estimated_local_raw_kv_bytes_per_token_fp16": local_bytes_per_token,
+        "estimated_local_raw_kv_context_bytes_fp16": local_context_bytes,
+        "global_kv_enabled": global_enabled,
+        "global_code_dim": global_code_dim,
+        "global_sink_slots": global_sink_slots,
+        "global_window_slots": global_window_slots,
+        "estimated_global_cache_capacity_slots": global_capacity_slots,
+        "estimated_global_cache_capacity_bytes_fp16": global_capacity_bytes,
+        "estimated_global_cache_mean_bytes_fp16": global_mean_bytes,
+        "estimated_global_cache_capacity_to_local_context_ratio": _ratio(global_capacity_bytes, local_context_bytes),
+        "estimated_global_cache_mean_to_local_context_ratio": _ratio(global_mean_bytes, local_context_bytes),
+    }
+
+
+def _base_model_config(model_config: dict[str, Any]) -> dict[str, Any]:
+    base = model_config.get("base")
+    if isinstance(base, dict):
+        return base
+    base_config = model_config.get("base_config")
+    if not base_config:
+        return {}
+    base_path = Path(str(base_config))
+    candidates = []
+    if base_path.is_absolute():
+        candidates.append(base_path)
+    candidates.append(Path(__file__).resolve().parents[3] / "configs" / "model" / base_path.name)
+    for candidate in candidates:
+        if candidate.is_file():
+            return load_config(candidate)
+    return {}
+
+
+def _ratio(numerator: float | None, denominator: float | None) -> float | None:
+    if numerator is None or denominator is None or denominator <= 0.0:
+        return None
+    return numerator / denominator
+
+
+def _as_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.lower() in {"1", "true", "yes", "on", "enabled"}
+    return bool(value)
+
+
+def _num(value: Any) -> float | None:
+    if isinstance(value, (int, float)):
+        return float(value)
+    return None
 
 
 def _write_jsonl(rows: list[dict[str, Any]], path: Path) -> None:

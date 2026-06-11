@@ -5,6 +5,7 @@ torch = pytest.importorskip("torch")
 from brian_sphere_llm.data.tokenize import SimpleByteTokenizer
 from brian_sphere_llm.eval.long_context import (
     LongContextSample,
+    _memory_budget_summary,
     evaluate_long_context_sample,
     generate_long_context_samples,
     summarize_long_context_rows,
@@ -60,6 +61,27 @@ def test_summarize_long_context_rows() -> None:
     assert summary["exact_match_accuracy"] == 0.5
     assert summary["teacher_forced_token_accuracy"] == 0.75
     assert summary["truncation_rate"] == 0.5
+
+
+def test_memory_budget_summary_estimates_global_cache_ratio() -> None:
+    summary = _memory_budget_summary(
+        {
+            "model_config_resolved": {
+                "base": {"layers": 4, "d_model": 64},
+                "global_kv": True,
+                "global_code_dim": 16,
+                "global_sink_slots": 1,
+                "global_window_slots": 3,
+            },
+            "data_config_resolved": {"sequence_length": 8},
+        },
+        [{"routing_global_cache_slots_mean": 2.0}],
+    )
+    assert summary["estimated_local_raw_kv_bytes_per_token_fp16"] == 1024.0
+    assert summary["estimated_local_raw_kv_context_bytes_fp16"] == 8192.0
+    assert summary["estimated_global_cache_capacity_bytes_fp16"] == 128.0
+    assert summary["estimated_global_cache_mean_bytes_fp16"] == 64.0
+    assert summary["estimated_global_cache_capacity_to_local_context_ratio"] == pytest.approx(128.0 / 8192.0)
 
 
 def test_evaluate_long_context_sample_exact_match_with_fake_model() -> None:

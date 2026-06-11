@@ -134,7 +134,7 @@ python scripts/eval.py \
   --sample-count 12
 ```
 
-This writes a needle-retrieval / two-hop tracing report with exact-match accuracy, teacher-forced target token accuracy, truncation rate, and Global KV routing diagnostics.
+This writes a needle-retrieval / two-hop tracing report with exact-match accuracy, teacher-forced target token accuracy, truncation rate, estimated fp16 KV/global-code memory budgets, and Global KV routing diagnostics.
 
 Compare a local-KV baseline against one or more Global KV candidates:
 
@@ -156,7 +156,7 @@ python scripts/eval.py \
   --output reports/long_context_compare.json
 ```
 
-The comparison report checks that Global KV is active and that exact-match / teacher-forced quality is not worse than the local-KV report beyond `quality_tolerance`. Pass it into the Stage 5 gate:
+The comparison report checks that Global KV is active, the estimated Global KV code budget is below the local raw-KV context budget, and exact-match / teacher-forced quality is not worse than the local-KV report beyond `quality_tolerance`. Pass it into the Stage 5 gate:
 
 ```bash
 python scripts/eval.py \
