@@ -3,7 +3,7 @@ from pathlib import Path
 
 import yaml
 
-from brian_sphere_llm.experiments.runner import build_experiment_plan, run_experiment
+from brian_sphere_llm.experiments.runner import build_experiment_plan, make_experiment_package_report, run_experiment
 from brian_sphere_llm.train.stage_runner import train_mode_for_stage
 from brian_sphere_llm.utils.config import load_config
 
@@ -136,3 +136,90 @@ def test_run_experiment_uses_injected_train_and_report_functions(tmp_path: Path)
     assert report["results"][0]["run_dir"].endswith("/run")
     assert report["results"][0]["generated_train_config"].endswith("A0_stub.yaml")
     assert Path(report["compute_report"]).exists()
+    assert Path(report["experiment_package_report"]).exists()
+
+
+def test_experiment_package_report_passes_complete_package(tmp_path: Path) -> None:
+    plan = build_experiment_plan("configs/experiments/tiny_position_ablations.yaml", include_baseline=True)
+    entries = plan.entries[:2]
+    baseline_run = tmp_path / "baseline_run"
+    candidate_run = tmp_path / "candidate_run"
+    baseline_run.mkdir()
+    candidate_run.mkdir()
+    baseline_routing = baseline_run / "routing_report.json"
+    candidate_routing = candidate_run / "routing_report.json"
+    baseline_routing.write_text("{}", encoding="utf-8")
+    candidate_routing.write_text("{}", encoding="utf-8")
+    compute_report = tmp_path / "compute_report.json"
+    compute_report.write_text(
+        json.dumps(
+            {
+                "baseline_run": str(baseline_run),
+                "runs": [
+                    {"run_dir": str(baseline_run), "validation_loss": 10.0},
+                    {
+                        "run_dir": str(candidate_run),
+                        "validation_loss": 9.9,
+                        "baseline_comparison": {"validation_loss_delta": -0.1},
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    results = [
+        {**entries[0].to_json(), "run_dir": str(baseline_run), "routing_report": str(baseline_routing)},
+        {**entries[1].to_json(), "run_dir": str(candidate_run), "routing_report": str(candidate_routing)},
+    ]
+
+    output = make_experiment_package_report(
+        plan,
+        results,
+        entries=entries,
+        baseline_run=baseline_run,
+        compute_report_path=compute_report,
+        output_path=tmp_path / "package_report.json",
+    )
+    report = json.loads(output.read_text(encoding="utf-8"))
+
+    assert report["overall_status"] == "pass"
+    assert report["checks"]["all_entries_have_results"] is True
+    assert report["checks"]["non_baseline_compute_comparisons_present"] is True
+    assert [entry["status"] for entry in report["entries"]] == ["pass", "pass"]
+
+
+def test_experiment_package_report_warns_missing_compute_row(tmp_path: Path) -> None:
+    plan = build_experiment_plan("configs/experiments/tiny_position_ablations.yaml", include_baseline=True)
+    entries = plan.entries[:2]
+    baseline_run = tmp_path / "baseline_run"
+    candidate_run = tmp_path / "candidate_run"
+    baseline_run.mkdir()
+    candidate_run.mkdir()
+    baseline_routing = baseline_run / "routing_report.json"
+    candidate_routing = candidate_run / "routing_report.json"
+    baseline_routing.write_text("{}", encoding="utf-8")
+    candidate_routing.write_text("{}", encoding="utf-8")
+    compute_report = tmp_path / "compute_report.json"
+    compute_report.write_text(
+        json.dumps({"baseline_run": str(baseline_run), "runs": [{"run_dir": str(baseline_run)}]}),
+        encoding="utf-8",
+    )
+    results = [
+        {**entries[0].to_json(), "run_dir": str(baseline_run), "routing_report": str(baseline_routing)},
+        {**entries[1].to_json(), "run_dir": str(candidate_run), "routing_report": str(candidate_routing)},
+    ]
+
+    output = make_experiment_package_report(
+        plan,
+        results,
+        entries=entries,
+        baseline_run=baseline_run,
+        compute_report_path=compute_report,
+        output_path=tmp_path / "package_report.json",
+    )
+    report = json.loads(output.read_text(encoding="utf-8"))
+
+    assert report["overall_status"] == "warn"
+    assert report["checks"]["all_results_have_compute_rows"] is False
+    assert report["entries"][1]["status"] == "warn"
+    assert report["entries"][1]["compute_row_present"] is False
