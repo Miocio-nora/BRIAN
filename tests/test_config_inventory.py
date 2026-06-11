@@ -141,6 +141,15 @@ def test_data_config_validation_rejects_invalid_numeric_and_mixture_values() -> 
     assert any("mixture weights must sum to 1.0" in error for error in errors)
 
 
+def test_train_config_validation_rejects_invalid_precision_value() -> None:
+    config = load_config(CONFIG_ROOT / "train" / "stage0_baseline.yaml")
+    errors: list[str] = []
+
+    _validate_train_config({**config, "precision": "float16"}, Path("bad_precision.yaml"), errors)
+
+    assert any("precision must be fp32 or bf16" in error for error in errors)
+
+
 def _yaml_files(root: Path) -> list[Path]:
     return sorted(root.rglob("*.yaml"))
 
@@ -287,6 +296,8 @@ def _validate_train_config(config: dict[str, Any], path: Path, errors: list[str]
             errors.append(f"{path}: min_learning_rate must be <= learning_rate")
     if "lr_schedule" in config and config.get("lr_schedule") not in {"constant", "linear_warmup_cosine_decay"}:
         errors.append(f"{path}: lr_schedule must be constant or linear_warmup_cosine_decay")
+    if "precision" in config and config.get("precision") not in {"fp32", "bf16"}:
+        errors.append(f"{path}: precision must be fp32 or bf16")
     for key in ["activation_checkpointing", "ddp_find_unused_parameters", "resume", "write_routing_report_on_checkpoint"]:
         if key in config and not isinstance(config.get(key), bool):
             errors.append(f"{path}: {key} must be a boolean")
