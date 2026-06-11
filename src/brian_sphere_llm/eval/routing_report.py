@@ -74,7 +74,11 @@ def make_routing_report(run_dir: str | Path) -> Path:
         eval_rows=eval_rows,
         summary=summary,
         latest_histogram=latest_histogram,
+        latest_exit_distribution=latest_exit_distribution,
+        latest_first_exit_histogram=latest_first_exit_histogram,
         latest_route_path_examples=latest_route_path_examples,
+        latest_position_norm_trajectory=latest_position_norm_trajectory,
+        latest_location_distance_trajectory=latest_location_distance_trajectory,
         cost_quality_curve=cost_quality_curve,
     )
     report = {
@@ -102,11 +106,17 @@ def _report_checks(
     eval_rows: list[dict[str, Any]],
     summary: dict[str, float],
     latest_histogram: dict[str, Any] | None,
+    latest_exit_distribution: list[int] | None,
+    latest_first_exit_histogram: dict[str, Any] | None,
     latest_route_path_examples: list[Any] | None,
+    latest_position_norm_trajectory: list[Any] | None,
+    latest_location_distance_trajectory: list[Any] | None,
     cost_quality_curve: dict[str, Any],
 ) -> dict[str, bool]:
     curve_summary = cost_quality_curve.get("summary", {})
     latest_eval = eval_rows[-1] if eval_rows else {}
+    train_points = cost_quality_curve.get("train_points", [])
+    eval_points = cost_quality_curve.get("eval_points", [])
     return {
         "train_log_present": bool(rows),
         "eval_log_present": bool(eval_rows),
@@ -121,10 +131,28 @@ def _report_checks(
                 "average_route_steps",
             ]
         ),
+        "route_transition_ratios_present": all(
+            _finite(summary.get(key)) for key in ["advance_ratio", "skip_ratio", "recur_ratio"]
+        ),
+        "position_location_metrics_present": all(
+            _finite(summary.get(key)) for key in ["position_norm_mean", "location_distance_mean"]
+        ),
         "block_histogram_present": bool(latest_histogram),
+        "exit_distribution_present": _numeric_sequence_present(latest_exit_distribution)
+        or bool(latest_first_exit_histogram),
         "route_path_examples_present": bool(latest_route_path_examples),
+        "position_trajectory_present": _numeric_sequence_present(latest_position_norm_trajectory),
+        "location_trajectory_present": _numeric_sequence_present(latest_location_distance_trajectory),
         "cost_quality_train_points_present": int(curve_summary.get("train_point_count") or 0) >= 1,
         "cost_quality_eval_points_present": int(curve_summary.get("eval_point_count") or 0) >= 1,
+        "training_timing_metrics_present": _points_have_metrics(
+            train_points,
+            ["tokens_per_second", "train_step_time_seconds", "train_latency_ms_per_token"],
+        ),
+        "inference_timing_metrics_present": _points_have_metrics(
+            eval_points,
+            ["inference_time_seconds", "inference_tokens_per_second", "inference_latency_ms_per_token"],
+        ),
     }
 
 
@@ -275,6 +303,16 @@ def _range(values: list[float | None]) -> float | None:
 def _finite(value: Any) -> bool:
     numeric = _num(value)
     return numeric is not None and math.isfinite(numeric)
+
+
+def _numeric_sequence_present(values: list[Any] | None) -> bool:
+    return bool(values) and all(_finite(value) for value in values)
+
+
+def _points_have_metrics(points: Any, keys: list[str]) -> bool:
+    if not isinstance(points, list):
+        return False
+    return any(all(_finite(point.get(key)) for key in keys) for point in points if isinstance(point, dict))
 
 
 def _num(value: Any) -> float | None:

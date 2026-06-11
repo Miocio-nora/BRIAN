@@ -86,7 +86,7 @@ Generate a routing report:
 python scripts/eval.py --config configs/eval/routing_eval.yaml --run <run_dir>
 ```
 
-Training writes `routing_report.json` at checkpoint saves by default (`write_routing_report_on_checkpoint: true`). Routing reports include `route_entropy`, `block_load_entropy`, `route_path_diversity`, path examples, block histograms, exit distributions, active block evals, cost-quality curve points, and position/global/parallel diagnostics when available. The report includes `checks` and `overall_status`; Stage 1-6 gates require a passing routed report.
+Training writes `routing_report.json` at checkpoint saves by default (`write_routing_report_on_checkpoint: true`). Routing reports include `route_entropy`, `block_load_entropy`, `route_path_diversity`, path examples, block histograms, exit distributions, active block evals, skip/recur/advance ratios, position/location trajectories, train and inference timing, cost-quality curve points, and position/global/parallel diagnostics when available. The report includes `checks` and `overall_status`; Stage 1-6 gates require a passing routed report.
 
 Generate a standard LM metrics report:
 

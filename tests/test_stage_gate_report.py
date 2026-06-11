@@ -42,11 +42,22 @@ def _write_run(
     if write_data_manifest_ref:
         manifest_ref = _data_manifest_ref() if data_manifest_ref is None else data_manifest_ref
         (run_dir / "data_manifest_ref.json").write_text(json.dumps(manifest_ref), encoding="utf-8")
-    train_row = {"tokens_per_second": 128.0} | train_row
+    train_row = {
+        "tokens_per_second": 128.0,
+        "train_step_time_seconds": 0.1,
+        "train_latency_ms_per_token": 0.8,
+    } | train_row
     if default_routing_metrics and stage != "stage0_baseline":
         train_row = _routed_train_row() | train_row
     (run_dir / "config_resolved.yaml").write_text(yaml.safe_dump({"stage": stage}), encoding="utf-8")
-    (run_dir / "eval_log.jsonl").write_text(json.dumps({"validation_loss": val_loss, "perplexity": 1.0}) + "\n", encoding="utf-8")
+    eval_row = {
+        "validation_loss": val_loss,
+        "perplexity": 1.0,
+        "inference_time_seconds": 0.2,
+        "inference_tokens_per_second": 64.0,
+        "inference_latency_ms_per_token": 1.0,
+    }
+    (run_dir / "eval_log.jsonl").write_text(json.dumps(eval_row) + "\n", encoding="utf-8")
     (run_dir / "train_log.jsonl").write_text(json.dumps(train_row | {"loss": val_loss}) + "\n", encoding="utf-8")
     if determinism_status is not None:
         (run_dir / "eval_determinism_report.json").write_text(
@@ -146,9 +157,18 @@ def _routed_train_row() -> dict:
         "route_path_diversity": 0.5,
         "active_block_evals_per_token": 0.5,
         "average_route_steps": 2.0,
+        "advance_ratio": 0.4,
+        "skip_ratio": 0.3,
+        "recur_ratio": 0.3,
+        "position_norm_mean": 1.0,
+        "location_distance_mean": 0.25,
         "p_output_mean": 0.5,
         "top1_block_histogram": {"0": 1, "1": 1, "2": 1},
+        "exit_step_distribution": [1, 1],
+        "first_exit_step_histogram": {"2": 1},
         "route_path_examples": [{"sample_index": 0, "actions": [0, 1, 2]}],
+        "position_norm_trajectory": [1.0, 0.75],
+        "location_distance_trajectory": [0.25, 0.5],
     }
 
 
