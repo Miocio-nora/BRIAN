@@ -74,6 +74,23 @@ def test_position_ablation_coverage_passes_geometry_requirements(tmp_path: Path)
     assert _requirement(report, "P9")["checks"]["model_flags_match"] is True
 
 
+def test_cost_control_coverage_passes_loss_weight_sweep(tmp_path: Path) -> None:
+    output = make_experiment_coverage_report(
+        "configs/experiments/route_core_cost_control.yaml",
+        output_path=tmp_path / "coverage.json",
+    )
+    report = json.loads(output.read_text(encoding="utf-8"))
+
+    assert report["overall_status"] == "pass"
+    assert report["profile"] == "cost_control_sweep"
+    assert [row["id"] for row in report["requirements"]] == ["C0", "C1", "C2", "C3"]
+    for requirement_id in ["C0", "C1", "C2", "C3"]:
+        requirement = _requirement(report, requirement_id)
+        assert requirement["checks"]["stage_matches"] is True
+        assert requirement["checks"]["mode_matches"] is True
+        assert requirement["checks"]["loss_weights_match"] is True
+
+
 def test_global_kv_package_coverage_passes_window_and_sink_requirements(tmp_path: Path) -> None:
     output = make_experiment_coverage_report(
         "configs/experiments/route_core_global_kv.yaml",

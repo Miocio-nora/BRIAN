@@ -21,6 +21,9 @@ PROFILE_ALIASES = {
     "route_core_position_ablations": "block_position_ablation",
     "tiny_position_ablations": "block_position_ablation",
     "block_position_ablation": "block_position_ablation",
+    "route_core_cost_control": "cost_control_sweep",
+    "tiny_cost_control": "cost_control_sweep",
+    "cost_control_sweep": "cost_control_sweep",
     "route_core_global_kv": "global_kv_ablation",
     "tiny_global_kv": "global_kv_ablation",
     "package_c": "global_kv_ablation",
@@ -123,6 +126,8 @@ def _requirements(profile: str, plan: ExperimentPlan, entries: list[dict[str, An
         )
     if profile == "block_position_ablation":
         return _position_requirements(entries)
+    if profile == "cost_control_sweep":
+        return _cost_control_requirements(entries)
     if profile == "global_kv_ablation":
         return _global_kv_requirements(plan, entries)
     if profile == "parallel_passing_beta":
@@ -313,6 +318,42 @@ def _position_requirements(entries: list[dict[str, Any]]) -> list[dict[str, Any]
                     "position_to_router": True,
                     "position_to_blocks": True,
                 },
+            ),
+        ],
+    )
+
+
+def _cost_control_requirements(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return _exact_id_requirements(
+        entries,
+        [
+            _req(
+                "C0",
+                "no route cost pressure",
+                stage="stage4_output_action",
+                mode="scheduled",
+                loss_weights={"cost": 0.0},
+            ),
+            _req(
+                "C1",
+                "light route cost pressure",
+                stage="stage4_output_action",
+                mode="scheduled",
+                loss_weights={"cost": 0.001},
+            ),
+            _req(
+                "C2",
+                "default route cost pressure",
+                stage="stage4_output_action",
+                mode="scheduled",
+                loss_weights={"cost": 0.01},
+            ),
+            _req(
+                "C3",
+                "strong route cost pressure",
+                stage="stage4_output_action",
+                mode="scheduled",
+                loss_weights={"cost": 0.05},
             ),
         ],
     )
