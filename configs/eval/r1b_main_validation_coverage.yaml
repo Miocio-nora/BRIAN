@@ -1,0 +1,5 @@
+eval_name: experiment_coverage_report
+output_path: reports/route_core_r1b_main_validation_coverage.json
+experiment_manifest: configs/experiments/route_core_r1b_main_validation.yaml
+profile: route_core_r1b_main_validation
+include_baseline: false

@@ -1,0 +1,9 @@
+extends: stage0_baseline.yaml
+stage: stage0_baseline
+model_config: ../model/baseline_125m.yaml
+data_config: ../data/r125_main_5b.yaml
+batch_size: 4
+max_steps: 25000
+eval_interval: 1000
+save_interval: 2500
+learning_rate: 0.0003

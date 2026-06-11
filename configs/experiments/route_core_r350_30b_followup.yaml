@@ -1,0 +1,12 @@
+experiment_name: route_core_r350_30b_followup
+description: Gated BRIAN-R350 follow-up package on the stronger 30B-token data recipe.
+baseline_train_config: configs/train/stage0_r350_main30b_baseline.yaml
+ablations:
+  - id: B5
+    name: r350_30b_fixed_baseline
+    train_config: configs/train/stage0_r350_main30b_baseline.yaml
+    purpose: 350M fixed decoder-only baseline on the 30B-token main recipe.
+  - id: B6
+    name: r350_30b_output_action
+    train_config: configs/train/stage4_r350_main30b_output_action.yaml
+    purpose: 350M routed top-2 output-action follow-up on the 30B-token main recipe.

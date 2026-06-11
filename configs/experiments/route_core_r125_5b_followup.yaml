@@ -1,0 +1,12 @@
+experiment_name: route_core_r125_5b_followup
+description: Gated BRIAN-R125 follow-up package on the stronger 5B-token data recipe.
+baseline_train_config: configs/train/stage0_r125_main5b_baseline.yaml
+ablations:
+  - id: A10
+    name: r125_5b_fixed_baseline
+    train_config: configs/train/stage0_r125_main5b_baseline.yaml
+    purpose: 125M fixed decoder-only baseline on the 5B-token main recipe.
+  - id: A11
+    name: r125_5b_output_action
+    train_config: configs/train/stage4_r125_main5b_output_action.yaml
+    purpose: 125M routed top-2 output-action follow-up on the 5B-token main recipe.

@@ -93,6 +93,41 @@ def test_r350_scaling_experiment_manifest_resolves_repo_paths() -> None:
     ]
 
 
+def test_scale_followup_experiment_manifests_resolve_repo_paths() -> None:
+    r125 = build_experiment_plan("configs/experiments/route_core_r125_5b_followup.yaml", include_baseline=True)
+    r350 = build_experiment_plan("configs/experiments/route_core_r350_30b_followup.yaml", include_baseline=True)
+    r1b = build_experiment_plan("configs/experiments/route_core_r1b_main_validation.yaml", include_baseline=True)
+
+    assert r125.experiment_name == "route_core_r125_5b_followup"
+    assert [entry.id for entry in r125.entries[1:]] == ["A10", "A11"]
+    assert r125.entries[1].train_config.name == "stage0_r125_main5b_baseline.yaml"
+    assert r125.entries[2].train_config.name == "stage4_r125_main5b_output_action.yaml"
+    assert [train_mode_for_stage(load_config(entry.train_config)["stage"]) for entry in r125.entries[1:]] == [
+        "baseline",
+        "scheduled",
+    ]
+
+    assert r350.experiment_name == "route_core_r350_30b_followup"
+    assert [entry.id for entry in r350.entries[1:]] == ["B5", "B6"]
+    assert r350.entries[1].train_config.name == "stage0_r350_main30b_baseline.yaml"
+    assert r350.entries[2].train_config.name == "stage4_r350_main30b_output_action.yaml"
+    assert [train_mode_for_stage(load_config(entry.train_config)["stage"]) for entry in r350.entries[1:]] == [
+        "baseline",
+        "scheduled",
+    ]
+
+    assert r1b.experiment_name == "route_core_r1b_main_validation"
+    assert [entry.id for entry in r1b.entries[1:]] == ["D2", "D3"]
+    assert r1b.entries[1].train_config.name == "stage0_r1b_main50b_baseline.yaml"
+    assert r1b.entries[2].train_config.name == "stage5_r1b_main50b_global_kv.yaml"
+    assert [train_mode_for_stage(load_config(entry.train_config)["stage"]) for entry in r1b.entries[1:]] == [
+        "baseline",
+        "scheduled",
+    ]
+    assert load_config(r1b.entries[1].train_config)["activation_checkpointing"] is True
+    assert load_config(r1b.entries[2].train_config)["activation_checkpointing"] is True
+
+
 def test_run_experiment_dry_run_writes_resolved_plan(tmp_path: Path) -> None:
     output = run_experiment(
         "configs/experiments/tiny_position_ablations.yaml",

@@ -72,6 +72,56 @@ def test_r1b_pilot_package_coverage_passes(tmp_path: Path) -> None:
     assert report["checks"]["baseline_data_config_consistent"] is True
 
 
+def test_r125_5b_followup_coverage_passes(tmp_path: Path) -> None:
+    output = make_experiment_coverage_report(
+        "configs/experiments/route_core_r125_5b_followup.yaml",
+        output_path=tmp_path / "coverage.json",
+    )
+    report = json.loads(output.read_text(encoding="utf-8"))
+
+    assert report["overall_status"] == "pass"
+    assert report["profile"] == "scale_r125_5b_followup"
+    assert [row["id"] for row in report["requirements"]] == ["A10", "A11"]
+    assert _requirement(report, "A10")["checks"]["data_flags_match"] is True
+    assert _requirement(report, "A11")["checks"]["model_flags_match"] is True
+    assert _requirement(report, "A11")["checks"]["data_flags_match"] is True
+    assert report["checks"]["baseline_data_config_consistent"] is True
+
+
+def test_r350_30b_followup_coverage_passes(tmp_path: Path) -> None:
+    output = make_experiment_coverage_report(
+        "configs/experiments/route_core_r350_30b_followup.yaml",
+        output_path=tmp_path / "coverage.json",
+    )
+    report = json.loads(output.read_text(encoding="utf-8"))
+
+    assert report["overall_status"] == "pass"
+    assert report["profile"] == "scale_r350_30b_followup"
+    assert [row["id"] for row in report["requirements"]] == ["B5", "B6"]
+    assert _requirement(report, "B5")["checks"]["data_flags_match"] is True
+    assert _requirement(report, "B6")["checks"]["model_flags_match"] is True
+    assert _requirement(report, "B6")["checks"]["data_flags_match"] is True
+    assert report["checks"]["baseline_data_config_consistent"] is True
+
+
+def test_r1b_main_validation_coverage_passes_with_checkpointing(tmp_path: Path) -> None:
+    output = make_experiment_coverage_report(
+        "configs/experiments/route_core_r1b_main_validation.yaml",
+        output_path=tmp_path / "coverage.json",
+    )
+    report = json.loads(output.read_text(encoding="utf-8"))
+
+    assert report["overall_status"] == "pass"
+    assert report["profile"] == "package_d_r1b_main_validation"
+    assert [row["id"] for row in report["requirements"]] == ["D2", "D3"]
+    assert _requirement(report, "D2")["checks"]["data_flags_match"] is True
+    assert _requirement(report, "D2")["checks"]["train_flags_match"] is True
+    assert _requirement(report, "D3")["checks"]["model_flags_match"] is True
+    assert _requirement(report, "D3")["checks"]["data_flags_match"] is True
+    assert _requirement(report, "D3")["checks"]["train_flags_match"] is True
+    assert report["checks"]["baseline_data_config_consistent"] is True
+
+
 def test_position_ablation_coverage_passes_geometry_requirements(tmp_path: Path) -> None:
     output = make_experiment_coverage_report(
         "configs/experiments/route_core_position_ablations.yaml",
@@ -448,6 +498,9 @@ def test_experiment_coverage_eval_config_resolves() -> None:
     config = load_config("configs/eval/experiment_coverage.yaml")
     assert config["eval_name"] == "experiment_coverage_report"
     assert config["profile"] == "auto"
+    assert load_config("configs/eval/r125_5b_followup_coverage.yaml")["profile"] == "route_core_r125_5b_followup"
+    assert load_config("configs/eval/r350_30b_followup_coverage.yaml")["profile"] == "route_core_r350_30b_followup"
+    assert load_config("configs/eval/r1b_main_validation_coverage.yaml")["profile"] == "route_core_r1b_main_validation"
 
 
 def _requirement(report: dict, requirement_id: str) -> dict:

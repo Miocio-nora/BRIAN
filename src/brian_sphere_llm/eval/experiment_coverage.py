@@ -34,6 +34,12 @@ PROFILE_ALIASES = {
     "route_core_r1b_pilot": "package_d_r1b_pilot",
     "package_d": "package_d_r1b_pilot",
     "package_d_r1b_pilot": "package_d_r1b_pilot",
+    "route_core_r125_5b_followup": "scale_r125_5b_followup",
+    "scale_r125_5b_followup": "scale_r125_5b_followup",
+    "route_core_r350_30b_followup": "scale_r350_30b_followup",
+    "scale_r350_30b_followup": "scale_r350_30b_followup",
+    "route_core_r1b_main_validation": "package_d_r1b_main_validation",
+    "package_d_r1b_main_validation": "package_d_r1b_main_validation",
 }
 
 
@@ -183,6 +189,113 @@ def _requirements(profile: str, plan: ExperimentPlan, entries: list[dict[str, An
                 ),
             ],
         )
+    if profile == "scale_r125_5b_followup":
+        return _exact_id_requirements(
+            entries,
+            [
+                _req(
+                    "A10",
+                    "125M fixed decoder-only baseline on 5B data",
+                    stage="stage0_baseline",
+                    mode="baseline",
+                    model_flags={"model_name": "baseline_125m"},
+                    data_flags={
+                        "recipe_name": "r125_main_5b",
+                        "target_tokens": 5_000_000_000,
+                        "sequence_length": 2048,
+                    },
+                ),
+                _req(
+                    "A11",
+                    "125M routed output-action follow-up on 5B data",
+                    stage="stage4_output_action",
+                    mode="scheduled",
+                    model_flags={
+                        "model_name": "brian_r125_top2",
+                        "top_k": 2,
+                        "global_kv": False,
+                        "parallel_passing": False,
+                    },
+                    data_flags={
+                        "recipe_name": "r125_main_5b",
+                        "target_tokens": 5_000_000_000,
+                        "sequence_length": 2048,
+                    },
+                ),
+            ],
+        )
+    if profile == "scale_r350_30b_followup":
+        return _exact_id_requirements(
+            entries,
+            [
+                _req(
+                    "B5",
+                    "350M fixed decoder-only baseline on 30B data",
+                    stage="stage0_baseline",
+                    mode="baseline",
+                    model_flags={"model_name": "baseline_350m"},
+                    data_flags={
+                        "recipe_name": "r350_main_30b",
+                        "target_tokens": 30_000_000_000,
+                        "sequence_length": 4096,
+                    },
+                ),
+                _req(
+                    "B6",
+                    "350M routed output-action follow-up on 30B data",
+                    stage="stage4_output_action",
+                    mode="scheduled",
+                    model_flags={
+                        "model_name": "brian_r350_top2",
+                        "top_k": 2,
+                        "global_kv": False,
+                        "parallel_passing": False,
+                    },
+                    data_flags={
+                        "recipe_name": "r350_main_30b",
+                        "target_tokens": 30_000_000_000,
+                        "sequence_length": 4096,
+                    },
+                ),
+            ],
+        )
+    if profile == "package_d_r1b_main_validation":
+        return _exact_id_requirements(
+            entries,
+            [
+                _req(
+                    "D2",
+                    "1B fixed decoder-only baseline on 50B data",
+                    stage="stage0_baseline",
+                    mode="baseline",
+                    model_flags={"model_name": "baseline_1b"},
+                    data_flags={
+                        "recipe_name": "r1b_main_50b",
+                        "target_tokens": 50_000_000_000,
+                        "sequence_length": 4096,
+                    },
+                    train_flags={"activation_checkpointing": True},
+                ),
+                _req(
+                    "D3",
+                    "1B Global KV main validation on 50B data",
+                    stage="stage5_global_kv",
+                    mode="scheduled",
+                    model_flags={
+                        "model_name": "brian_r1b",
+                        "global_kv": True,
+                        "parallel_passing": False,
+                        "top_k": 2,
+                    },
+                    data_flags={
+                        "recipe_name": "r1b_main_50b",
+                        "target_tokens": 50_000_000_000,
+                        "sequence_length": 4096,
+                    },
+                    train_flags={"activation_checkpointing": True},
+                ),
+            ],
+        )
     return []
 
 
@@ -193,6 +306,7 @@ def _req(
     stage: str | None = None,
     mode: str | None = None,
     model_flags: dict[str, Any] | None = None,
+    data_flags: dict[str, Any] | None = None,
     loss_weights: dict[str, float] | None = None,
     train_flags: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
@@ -202,6 +316,7 @@ def _req(
         "stage": stage,
         "mode": mode,
         "model_flags": model_flags or {},
+        "data_flags": data_flags or {},
         "loss_weights": loss_weights or {},
         "train_flags": train_flags or {},
     }
@@ -511,6 +626,7 @@ def _requirement_row(spec: dict[str, Any], matches: list[dict[str, Any]]) -> dic
         "stage_matches": _check_stage(entry, spec.get("stage")),
         "mode_matches": _check_mode(entry, spec.get("mode")),
         "model_flags_match": _check_mapping(entry, "model", spec["model_flags"]),
+        "data_flags_match": _check_mapping(entry, "data", spec["data_flags"]),
         "loss_weights_match": _check_mapping(entry, "loss_weights", spec["loss_weights"]),
         "train_flags_match": _check_mapping(entry, "train", spec["train_flags"]),
     }

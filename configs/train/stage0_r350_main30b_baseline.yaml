@@ -1,0 +1,9 @@
+extends: stage0_r350_baseline.yaml
+stage: stage0_baseline
+model_config: ../model/baseline_350m.yaml
+data_config: ../data/r350_main_30b.yaml
+batch_size: 1
+max_steps: 30000
+eval_interval: 1000
+save_interval: 3000
+learning_rate: 0.0002

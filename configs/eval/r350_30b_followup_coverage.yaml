@@ -1,0 +1,5 @@
+eval_name: experiment_coverage_report
+output_path: reports/route_core_r350_30b_followup_coverage.json
+experiment_manifest: configs/experiments/route_core_r350_30b_followup.yaml
+profile: route_core_r350_30b_followup
+include_baseline: false

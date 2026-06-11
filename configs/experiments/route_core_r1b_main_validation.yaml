@@ -1,0 +1,12 @@
+experiment_name: route_core_r1b_main_validation
+description: Gated BRIAN-R1B main validation package on the 50B-token data recipe after R350 go criteria pass.
+baseline_train_config: configs/train/stage0_r1b_main50b_baseline.yaml
+ablations:
+  - id: D2
+    name: r1b_50b_fixed_baseline
+    train_config: configs/train/stage0_r1b_main50b_baseline.yaml
+    purpose: 1B fixed decoder-only baseline on the 50B-token main validation recipe.
+  - id: D3
+    name: r1b_50b_global_kv
+    train_config: configs/train/stage5_r1b_main50b_global_kv.yaml
+    purpose: 1B routed Global KV main validation with parallel passing disabled and activation checkpointing enabled.

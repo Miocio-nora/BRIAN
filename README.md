@@ -528,6 +528,24 @@ python scripts/eval.py \
 
 This manifest defines D0 fixed 1B baseline and D1 routed 1B Global KV pilot on `configs/data/r1b_pilot.yaml`. It uses BF16 with `activation_checkpointing: true` for B200/H100 memory control and keeps `parallel_passing: false`; parallel remains an experimental follow-up rather than part of the R1B pilot default.
 
+Resolve the gated scale follow-up packages after the relevant go/no-go evidence passes:
+
+```bash
+python scripts/eval.py --config configs/eval/r125_5b_followup_coverage.yaml
+python scripts/eval.py --config configs/eval/r350_30b_followup_coverage.yaml
+python scripts/eval.py --config configs/eval/r1b_main_validation_coverage.yaml
+```
+
+Dry-run their train manifests before submitting expensive jobs:
+
+```bash
+python scripts/run_experiment.py --config configs/experiments/route_core_r125_5b_followup.yaml --dry-run
+python scripts/run_experiment.py --config configs/experiments/route_core_r350_30b_followup.yaml --dry-run
+python scripts/run_experiment.py --config configs/experiments/route_core_r1b_main_validation.yaml --dry-run
+```
+
+These packages bind the planned `r125_main_5b`, `r350_main_30b`, and `r1b_main_50b` recipes to explicit baseline/routed configs. The 1B main-validation configs keep BF16 plus `activation_checkpointing: true` for B200 memory control and leave `parallel_passing: false`.
+
 Run tests:
 
 ```bash

@@ -1,0 +1,10 @@
+extends: stage0_r1b_baseline.yaml
+stage: stage0_baseline
+model_config: ../model/baseline_1b.yaml
+data_config: ../data/r1b_main_50b.yaml
+batch_size: 1
+max_steps: 50000
+eval_interval: 2000
+save_interval: 5000
+learning_rate: 0.00015
+activation_checkpointing: true
