@@ -106,6 +106,126 @@ def test_planned_model_architecture_ladder_is_declared() -> None:
             assert config[key] == value
 
 
+def test_parallel_passing_ablation_configs_keep_planned_branch_controls() -> None:
+    expected = {
+        "stage6_parallel_passing.yaml": {
+            "model_name": "brian_r125_parallel",
+            "beam_size": 2,
+            "branch_cost": 0.01,
+            "parallel_exit_policy": "branch",
+            "loss_cost": 0.01,
+        },
+        "ablation_pp2_parallel_beam4.yaml": {
+            "model_name": "brian_r125_parallel_beam4",
+            "beam_size": 4,
+            "branch_cost": 0.01,
+            "parallel_exit_policy": "branch",
+            "loss_cost": 0.01,
+        },
+        "ablation_pp3_parallel_cost_off.yaml": {
+            "model_name": "brian_r125_parallel_no_branch_cost",
+            "beam_size": 2,
+            "branch_cost": 0.0,
+            "parallel_exit_policy": "branch",
+            "loss_cost": 0.0,
+        },
+        "ablation_pp4_parallel_cost_on.yaml": {
+            "model_name": "brian_r125_parallel",
+            "beam_size": 2,
+            "branch_cost": 0.01,
+            "parallel_exit_policy": "branch",
+            "loss_cost": 0.01,
+        },
+        "ablation_pp5_parallel_top1_exit.yaml": {
+            "model_name": "brian_r125_parallel_top1_exit",
+            "beam_size": 2,
+            "branch_cost": 0.01,
+            "parallel_exit_policy": "top1",
+            "loss_cost": 0.01,
+        },
+        "ablation_pp6_parallel_any_topk_exit.yaml": {
+            "model_name": "brian_r125_parallel_any_topk_exit",
+            "beam_size": 2,
+            "branch_cost": 0.01,
+            "parallel_exit_policy": "any_topk",
+            "loss_cost": 0.01,
+        },
+        "ablation_pp7_parallel_global_kv_delta.yaml": {
+            "model_name": "brian_r125_parallel",
+            "beam_size": 2,
+            "branch_cost": 0.01,
+            "parallel_exit_policy": "branch",
+            "loss_cost": 0.01,
+        },
+        "stage6_tiny_debug.yaml": {
+            "model_name": "brian_tiny_parallel",
+            "beam_size": 2,
+            "branch_cost": 0.01,
+            "parallel_exit_policy": "branch",
+            "loss_cost": 0.01,
+        },
+        "stage6_tiny_parallel_beam4.yaml": {
+            "model_name": "brian_tiny_parallel_beam4",
+            "beam_size": 4,
+            "branch_cost": 0.01,
+            "parallel_exit_policy": "branch",
+            "loss_cost": 0.01,
+        },
+        "stage6_tiny_parallel_cost_off.yaml": {
+            "model_name": "brian_tiny_parallel_no_branch_cost",
+            "beam_size": 2,
+            "branch_cost": 0.0,
+            "parallel_exit_policy": "branch",
+            "loss_cost": 0.0,
+        },
+        "stage6_tiny_parallel_cost_on.yaml": {
+            "model_name": "brian_tiny_parallel",
+            "beam_size": 2,
+            "branch_cost": 0.01,
+            "parallel_exit_policy": "branch",
+            "loss_cost": 0.01,
+        },
+        "stage6_tiny_parallel_top1_exit.yaml": {
+            "model_name": "brian_tiny_parallel_top1_exit",
+            "beam_size": 2,
+            "branch_cost": 0.01,
+            "parallel_exit_policy": "top1",
+            "loss_cost": 0.01,
+        },
+        "stage6_tiny_parallel_any_topk_exit.yaml": {
+            "model_name": "brian_tiny_parallel_any_topk_exit",
+            "beam_size": 2,
+            "branch_cost": 0.01,
+            "parallel_exit_policy": "any_topk",
+            "loss_cost": 0.01,
+        },
+        "stage6_tiny_parallel_global_kv_delta.yaml": {
+            "model_name": "brian_tiny_parallel",
+            "beam_size": 2,
+            "branch_cost": 0.01,
+            "parallel_exit_policy": "branch",
+            "loss_cost": 0.01,
+        },
+    }
+
+    for filename, expected_values in expected.items():
+        train_path = CONFIG_ROOT / "train" / filename
+        train_config = load_config(train_path)
+        model_config = load_config(train_path.parent / train_config["model_config"])
+        assert train_config["stage"] == "stage6_parallel_passing"
+        assert train_config["routing"]["mode"] == "parallel"
+        assert train_config["routing"]["hard_exit"] is True
+        assert train_config["loss_weights"]["route"] == 0.0
+        assert train_config["loss_weights"]["cost"] == expected_values["loss_cost"]
+        assert model_config["parallel_passing"] is True
+        assert model_config["global_kv"] is True
+        assert model_config["global_window_slots"] > 0
+        assert model_config["model_name"] == expected_values["model_name"]
+        assert model_config["beam_size"] == expected_values["beam_size"]
+        assert model_config["branch_cost"] == expected_values["branch_cost"]
+        assert model_config.get("parallel_exit_policy", "branch") == expected_values["parallel_exit_policy"]
+
+
 def test_train_configs_resolve_stage_model_and_data_refs() -> None:
     errors: list[str] = []
     for path in _yaml_files(CONFIG_ROOT / "train"):
@@ -497,8 +617,24 @@ def _validate_model_config(config: dict[str, Any], path: Path, errors: list[str]
             BrianRouteConfig.from_dict(config, config_dir=path.parent)
         except Exception as exc:
             errors.append(f"{path}: BrianRouteConfig parse failed: {type(exc).__name__}: {exc}")
+        _validate_parallel_model_config(config, path, errors)
         return
     errors.append(f"{path}: unknown model architecture {architecture!r}")
+
+
+def _validate_parallel_model_config(config: dict[str, Any], path: Path, errors: list[str]) -> None:
+    if config.get("parallel_passing") is not True:
+        return
+    if config.get("global_kv") is not True:
+        errors.append(f"{path}: parallel_passing configs must enable global_kv for shared base memory")
+    if _int_config_value(config.get("beam_size", 2), "beam_size", path, errors, minimum=1) is not None:
+        beam_size = int(config.get("beam_size", 2))
+        if beam_size > 4:
+            errors.append(f"{path}: beam_size must be <= 4 for planned parallel-passing configs")
+    if _int_config_value(config.get("global_window_slots", 0), "global_window_slots", path, errors, minimum=1) is None:
+        errors.append(f"{path}: parallel_passing configs must keep a positive global_window_slots delta window")
+    if config.get("parallel_exit_policy", "branch") not in {"branch", "top1", "any_topk"}:
+        errors.append(f"{path}: parallel_exit_policy must be branch, top1, or any_topk")
 
 
 def _validate_data_config(config: dict[str, Any], path: Path, errors: list[str]) -> None:

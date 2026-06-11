@@ -1,6 +1,14 @@
 extends: stage5_tiny_debug.yaml
 stage: stage6_parallel_passing
 model_config: ../model/brian_tiny_parallel.yaml
+routing:
+  mode: parallel
+  hard_exit: true
+loss_weights:
+  route: 0.0
+  balance: 0.01
+  cost: 0.01
+  location: 0.02
 max_steps: 3
 eval_interval: 1
 save_interval: 3
