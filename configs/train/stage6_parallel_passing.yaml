@@ -3,6 +3,8 @@ stage: stage6_parallel_passing
 model_config: ../model/brian_r125_parallel.yaml
 routing:
   mode: parallel
+  pseudo_policy: null
+  schedule: null
   hard_exit: true
 loss_weights:
   route: 0.0

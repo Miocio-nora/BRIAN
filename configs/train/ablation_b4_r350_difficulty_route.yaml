@@ -3,6 +3,7 @@ stage: stage3_pseudo_skip_recur
 routing:
   mode: pseudo
   pseudo_policy: mixed_skip_recur
+  schedule: null
   hard_exit: false
 loss_weights:
   route: 1.0

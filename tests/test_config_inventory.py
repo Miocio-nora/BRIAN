@@ -574,6 +574,69 @@ def test_train_config_validation_rejects_invalid_scheduled_routing_values() -> N
     assert any("routing.schedule.0.max_step must be an integer, not a boolean" in error for error in errors)
 
 
+def test_train_config_validation_rejects_invalid_stage_routing_contracts() -> None:
+    config = load_config(CONFIG_ROOT / "train" / "stage3_scheduled_free_routing.yaml")
+    errors: list[str] = []
+
+    _validate_train_config(
+        {
+            **config,
+            "routing": {
+                "mode": "pseudo",
+                "pseudo_policy": "mixed_skip_recur",
+                "schedule": [{"max_step": 10, "router_probability": 0.5, "lambda_route": 0.2}],
+            },
+        },
+        Path("bad_stage_mode.yaml"),
+        errors,
+    )
+    _validate_train_config(
+        {
+            **config,
+            "routing": {
+                "mode": "scheduled",
+                "pseudo_policy": "unknown_policy",
+                "schedule": [{"max_step": 10, "router_probability": 1.0, "lambda_route": 0.05}],
+            },
+        },
+        Path("bad_policy.yaml"),
+        errors,
+    )
+    _validate_train_config(
+        {
+            **config,
+            "routing": {
+                "mode": "scheduled",
+                "pseudo_policy": "mixed_skip_recur",
+                "hard_exit": "yes",
+                "schedule": [{"max_step": 10, "router_probability": 1.0, "lambda_route": 0.05}],
+            },
+        },
+        Path("bad_hard_exit.yaml"),
+        errors,
+    )
+    _validate_train_config(
+        {
+            **config,
+            "stage": "stage6_parallel_passing",
+            "routing": {
+                "mode": "parallel",
+                "pseudo_policy": "mixed_skip_recur",
+                "schedule": [{"max_step": 10, "router_probability": 1.0, "lambda_route": 0.05}],
+                "hard_exit": True,
+            },
+        },
+        Path("bad_parallel_inherited_schedule.yaml"),
+        errors,
+    )
+
+    assert any("routing.mode must match executable stage mode scheduled" in error for error in errors)
+    assert any("routing.schedule is only valid for scheduled routing" in error for error in errors)
+    assert any("routing.pseudo_policy must be one of" in error for error in errors)
+    assert any("routing.hard_exit must be a boolean" in error for error in errors)
+    assert any("routing.pseudo_policy must be omitted for parallel routing" in error for error in errors)
+
+
 def _yaml_files(root: Path) -> list[Path]:
     return sorted(root.rglob("*.yaml"))
 
@@ -721,6 +784,12 @@ def _validate_data_config(config: dict[str, Any], path: Path, errors: list[str])
 
 
 def _validate_train_config(config: dict[str, Any], path: Path, errors: list[str]) -> None:
+    stage_mode: str | None = None
+    if isinstance(config.get("stage"), str):
+        try:
+            stage_mode = train_mode_for_stage(str(config["stage"]))
+        except ValueError:
+            stage_mode = None
     for key, minimum in [
         ("batch_size", 1),
         ("gradient_accumulation_steps", 1),
@@ -759,7 +828,9 @@ def _validate_train_config(config: dict[str, Any], path: Path, errors: list[str]
         if not isinstance(routing, dict):
             errors.append(f"{path}: routing must be a mapping")
         else:
-            _validate_routing_config(routing, path, errors)
+            _validate_routing_config(routing, path, errors, stage_mode=stage_mode)
+    elif stage_mode is not None and stage_mode != "baseline":
+        errors.append(f"{path}: routing must be declared for {config.get('stage')}")
 
 
 def _validate_loss_weights_config(loss_weights: Any, path: Path, errors: list[str]) -> None:
@@ -774,12 +845,44 @@ def _validate_loss_weights_config(loss_weights: Any, path: Path, errors: list[st
         _float_config_value(value, f"loss_weights.{key}", path, errors, minimum=0.0)
 
 
-def _validate_routing_config(routing: dict[str, Any], path: Path, errors: list[str]) -> None:
+def _validate_routing_config(
+    routing: dict[str, Any],
+    path: Path,
+    errors: list[str],
+    *,
+    stage_mode: str | None,
+) -> None:
     mode = routing.get("mode")
     if mode is not None and mode not in {"fixed", "pseudo", "scheduled", "parallel"}:
         errors.append(f"{path}: routing.mode must be fixed, pseudo, scheduled, or parallel")
+    if stage_mode == "baseline":
+        errors.append(f"{path}: baseline train configs must not declare routing")
+    elif stage_mode is not None and mode != stage_mode:
+        errors.append(f"{path}: routing.mode must match executable stage mode {stage_mode}")
+    if "hard_exit" in routing and not isinstance(routing.get("hard_exit"), bool):
+        errors.append(f"{path}: routing.hard_exit must be a boolean")
+    _validate_pseudo_policy_config(routing, path, errors)
     if mode == "scheduled":
         _validate_scheduled_routing_config(routing, path, errors)
+    elif "schedule" in routing and routing.get("schedule") is not None:
+        errors.append(f"{path}: routing.schedule is only valid for scheduled routing")
+
+
+def _validate_pseudo_policy_config(routing: dict[str, Any], path: Path, errors: list[str]) -> None:
+    mode = routing.get("mode")
+    policy = routing.get("pseudo_policy")
+    allowed = {"sequential", "mixed_skip_recur"}
+    if mode == "parallel":
+        if policy is not None:
+            errors.append(f"{path}: routing.pseudo_policy must be omitted for parallel routing")
+        return
+    if mode in {"fixed", "pseudo", "scheduled"} and policy is None:
+        errors.append(f"{path}: routing.pseudo_policy must be declared for {mode} routing")
+        return
+    if policy is not None and policy not in allowed:
+        errors.append(f"{path}: routing.pseudo_policy must be one of {sorted(allowed)}")
+    if mode == "fixed" and policy != "sequential":
+        errors.append(f"{path}: fixed routing must use sequential pseudo_policy")
 
 
 def _validate_scheduled_routing_config(routing: dict[str, Any], path: Path, errors: list[str]) -> None:
