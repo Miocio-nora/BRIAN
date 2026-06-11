@@ -147,11 +147,15 @@ def train_from_config(config_path: str | Path) -> Path:
     )
     start_step = 0
     best_eval_loss: float | None = None
+    data_epoch = 0
+    microbatch_in_epoch = 0
     latest = run_dir / "checkpoint_latest"
     if _bool_config(config, "resume", default=False) and (latest / "state.pt").exists():
-        payload = load_checkpoint(latest, model=model, optimizer=optimizer)
+        payload = load_checkpoint(latest, model=model, optimizer=optimizer, restore_rng_state=True)
         start_step = int(payload.get("step", 0))
         best_eval_loss = payload.get("best_eval_loss")
+        data_epoch = _payload_int(payload, "data_epoch", default=0, minimum=0)
+        microbatch_in_epoch = _payload_int(payload, "microbatch_in_epoch", default=0, minimum=0)
         if is_main_process:
             JsonlLogger(run_dir / "resume_events.jsonl").write(
                 {
@@ -159,6 +163,9 @@ def train_from_config(config_path: str | Path) -> Path:
                     "resumed_from_step": start_step,
                     "target_max_steps": max_steps,
                     "optimizer_state_loaded": "optimizer" in payload,
+                    "rng_state_loaded": "rng_state" in payload,
+                    "data_epoch": data_epoch,
+                    "microbatch_in_epoch": microbatch_in_epoch,
                     "best_eval_loss": best_eval_loss,
                 }
             )
@@ -177,9 +184,11 @@ def train_from_config(config_path: str | Path) -> Path:
         distributed=distributed,
         gradient_accumulation_steps=gradient_accumulation_steps,
     )
-    _set_sampler_epoch(train_loader, 0)
-    iterator = iter(train_loader)
-    data_epoch = 0
+    iterator, data_epoch, microbatch_in_epoch = _restore_dataloader_position(
+        train_loader,
+        data_epoch=data_epoch,
+        microbatch_in_epoch=microbatch_in_epoch,
+    )
     model.train()
     for step in range(start_step + 1, max_steps + 1):
         if device.type == "cuda":
@@ -203,13 +212,12 @@ def train_from_config(config_path: str | Path) -> Path:
         routing_summary: dict[str, Any] = {}
         routing_numeric_values: dict[str, list[float]] = {}
         for micro_step in range(gradient_accumulation_steps):
-            try:
-                batch = next(iterator)
-            except StopIteration:
-                data_epoch += 1
-                _set_sampler_epoch(train_loader, data_epoch)
-                iterator = iter(train_loader)
-                batch = next(iterator)
+            batch, iterator, data_epoch, microbatch_in_epoch = _next_train_batch(
+                train_loader,
+                iterator,
+                data_epoch=data_epoch,
+                microbatch_in_epoch=microbatch_in_epoch,
+            )
             batch = batch.to(device)
             should_sync_gradients = micro_step == gradient_accumulation_steps - 1
             with _gradient_sync_context(model, distributed=distributed, should_sync=should_sync_gradients):
@@ -288,10 +296,18 @@ def train_from_config(config_path: str | Path) -> Path:
                         optimizer=optimizer,
                         step=step,
                         best_eval_loss=best_eval_loss,
+                        extra=_checkpoint_training_state(data_epoch, microbatch_in_epoch),
                     )
         if step % save_interval == 0 or step == max_steps:
             if is_main_process:
-                save_checkpoint(latest, model=dist_utils.unwrap_model(model), optimizer=optimizer, step=step, best_eval_loss=best_eval_loss)
+                save_checkpoint(
+                    latest,
+                    model=dist_utils.unwrap_model(model),
+                    optimizer=optimizer,
+                    step=step,
+                    best_eval_loss=best_eval_loss,
+                    extra=_checkpoint_training_state(data_epoch, microbatch_in_epoch),
+                )
             if is_main_process and write_routing_report:
                 make_routing_report(run_dir)
     if is_main_process and not (run_dir / "routing_report.json").exists():
@@ -372,6 +388,80 @@ def _global_train_token_count(local_token_count: int, *, distributed: bool) -> i
     if distributed:
         return local_token_count * dist_utils.world_size()
     return local_token_count
+
+
+def _restore_dataloader_position(loader: Any, *, data_epoch: int, microbatch_in_epoch: int) -> tuple[Any, int, int]:
+    loader_length = _loader_length(loader)
+    if microbatch_in_epoch >= loader_length:
+        data_epoch += microbatch_in_epoch // loader_length
+        microbatch_in_epoch = microbatch_in_epoch % loader_length
+    _set_sampler_epoch(loader, data_epoch)
+    iterator = iter(loader)
+    skipped = 0
+    while skipped < microbatch_in_epoch:
+        try:
+            next(iterator)
+        except StopIteration:
+            data_epoch += 1
+            microbatch_in_epoch = 0
+            _set_sampler_epoch(loader, data_epoch)
+            iterator = iter(loader)
+            break
+        skipped += 1
+    return iterator, data_epoch, microbatch_in_epoch
+
+
+def _next_train_batch(
+    loader: Any,
+    iterator: Any,
+    *,
+    data_epoch: int,
+    microbatch_in_epoch: int,
+) -> tuple[Any, Any, int, int]:
+    try:
+        batch = next(iterator)
+    except StopIteration:
+        data_epoch += 1
+        microbatch_in_epoch = 0
+        _set_sampler_epoch(loader, data_epoch)
+        iterator = iter(loader)
+        batch = next(iterator)
+    microbatch_in_epoch += 1
+    if microbatch_in_epoch >= _loader_length(loader):
+        data_epoch += 1
+        microbatch_in_epoch = 0
+        _set_sampler_epoch(loader, data_epoch)
+        iterator = iter(loader)
+    return batch, iterator, data_epoch, microbatch_in_epoch
+
+
+def _checkpoint_training_state(data_epoch: int, microbatch_in_epoch: int) -> dict[str, int]:
+    return {
+        "data_epoch": data_epoch,
+        "microbatch_in_epoch": microbatch_in_epoch,
+    }
+
+
+def _loader_length(loader: Any) -> int:
+    length = len(loader)
+    if length <= 0:
+        raise ValueError("Training dataloader must contain at least one batch.")
+    return int(length)
+
+
+def _payload_int(payload: Mapping[str, Any], key: str, *, default: int, minimum: int) -> int:
+    value = payload.get(key, default)
+    if isinstance(value, bool):
+        raise ValueError(f"checkpoint {key} must be an integer, not a boolean.")
+    if isinstance(value, int):
+        number = value
+    elif isinstance(value, float) and math.isfinite(value) and value.is_integer():
+        number = int(value)
+    else:
+        raise ValueError(f"checkpoint {key} must be an integer.")
+    if number < minimum:
+        raise ValueError(f"checkpoint {key} must be >= {minimum}.")
+    return number
 
 
 def _distributed_mean_metrics(metrics: dict[str, Any], *, device: "torch.device", distributed: bool) -> dict[str, Any]:

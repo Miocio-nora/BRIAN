@@ -22,6 +22,8 @@ from brian_sphere_llm.train.trainer import (
     _lr_schedule_config,
     _mapping_config,
     _model_stats,
+    _next_train_batch,
+    _restore_dataloader_position,
     _schedule_values,
     _set_sampler_epoch,
     _wrap_distributed_model,
@@ -261,6 +263,52 @@ def test_set_sampler_epoch_for_distributed_sampler_like_loader() -> None:
     loader = Loader()
     _set_sampler_epoch(loader, 4)
     assert loader.sampler.epoch == 4
+
+
+def test_train_batch_helpers_restore_epoch_offset() -> None:
+    class Sampler:
+        def __init__(self):
+            self.epochs: list[int] = []
+
+        def set_epoch(self, epoch: int) -> None:
+            self.epochs.append(epoch)
+
+    class Loader:
+        def __init__(self):
+            self.sampler = Sampler()
+
+        def __len__(self) -> int:
+            return 3
+
+        def __iter__(self):
+            return iter(["a", "b", "c"])
+
+    loader = Loader()
+    iterator, data_epoch, microbatch_in_epoch = _restore_dataloader_position(
+        loader,
+        data_epoch=2,
+        microbatch_in_epoch=1,
+    )
+    batch, iterator, data_epoch, microbatch_in_epoch = _next_train_batch(
+        loader,
+        iterator,
+        data_epoch=data_epoch,
+        microbatch_in_epoch=microbatch_in_epoch,
+    )
+    assert batch == "b"
+    assert data_epoch == 2
+    assert microbatch_in_epoch == 2
+
+    batch, iterator, data_epoch, microbatch_in_epoch = _next_train_batch(
+        loader,
+        iterator,
+        data_epoch=data_epoch,
+        microbatch_in_epoch=microbatch_in_epoch,
+    )
+    assert batch == "c"
+    assert data_epoch == 3
+    assert microbatch_in_epoch == 0
+    assert loader.sampler.epochs == [2, 3]
 
 
 def test_gradient_sync_context_uses_no_sync_only_for_non_final_ddp_microbatch() -> None:
@@ -503,7 +551,14 @@ def test_train_from_config_records_resume_event(tmp_path: Path) -> None:
     assert events[-1]["resumed_from_step"] == 1
     assert events[-1]["target_max_steps"] == 2
     assert events[-1]["optimizer_state_loaded"] is True
+    assert events[-1]["rng_state_loaded"] is True
+    assert events[-1]["data_epoch"] == 0
+    assert events[-1]["microbatch_in_epoch"] == 1
     assert (run_dir / "checkpoint_latest" / "state.pt").exists()
+    payload = torch.load(run_dir / "checkpoint_latest" / "state.pt", map_location="cpu", weights_only=False)
+    assert payload["data_epoch"] == 1
+    assert payload["microbatch_in_epoch"] == 0
+    assert "rng_state" in payload
     train_rows = [json.loads(line) for line in (run_dir / "train_log.jsonl").read_text(encoding="utf-8").splitlines()]
     assert train_rows[-1]["step"] == 2
 

@@ -571,6 +571,8 @@ def _resume_event_checks(event: Any) -> dict[str, bool]:
     resumed_from_step = _int_like(event.get("resumed_from_step"))
     target_max_steps = _int_like(event.get("target_max_steps"))
     checkpoint = event.get("checkpoint")
+    data_epoch = _int_like(event.get("data_epoch"))
+    microbatch_in_epoch = _int_like(event.get("microbatch_in_epoch"))
     return {
         "checkpoint_points_to_latest": isinstance(checkpoint, str) and Path(checkpoint).name == "checkpoint_latest",
         "resumed_from_positive_step": resumed_from_step is not None and resumed_from_step >= 1,
@@ -578,6 +580,9 @@ def _resume_event_checks(event: Any) -> dict[str, bool]:
         and target_max_steps is not None
         and target_max_steps > resumed_from_step,
         "optimizer_state_loaded": event.get("optimizer_state_loaded") is True,
+        "rng_state_loaded": event.get("rng_state_loaded") is True,
+        "data_epoch_nonnegative": data_epoch is not None and data_epoch >= 0,
+        "microbatch_in_epoch_nonnegative": microbatch_in_epoch is not None and microbatch_in_epoch >= 0,
     }
 
 

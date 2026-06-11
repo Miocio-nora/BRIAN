@@ -75,7 +75,7 @@ def _write_run(
             encoding="utf-8",
         )
     if resume_event is not None:
-        (run_dir / "resume_events.jsonl").write_text(json.dumps(resume_event) + "\n", encoding="utf-8")
+        (run_dir / "resume_events.jsonl").write_text(json.dumps(_resume_event(resume_event)) + "\n", encoding="utf-8")
     if baseline_difficulty_report is not None:
         (run_dir / "baseline_difficulty_report.json").write_text(
             json.dumps(baseline_difficulty_report),
@@ -146,6 +146,18 @@ def _data_manifest_ref() -> dict:
         "source_mixture_realized": {"unit": 32},
         "source_mixture_realized_share": {"unit": 1.0},
     }
+
+
+def _resume_event(overrides: dict) -> dict:
+    return {
+        "checkpoint": "checkpoint_latest",
+        "resumed_from_step": 1,
+        "target_max_steps": 2,
+        "optimizer_state_loaded": True,
+        "rng_state_loaded": True,
+        "data_epoch": 0,
+        "microbatch_in_epoch": 1,
+    } | overrides
 
 
 def _model_stats(name: str) -> dict:
@@ -347,6 +359,9 @@ def test_stage_gate_report_writes_json(tmp_path: Path) -> None:
     assert report["gates"]["stage0_to_1"]["status"] == "pass"
     assert report["gates"]["stage0_to_1"]["checks"]["checkpoint_resume_event"] is True
     assert report["gates"]["stage0_to_1"]["checks"]["checkpoint_resume_event_valid"] is True
+    assert report["gates"]["stage0_to_1"]["resume_event_checks"]["rng_state_loaded"] is True
+    assert report["gates"]["stage0_to_1"]["resume_event_checks"]["data_epoch_nonnegative"] is True
+    assert report["gates"]["stage0_to_1"]["resume_event_checks"]["microbatch_in_epoch_nonnegative"] is True
     assert report["gates"]["stage0_to_1"]["checks"]["checkpoint_best_artifact"] is True
     assert report["gates"]["stage0_to_1"]["checks"]["eval_determinism_checks_passed"] is True
     assert report["gates"]["stage0_to_1"]["checks"]["model_stats_valid"] is True
@@ -397,6 +412,31 @@ def test_stage0_gate_requires_valid_resume_event(tmp_path: Path) -> None:
     assert gate["checks"]["checkpoint_resume_event"] is True
     assert gate["checks"]["checkpoint_resume_event_valid"] is False
     assert gate["resume_event_checks"]["optimizer_state_loaded"] is False
+
+
+def test_stage0_gate_requires_rng_and_dataloader_resume_state(tmp_path: Path) -> None:
+    baseline = _write_run(
+        tmp_path,
+        "baseline",
+        stage="stage0_baseline",
+        val_loss=10.0,
+        train_row={},
+        determinism_status="pass",
+        resume_event={
+            "rng_state_loaded": False,
+            "data_epoch": -1,
+            "microbatch_in_epoch": True,
+        },
+        baseline_difficulty_report=_baseline_difficulty_report(),
+    )
+
+    report_path = make_stage_gate_report([baseline], output_path=tmp_path / "gate.json")
+    gate = json.loads(report_path.read_text(encoding="utf-8"))["gates"]["stage0_to_1"]
+
+    assert gate["checks"]["checkpoint_resume_event_valid"] is False
+    assert gate["resume_event_checks"]["rng_state_loaded"] is False
+    assert gate["resume_event_checks"]["data_epoch_nonnegative"] is False
+    assert gate["resume_event_checks"]["microbatch_in_epoch_nonnegative"] is False
 
 
 def test_stage0_gate_requires_determinism_key_checks(tmp_path: Path) -> None:

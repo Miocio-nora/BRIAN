@@ -56,16 +56,16 @@ def build_dataloader(
     tokenized_dir = Path(tokenized_dir)
     dataset = PackedTokenDataset(tokenized_dir / f"{split}.bin", tokenized_dir / f"{split}.idx")
     sampler = None
-    if distributed:
+    if distributed or shuffle:
         if DistributedSampler is None:
             raise ModuleNotFoundError("PyTorch DistributedSampler is required for distributed dataloaders.")
         sampler = DistributedSampler(
             dataset,
-            num_replicas=world_size,
-            rank=rank,
+            num_replicas=world_size if distributed else 1,
+            rank=rank if distributed else 0,
             shuffle=shuffle,
             seed=seed,
-            drop_last=True,
+            drop_last=distributed,
         )
     return DataLoader(
         dataset,
