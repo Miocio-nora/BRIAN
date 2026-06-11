@@ -206,10 +206,9 @@ def _r350_decision(
             _out_by_difficulty_passed(out_by_difficulty_report),
             _out_by_difficulty_evidence(out_by_difficulty_report),
         ),
-        _criterion(
-            "global_kv_long_context_benefit_if_tested",
-            _global_kv_memory_quality_benefit(long_context_compare_report, global_kv_ablation_report),
-            _global_kv_evidence(long_context_compare_report, global_kv_ablation_report),
+        _optional_global_kv_criterion(
+            long_context_compare_report,
+            global_kv_ablation_report,
         ),
     ]
     return _phase("Proceed from BRIAN-R350 to 1B/global serious validation", criteria)
@@ -299,6 +298,28 @@ def _criterion(name: str, passed: bool | None, evidence: Any) -> dict[str, Any]:
     else:
         status = "missing"
     return {"name": name, "status": status, "passed": passed, "evidence": evidence}
+
+
+def _optional_global_kv_criterion(
+    long_context_compare_report: dict[str, Any],
+    global_kv_ablation_report: dict[str, Any],
+) -> dict[str, Any]:
+    evidence = _global_kv_evidence(long_context_compare_report, global_kv_ablation_report)
+    tested = bool(long_context_compare_report or global_kv_ablation_report)
+    evidence["tested"] = tested
+    if not tested:
+        evidence["optional"] = True
+        return {
+            "name": "global_kv_long_context_benefit_if_tested",
+            "status": "pass",
+            "passed": True,
+            "evidence": evidence,
+        }
+    return _criterion(
+        "global_kv_long_context_benefit_if_tested",
+        _global_kv_memory_quality_benefit(long_context_compare_report, global_kv_ablation_report),
+        evidence,
+    )
 
 
 def _gate_check(gates: dict[str, Any], gate_name: str, check_name: str) -> bool | None:
