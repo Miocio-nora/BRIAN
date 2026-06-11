@@ -126,6 +126,8 @@ def test_scale_followup_experiment_manifests_resolve_repo_paths() -> None:
     ]
     assert load_config(r1b.entries[1].train_config)["activation_checkpointing"] is True
     assert load_config(r1b.entries[2].train_config)["activation_checkpointing"] is True
+    assert load_config(r1b.entries[1].train_config)["ddp_find_unused_parameters"] is False
+    assert load_config(r1b.entries[2].train_config)["ddp_find_unused_parameters"] is True
     assert load_config(r1b.entries[1].train_config)["gradient_accumulation_steps"] == 4
     assert load_config(r1b.entries[2].train_config)["gradient_accumulation_steps"] == 4
     assert load_config(r1b.entries[1].train_config)["lr_schedule"] == "linear_warmup_cosine_decay"

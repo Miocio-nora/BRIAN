@@ -12,6 +12,7 @@ lr_schedule: linear_warmup_cosine_decay
 warmup_steps: 500
 min_learning_rate: 0.000015
 activation_checkpointing: true
+ddp_find_unused_parameters: true
 routing:
   mode: scheduled
   pseudo_policy: mixed_skip_recur

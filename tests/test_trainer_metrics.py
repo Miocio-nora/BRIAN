@@ -9,9 +9,11 @@ from brian_sphere_llm.data.pack import write_index, write_token_bin
 from brian_sphere_llm.model.baseline import BaselineConfig, BaselineLM
 from brian_sphere_llm.train.trainer import (
     _bool_config,
+    _ddp_no_sync_microbatch_count,
     _device,
     _float_config,
     _forward_for_stage,
+    _gradient_sync_context,
     _int_config,
     _learning_rate_for_step,
     _lr_schedule_config,
@@ -19,6 +21,7 @@ from brian_sphere_llm.train.trainer import (
     _model_stats,
     _schedule_values,
     _set_sampler_epoch,
+    _wrap_distributed_model,
     evaluate,
     run_name,
     train_from_config,
@@ -209,6 +212,68 @@ def test_set_sampler_epoch_for_distributed_sampler_like_loader() -> None:
     assert loader.sampler.epoch == 4
 
 
+def test_gradient_sync_context_uses_no_sync_only_for_non_final_ddp_microbatch() -> None:
+    class FakeNoSync:
+        def __init__(self, model):
+            self.model = model
+
+        def __enter__(self):
+            self.model.entered += 1
+
+        def __exit__(self, exc_type, exc, tb):
+            self.model.exited += 1
+
+    class FakeModel:
+        def __init__(self):
+            self.requested = 0
+            self.entered = 0
+            self.exited = 0
+
+        def no_sync(self):
+            self.requested += 1
+            return FakeNoSync(self)
+
+    model = FakeModel()
+
+    with _gradient_sync_context(model, distributed=True, should_sync=False):
+        pass
+    with _gradient_sync_context(model, distributed=True, should_sync=True):
+        pass
+    with _gradient_sync_context(model, distributed=False, should_sync=False):
+        pass
+
+    assert model.requested == 1
+    assert model.entered == 1
+    assert model.exited == 1
+    assert _ddp_no_sync_microbatch_count(model, distributed=True, gradient_accumulation_steps=4) == 3
+    assert _ddp_no_sync_microbatch_count(model, distributed=False, gradient_accumulation_steps=4) == 0
+    assert _ddp_no_sync_microbatch_count(model, distributed=True, gradient_accumulation_steps=1) == 0
+
+
+def test_wrap_distributed_model_passes_find_unused_parameters(monkeypatch: pytest.MonkeyPatch) -> None:
+    import brian_sphere_llm.train.trainer as trainer_module
+
+    captured: dict[str, object] = {}
+
+    class FakeDDP:
+        def __init__(self, model, **kwargs):
+            self.module = model
+            captured.update(kwargs)
+
+    model = object()
+    monkeypatch.setattr(trainer_module, "DistributedDataParallel", FakeDDP)
+
+    wrapped = _wrap_distributed_model(
+        model,
+        torch.device("cpu"),
+        distributed=True,
+        find_unused_parameters=True,
+    )
+
+    assert wrapped.module is model
+    assert captured["find_unused_parameters"] is True
+
+
 def test_train_from_config_writes_routing_report_on_checkpoint(tmp_path: Path) -> None:
     tokenized = tmp_path / "tokenized"
     sequences = [
@@ -323,6 +388,8 @@ def test_train_from_config_writes_routing_report_on_checkpoint(tmp_path: Path) -
     assert train_row["gradient_accumulation_steps"] == 2
     assert train_row["effective_batch_size"] == 4
     assert train_row["tokens_per_optimizer_step"] == 16
+    assert train_row["ddp_find_unused_parameters"] is False
+    assert train_row["ddp_no_sync_microbatches"] == 0
 
 
 def test_train_from_config_writes_final_routing_report_when_checkpoint_report_disabled(tmp_path: Path) -> None:

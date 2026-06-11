@@ -287,7 +287,7 @@ def _validate_train_config(config: dict[str, Any], path: Path, errors: list[str]
             errors.append(f"{path}: min_learning_rate must be <= learning_rate")
     if "lr_schedule" in config and config.get("lr_schedule") not in {"constant", "linear_warmup_cosine_decay"}:
         errors.append(f"{path}: lr_schedule must be constant or linear_warmup_cosine_decay")
-    for key in ["activation_checkpointing", "resume", "write_routing_report_on_checkpoint"]:
+    for key in ["activation_checkpointing", "ddp_find_unused_parameters", "resume", "write_routing_report_on_checkpoint"]:
         if key in config and not isinstance(config.get(key), bool):
             errors.append(f"{path}: {key} must be a boolean")
 

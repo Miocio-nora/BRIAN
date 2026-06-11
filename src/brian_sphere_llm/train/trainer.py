@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from contextlib import nullcontext
 import json
 import math
 import time
@@ -75,6 +76,12 @@ def train_from_config(config_path: str | Path) -> Path:
     if min_learning_rate > learning_rate:
         raise ValueError("min_learning_rate must be <= learning_rate.")
     weight_decay = _float_config(config, "weight_decay", default=0.0, minimum=0.0)
+    stage_mode = train_mode_for_stage(config["stage"])
+    ddp_find_unused_parameters = _bool_config(
+        config,
+        "ddp_find_unused_parameters",
+        default=stage_mode != "baseline",
+    )
     set_seed(seed)
 
     model_config_path = (config_path.parent / config["model_config"]).resolve()
@@ -105,6 +112,7 @@ def train_from_config(config_path: str | Path) -> Path:
             "world_size": dist_utils.world_size(),
             "rank": dist_utils.rank(),
             "local_rank": dist_utils.local_rank(),
+            "find_unused_parameters": ddp_find_unused_parameters,
         },
     }
     if is_main_process:
@@ -154,12 +162,21 @@ def train_from_config(config_path: str | Path) -> Path:
                     "best_eval_loss": best_eval_loss,
                 }
             )
-    model = _wrap_distributed_model(model, device, distributed=distributed)
+    model = _wrap_distributed_model(
+        model,
+        device,
+        distributed=distributed,
+        find_unused_parameters=ddp_find_unused_parameters,
+    )
 
     train_log = JsonlLogger(run_dir / "train_log.jsonl") if is_main_process else None
     eval_log = JsonlLogger(run_dir / "eval_log.jsonl") if is_main_process else None
     write_routing_report = _bool_config(config, "write_routing_report_on_checkpoint", default=True)
-    stage_mode = train_mode_for_stage(config["stage"])
+    ddp_no_sync_microbatches = _ddp_no_sync_microbatch_count(
+        model,
+        distributed=distributed,
+        gradient_accumulation_steps=gradient_accumulation_steps,
+    )
     _set_sampler_epoch(train_loader, 0)
     iterator = iter(train_loader)
     data_epoch = 0
@@ -185,7 +202,7 @@ def train_from_config(config_path: str | Path) -> Path:
         schedule_values: dict[str, float] = {}
         routing_summary: dict[str, Any] = {}
         routing_numeric_values: dict[str, list[float]] = {}
-        for _ in range(gradient_accumulation_steps):
+        for micro_step in range(gradient_accumulation_steps):
             try:
                 batch = next(iterator)
             except StopIteration:
@@ -194,11 +211,13 @@ def train_from_config(config_path: str | Path) -> Path:
                 iterator = iter(train_loader)
                 batch = next(iterator)
             batch = batch.to(device)
-            with _autocast_context(device, str(config.get("precision", "fp32"))):
-                outputs = _forward_for_stage(model, batch, config=config, route_mode=stage_mode, global_step=step)
-                loss = outputs["loss"]
-                scaled_loss = loss / gradient_accumulation_steps
-            scaled_loss.backward()
+            should_sync_gradients = micro_step == gradient_accumulation_steps - 1
+            with _gradient_sync_context(model, distributed=distributed, should_sync=should_sync_gradients):
+                with _autocast_context(device, str(config.get("precision", "fp32"))):
+                    outputs = _forward_for_stage(model, batch, config=config, route_mode=stage_mode, global_step=step)
+                    loss = outputs["loss"]
+                    scaled_loss = loss / gradient_accumulation_steps
+                scaled_loss.backward()
             token_count += int(batch.numel())
             losses.append(float(loss.detach().cpu()))
             _accumulate_loss_components(loss_components, outputs.get("loss_components", {}))
@@ -218,6 +237,8 @@ def train_from_config(config_path: str | Path) -> Path:
             "gradient_accumulation_steps": gradient_accumulation_steps,
             "effective_batch_size": batch_size * gradient_accumulation_steps,
             "tokens_per_optimizer_step": token_count,
+            "ddp_find_unused_parameters": ddp_find_unused_parameters,
+            "ddp_no_sync_microbatches": ddp_no_sync_microbatches,
             "tokens_per_second": int(token_count / elapsed),
             "train_step_time_seconds": elapsed,
             "train_latency_ms_per_token": _latency_ms_per_token(elapsed, token_count),
@@ -293,15 +314,38 @@ def _set_activation_checkpointing(model: Any, enabled: bool) -> None:
         model.activation_checkpointing = enabled
 
 
-def _wrap_distributed_model(model: Any, device: "torch.device", *, distributed: bool) -> Any:
+def _wrap_distributed_model(
+    model: Any,
+    device: "torch.device",
+    *,
+    distributed: bool,
+    find_unused_parameters: bool,
+) -> Any:
     if not distributed:
         return model
     if DistributedDataParallel is None:
         raise ModuleNotFoundError("DistributedDataParallel is required for distributed training.")
     if device.type == "cuda":
         device_index = device.index if device.index is not None else dist_utils.local_rank()
-        return DistributedDataParallel(model, device_ids=[device_index], output_device=device_index)
-    return DistributedDataParallel(model)
+        return DistributedDataParallel(
+            model,
+            device_ids=[device_index],
+            output_device=device_index,
+            find_unused_parameters=find_unused_parameters,
+        )
+    return DistributedDataParallel(model, find_unused_parameters=find_unused_parameters)
+
+
+def _gradient_sync_context(model: Any, *, distributed: bool, should_sync: bool):
+    if distributed and not should_sync and hasattr(model, "no_sync"):
+        return model.no_sync()
+    return nullcontext()
+
+
+def _ddp_no_sync_microbatch_count(model: Any, *, distributed: bool, gradient_accumulation_steps: int) -> int:
+    if distributed and gradient_accumulation_steps > 1 and hasattr(model, "no_sync"):
+        return gradient_accumulation_steps - 1
+    return 0
 
 
 def _set_sampler_epoch(loader: Any, epoch: int) -> None:

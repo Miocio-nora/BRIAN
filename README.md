@@ -59,7 +59,7 @@ torchaudio==2.11.0+cu128
 
 This is intended for Blackwell/B200 hosts with a CUDA 12.8-capable driver.
 
-Large 1B pilot and main-validation configs use `batch_size: 1`, `gradient_accumulation_steps: 4`, BF16, `activation_checkpointing: true`, and linear warmup with cosine LR decay so B200/H100 runs keep microbatch memory small while preserving a larger effective batch.
+Large 1B pilot and main-validation configs use `batch_size: 1`, `gradient_accumulation_steps: 4`, BF16, `activation_checkpointing: true`, and linear warmup with cosine LR decay so B200/H100 runs keep microbatch memory small while preserving a larger effective batch. Under DDP, gradient accumulation uses `no_sync()` for non-final microbatches, and routed 1B configs set `ddp_find_unused_parameters: true` for dynamic routing paths.
 
 ## Data Recipe Ladder
 
@@ -96,7 +96,7 @@ python scripts/train.py --config configs/train/stage5_tiny_debug.yaml
 python scripts/train.py --config configs/train/stage6_tiny_debug.yaml
 ```
 
-For multi-GPU jobs, launch the same training entrypoint with `torchrun`; the trainer reads `WORLD_SIZE`, `RANK`, and `LOCAL_RANK`, uses a distributed train sampler, wraps the model with DDP, and writes checkpoints/reports only from rank 0:
+For multi-GPU jobs, launch the same training entrypoint with `torchrun`; the trainer reads `WORLD_SIZE`, `RANK`, and `LOCAL_RANK`, uses a distributed train sampler, wraps the model with DDP, applies `no_sync()` during accumulated non-final microbatches, and writes checkpoints/reports only from rank 0:
 
 ```bash
 torchrun --nproc_per_node=<gpu_count> scripts/train.py --config configs/train/stage0_r1b_baseline.yaml
@@ -534,7 +534,7 @@ python scripts/eval.py \
   --output reports/route_core_r1b_pilot_coverage.json
 ```
 
-This manifest defines D0 fixed 1B baseline and D1 routed 1B Global KV pilot on `configs/data/r1b_pilot.yaml`. It uses BF16 with `activation_checkpointing: true`, gradient accumulation, and warmup/cosine LR decay for B200/H100 memory control and keeps `parallel_passing: false`; parallel remains an experimental follow-up rather than part of the R1B pilot default.
+This manifest defines D0 fixed 1B baseline and D1 routed 1B Global KV pilot on `configs/data/r1b_pilot.yaml`. It uses BF16 with `activation_checkpointing: true`, gradient accumulation, DDP no-sync accumulation, and warmup/cosine LR decay for B200/H100 memory control. D1 enables `ddp_find_unused_parameters` for dynamic routing and keeps `parallel_passing: false`; parallel remains an experimental follow-up rather than part of the R1B pilot default.
 
 Resolve the gated scale follow-up packages after the relevant go/no-go evidence passes:
 
@@ -552,7 +552,7 @@ python scripts/run_experiment.py --config configs/experiments/route_core_r350_30
 python scripts/run_experiment.py --config configs/experiments/route_core_r1b_main_validation.yaml --dry-run
 ```
 
-These packages bind the planned `r125_main_5b`, `r350_main_30b`, and `r1b_main_50b` recipes to explicit baseline/routed configs. The 1B main-validation configs keep BF16 plus `activation_checkpointing: true`, gradient accumulation, and warmup/cosine LR decay for B200 memory control and leave `parallel_passing: false`.
+These packages bind the planned `r125_main_5b`, `r350_main_30b`, and `r1b_main_50b` recipes to explicit baseline/routed configs. The 1B main-validation configs keep BF16 plus `activation_checkpointing: true`, gradient accumulation, DDP no-sync accumulation, and warmup/cosine LR decay for B200 memory control; the routed 1B config enables `ddp_find_unused_parameters` and leaves `parallel_passing: false`.
 
 Run tests:
 

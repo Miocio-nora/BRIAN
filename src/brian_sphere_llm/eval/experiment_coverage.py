@@ -174,6 +174,7 @@ def _requirements(profile: str, plan: ExperimentPlan, entries: list[dict[str, An
                     model_flags={"model_name": "baseline_1b"},
                     train_flags={
                         "activation_checkpointing": True,
+                        "ddp_find_unused_parameters": False,
                         "gradient_accumulation_steps": 4,
                         "lr_schedule": "linear_warmup_cosine_decay",
                         "warmup_steps": 500,
@@ -192,6 +193,7 @@ def _requirements(profile: str, plan: ExperimentPlan, entries: list[dict[str, An
                     },
                     train_flags={
                         "activation_checkpointing": True,
+                        "ddp_find_unused_parameters": True,
                         "gradient_accumulation_steps": 4,
                         "lr_schedule": "linear_warmup_cosine_decay",
                         "warmup_steps": 500,
@@ -286,6 +288,7 @@ def _requirements(profile: str, plan: ExperimentPlan, entries: list[dict[str, An
                     },
                     train_flags={
                         "activation_checkpointing": True,
+                        "ddp_find_unused_parameters": False,
                         "gradient_accumulation_steps": 4,
                         "lr_schedule": "linear_warmup_cosine_decay",
                         "warmup_steps": 2000,
@@ -309,6 +312,7 @@ def _requirements(profile: str, plan: ExperimentPlan, entries: list[dict[str, An
                     },
                     train_flags={
                         "activation_checkpointing": True,
+                        "ddp_find_unused_parameters": True,
                         "gradient_accumulation_steps": 4,
                         "lr_schedule": "linear_warmup_cosine_decay",
                         "warmup_steps": 2000,
@@ -726,6 +730,7 @@ def _summarize_train_config(train_config_path: Path) -> dict[str, Any]:
         "routing_mode": routing.get("mode"),
         "train": {
             "activation_checkpointing": train_config.get("activation_checkpointing", False),
+            "ddp_find_unused_parameters": train_config.get("ddp_find_unused_parameters", False),
             "gradient_accumulation_steps": train_config.get("gradient_accumulation_steps", 1),
             "lr_schedule": train_config.get("lr_schedule", "constant"),
             "warmup_steps": train_config.get("warmup_steps", 0),
