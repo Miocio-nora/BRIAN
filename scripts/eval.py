@@ -20,6 +20,7 @@ from brian_sphere_llm.eval.position_ablation import make_position_ablation_repor
 from brian_sphere_llm.eval.pseudo_route_curriculum import make_pseudo_route_curriculum_report
 from brian_sphere_llm.eval.reasoning import make_reasoning_report
 from brian_sphere_llm.eval.routing_report import make_routing_report
+from brian_sphere_llm.eval.scheduled_routing import make_scheduled_routing_report
 from brian_sphere_llm.eval.stage_gate_report import make_stage_gate_report
 from brian_sphere_llm.utils.config import load_config
 
@@ -218,6 +219,15 @@ def main() -> None:
             args.run,
             baseline_difficulty_report_path=baseline_report,
             output_path=args.output or config.get("output_path"),
+        )
+    elif eval_name == "scheduled_routing_report":
+        if not args.run:
+            raise SystemExit("scheduled_routing_report requires --run")
+        report = make_scheduled_routing_report(
+            args.run,
+            output_path=args.output or config.get("output_path"),
+            min_final_router_probability=float(config.get("min_final_router_probability", 1.0)),
+            tolerance=float(config.get("tolerance", 1e-9)),
         )
     elif eval_name == "out_by_difficulty_report":
         reasoning_report = args.reasoning_report or config.get("reasoning_report_path")

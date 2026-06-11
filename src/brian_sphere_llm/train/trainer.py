@@ -144,6 +144,8 @@ def train_from_config(config_path: str | Path) -> Path:
         row.update(_cuda_memory_metrics(device))
         if "loss_components" in outputs:
             row.update({key: float(value.cpu()) for key, value in outputs["loss_components"].items()})
+        if "schedule_values" in outputs:
+            row.update(outputs["schedule_values"])
         if "routing_summary" in outputs:
             row.update(outputs["routing_summary"])
         train_log.write(row)
@@ -168,12 +170,11 @@ def _forward_for_stage(model: Any, batch: "torch.Tensor", *, config: dict[str, A
         return model(batch, targets=batch)
     routing_cfg = config.get("routing", {})
     loss_weights = dict(config.get("loss_weights", {}))
-    router_probability = None
-    if route_mode == "scheduled":
-        schedule = routing_cfg.get("schedule", [])
-        router_probability = scheduled_value(schedule, global_step, "router_probability", 0.0)
-        loss_weights["route"] = scheduled_value(schedule, global_step, "lambda_route", float(loss_weights.get("route", 0.0)))
-    return model(
+    schedule_values = _schedule_values(config, route_mode=route_mode, global_step=global_step)
+    router_probability = schedule_values.get("scheduled_router_probability")
+    if "scheduled_lambda_route" in schedule_values:
+        loss_weights["route"] = schedule_values["scheduled_lambda_route"]
+    outputs = model(
         batch,
         targets=batch,
         route_mode=route_mode,
@@ -183,6 +184,22 @@ def _forward_for_stage(model: Any, batch: "torch.Tensor", *, config: dict[str, A
         router_probability=router_probability,
         global_step=global_step,
     )
+    if schedule_values:
+        outputs["schedule_values"] = schedule_values
+    return outputs
+
+
+def _schedule_values(config: dict[str, Any], *, route_mode: str, global_step: int) -> dict[str, float]:
+    if route_mode != "scheduled":
+        return {}
+    routing_cfg = config.get("routing", {})
+    schedule = routing_cfg.get("schedule", []) if isinstance(routing_cfg, dict) else []
+    loss_weights = config.get("loss_weights", {})
+    default_lambda_route = float(loss_weights.get("route", 0.0)) if isinstance(loss_weights, dict) else 0.0
+    return {
+        "scheduled_router_probability": scheduled_value(schedule, global_step, "router_probability", 0.0),
+        "scheduled_lambda_route": scheduled_value(schedule, global_step, "lambda_route", default_lambda_route),
+    }
 
 
 @torch.no_grad() if torch is not None else (lambda fn: fn)
@@ -230,6 +247,7 @@ def evaluate(
         "inference_latency_ms_per_token": _latency_ms_per_token(elapsed, token_count),
     }
     row.update(_cuda_memory_metrics(device))
+    row.update(_schedule_values(config, route_mode=route_mode, global_step=global_step))
     for key, values in summary_accumulator.items():
         row[key] = sum(values) / max(1, len(values))
     return row

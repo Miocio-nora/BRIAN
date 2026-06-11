@@ -90,6 +90,7 @@ def _summarize_run(run_dir: Path) -> dict[str, Any]:
     baseline_difficulty_report = _read_json_if_exists(run_dir / "baseline_difficulty_report.json")
     fixed_route_stability_report = _read_json_if_exists(run_dir / "fixed_route_stability_report.json")
     pseudo_route_curriculum_report = _read_json_if_exists(run_dir / "pseudo_route_curriculum_report.json")
+    scheduled_routing_report = _read_json_if_exists(run_dir / "scheduled_routing_report.json")
     difficulty_report = _read_json_if_exists(run_dir / "difficulty_step_report.json")
     determinism_report = _read_json_if_exists(run_dir / "eval_determinism_report.json")
     eval_rows = _read_jsonl(run_dir / "eval_log.jsonl")
@@ -127,6 +128,10 @@ def _summarize_run(run_dir: Path) -> dict[str, Any]:
         "pseudo_route_curriculum_status": pseudo_route_curriculum_report.get("overall_status"),
         "pseudo_route_curriculum_checks": pseudo_route_curriculum_report.get("checks", {}),
         "pseudo_route_curriculum_by_difficulty": pseudo_route_curriculum_report.get("by_difficulty", {}),
+        "scheduled_routing_report_present": bool(scheduled_routing_report),
+        "scheduled_routing_status": scheduled_routing_report.get("overall_status"),
+        "scheduled_routing_checks": scheduled_routing_report.get("checks", {}),
+        "scheduled_routing_logged_values": scheduled_routing_report.get("logged_schedule_values", []),
         "difficulty_step_correlation": difficulty_corr,
         "difficulty_sample_count": _num(difficulty_report.get("sample_count")),
         "eval_determinism_status": determinism_report.get("overall_status"),
@@ -223,9 +228,20 @@ def _gate_stage3(stage3: dict[str, Any] | None, stage1: dict[str, Any] | None, t
         "difficulty_report_present": _num(stage3.get("difficulty_sample_count") if stage3 else None) is not None
         and float(stage3["difficulty_sample_count"]) >= 1.0,
         "difficulty_step_correlation_finite": _finite(stage3.get("difficulty_step_correlation") if stage3 else None),
+        "scheduled_routing_report_present": bool(stage3 and stage3.get("scheduled_routing_report_present")),
+        "scheduled_routing_passed": bool(stage3 and stage3.get("scheduled_routing_status") == "pass"),
         "checkpoint_present": bool(stage3 and stage3["has_checkpoint_latest"]),
     }
-    return _gate("Stage 3 scheduled free routing remains stable", checks, {"loss_ratio_vs_stage1": ratio})
+    return _gate(
+        "Stage 3 scheduled free routing remains stable",
+        checks,
+        {
+            "loss_ratio_vs_stage1": ratio,
+            "scheduled_routing_status": stage3.get("scheduled_routing_status") if stage3 else None,
+            "scheduled_routing_checks": stage3.get("scheduled_routing_checks") if stage3 else {},
+            "scheduled_routing_logged_values": stage3.get("scheduled_routing_logged_values") if stage3 else [],
+        },
+    )
 
 
 def _gate_stage4(stage4: dict[str, Any] | None, cost_control_report: dict[str, Any] | None = None) -> dict[str, Any]:

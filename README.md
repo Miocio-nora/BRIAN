@@ -157,6 +157,16 @@ python scripts/eval.py \
 
 This writes `pseudo_route_curriculum_report.json` showing that easy samples receive skip/early-exit targets, hard samples receive recurrent targets, and all samples include supervised `OUT`. Stage 2 gates use it as explicit curriculum evidence.
 
+Generate Stage 3 scheduled-routing evidence:
+
+```bash
+python scripts/eval.py \
+  --config configs/eval/scheduled_routing.yaml \
+  --run <stage3_scheduled_free_routing_run>
+```
+
+This writes `scheduled_routing_report.json` showing that router probability increases, route imitation weight decays, the schedule reaches fully router-controlled routing, and logged train/eval schedule values match the config. Stage 3 gates use it as explicit scheduled-free-routing evidence.
+
 Run the lightweight synthetic reasoning eval:
 
 ```bash

@@ -20,6 +20,8 @@ def _write_run(
     baseline_difficulty_report: dict | None = None,
     fixed_route_stability_report: dict | None = None,
     pseudo_route_curriculum_report: dict | None = None,
+    scheduled_routing_report: dict | None = None,
+    difficulty_report: dict | None = None,
 ) -> Path:
     run_dir = root / name
     run_dir.mkdir(parents=True)
@@ -51,6 +53,16 @@ def _write_run(
     if pseudo_route_curriculum_report is not None:
         (run_dir / "pseudo_route_curriculum_report.json").write_text(
             json.dumps(pseudo_route_curriculum_report),
+            encoding="utf-8",
+        )
+    if scheduled_routing_report is not None:
+        (run_dir / "scheduled_routing_report.json").write_text(
+            json.dumps(scheduled_routing_report),
+            encoding="utf-8",
+        )
+    if difficulty_report is not None:
+        (run_dir / "difficulty_step_report.json").write_text(
+            json.dumps(difficulty_report),
             encoding="utf-8",
         )
     return run_dir
@@ -130,6 +142,39 @@ def test_stage_gate_report_writes_json(tmp_path: Path) -> None:
             },
         },
     )
+    stage3 = _write_run(
+        tmp_path,
+        "stage3",
+        stage="stage3_scheduled_free_routing",
+        val_loss=10.3,
+        train_row={
+            "route_entropy": 0.5,
+            "block_load_entropy": 0.5,
+            "route_path_diversity": 0.5,
+            "average_route_steps": 2.0,
+            "top1_block_histogram": {"0": 2, "1": 2, "2": 1},
+        },
+        difficulty_report={"sample_count": 3, "difficulty_step_correlation": 0.2},
+        scheduled_routing_report={
+            "overall_status": "pass",
+            "checks": {
+                "scheduled_stage": True,
+                "schedule_present": True,
+                "router_probability_monotonic_nondecreasing": True,
+                "lambda_route_monotonic_nonincreasing": True,
+                "router_probability_increases": True,
+                "lambda_route_decays": True,
+                "reaches_free_router": True,
+                "logged_schedule_values_present": True,
+                "logged_router_probability_matches_schedule": True,
+                "logged_lambda_route_matches_schedule": True,
+            },
+            "logged_schedule_values": [
+                {"step": 1, "scheduled_router_probability": 0.1, "scheduled_lambda_route": 1.0},
+                {"step": 2, "scheduled_router_probability": 1.0, "scheduled_lambda_route": 0.05},
+            ],
+        },
+    )
     stage5 = _write_run(
         tmp_path,
         "global",
@@ -155,12 +200,12 @@ def test_stage_gate_report_writes_json(tmp_path: Path) -> None:
     )
     output = tmp_path / "gate.json"
     report_path = make_stage_gate_report(
-        [baseline, fixed, stage2, stage5],
+        [baseline, fixed, stage2, stage3, stage5],
         output_path=output,
         long_context_compare_report_path=long_context_compare,
     )
     report = json.loads(report_path.read_text(encoding="utf-8"))
-    assert report["run_count"] == 4
+    assert report["run_count"] == 5
     assert report["gates"]["stage0_to_1"]["status"] == "pass"
     assert report["gates"]["stage0_to_1"]["checks"]["checkpoint_resume_event"] is True
     assert report["gates"]["stage0_to_1"]["checks"]["baseline_difficulty_bins_present"] is True
@@ -168,6 +213,8 @@ def test_stage_gate_report_writes_json(tmp_path: Path) -> None:
     assert report["gates"]["stage1_to_2"]["checks"]["fixed_route_stability_passed"] is True
     assert report["gates"]["stage2_to_3"]["status"] == "pass"
     assert report["gates"]["stage2_to_3"]["checks"]["pseudo_route_curriculum_passed"] is True
+    assert report["gates"]["stage3_to_4"]["status"] == "pass"
+    assert report["gates"]["stage3_to_4"]["checks"]["scheduled_routing_passed"] is True
     assert report["gates"]["stage5_to_6"]["status"] == "pass"
     assert report["supplemental_reports"]["long_context_compare_report"] == str(long_context_compare)
 
