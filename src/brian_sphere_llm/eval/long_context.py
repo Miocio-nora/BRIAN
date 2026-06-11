@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import random
 from dataclasses import dataclass
 from pathlib import Path
@@ -19,7 +18,7 @@ from brian_sphere_llm.eval.reasoning import (
 )
 from brian_sphere_llm.train.stage_runner import train_mode_for_stage
 from brian_sphere_llm.utils.config import load_config
-from brian_sphere_llm.utils.logging import write_json
+from brian_sphere_llm.utils.logging import write_json, write_jsonl
 
 try:
     import torch
@@ -491,7 +490,4 @@ def _num(value: Any) -> float | None:
 
 
 def _write_jsonl(rows: list[dict[str, Any]], path: Path) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as handle:
-        for row in rows:
-            handle.write(json.dumps(row, sort_keys=True) + "\n")
+    write_jsonl(rows, path)

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-import json
 import math
 import random
 from dataclasses import dataclass
@@ -12,7 +11,7 @@ from brian_sphere_llm.data.tokenize import load_tokenizer
 from brian_sphere_llm.eval.difficulty_report import _checkpoint_step, _forward_routed_for_eval, _load_model_for_run
 from brian_sphere_llm.train.stage_runner import train_mode_for_stage
 from brian_sphere_llm.utils.config import load_config
-from brian_sphere_llm.utils.logging import write_json
+from brian_sphere_llm.utils.logging import write_json, write_jsonl
 
 try:
     import torch
@@ -375,7 +374,4 @@ def _device(name: str) -> "torch.device":
 
 
 def _write_jsonl(rows: list[dict[str, Any]], path: Path) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as handle:
-        for row in rows:
-            handle.write(json.dumps(row, sort_keys=True) + "\n")
+    write_jsonl(rows, path)

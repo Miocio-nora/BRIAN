@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 
 def utc_now_iso() -> str:
@@ -27,3 +27,10 @@ def write_json(data: dict[str, Any], path: str | Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = json.dumps(data, indent=2, sort_keys=True, allow_nan=False)
     path.write_text(payload + "\n", encoding="utf-8")
+
+
+def write_jsonl(rows: Iterable[dict[str, Any]], path: str | Path) -> None:
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lines = [json.dumps(row, sort_keys=True, allow_nan=False) for row in rows]
+    path.write_text("".join(f"{line}\n" for line in lines), encoding="utf-8")
