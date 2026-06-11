@@ -49,6 +49,7 @@ def make_stage_gate_report(
         _read_json_if_exists(Path(parallel_passing_report_path)) if parallel_passing_report_path else {}
     )
     parallel_compare_report = _read_json_if_exists(Path(parallel_compare_report_path)) if parallel_compare_report_path else {}
+    parallel_stage = by_stage.get("stage6_parallel_passing") or by_stage.get("stage7_parallel_passing")
     gates = {
         "stage0_to_1": _gate_stage0(by_stage.get("stage0_baseline")),
         "stage1_to_2": _gate_stage1(by_stage.get("stage1_fixed_route"), by_stage.get("stage0_baseline"), thresholds),
@@ -62,7 +63,7 @@ def make_stage_gate_report(
             global_kv_retention_report,
         ),
         "stage6_to_scale": _gate_stage6(
-            by_stage.get("stage6_parallel_passing"),
+            parallel_stage,
             parallel_compare_report,
             parallel_passing_report,
         ),
