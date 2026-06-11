@@ -170,6 +170,8 @@ def train_from_config(config_path: str | Path) -> Path:
             save_checkpoint(latest, model=model, optimizer=optimizer, step=step, best_eval_loss=best_eval_loss)
             if write_routing_report:
                 make_routing_report(run_dir)
+    if not (run_dir / "routing_report.json").exists():
+        make_routing_report(run_dir)
     return run_dir
 
 

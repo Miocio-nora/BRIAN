@@ -131,6 +131,11 @@ def test_train_from_config_writes_routing_report_on_checkpoint(tmp_path: Path) -
 
     run_dir = train_from_config(train_config)
 
+    assert (run_dir / "config_resolved.yaml").exists()
+    assert (run_dir / "train_log.jsonl").exists()
+    assert (run_dir / "eval_log.jsonl").exists()
+    assert (run_dir / "model_stats.json").exists()
+    assert (run_dir / "data_manifest_ref.json").exists()
     assert (run_dir / "checkpoint_latest" / "state.pt").exists()
     assert (run_dir / "checkpoint_best" / "state.pt").exists()
     assert (run_dir / "routing_report.json").exists()
@@ -141,6 +146,22 @@ def test_train_from_config_writes_routing_report_on_checkpoint(tmp_path: Path) -
     assert manifest_ref["sha256_manifest"] == "abc123"
     assert manifest_ref["source_mixture_realized"] == {"unit": 32}
     assert manifest_ref["tokenizer"]["name"] == "unit-tokenizer"
+    report = json.loads((run_dir / "routing_report.json").read_text(encoding="utf-8"))
+    assert report["latest_eval"]["validation_loss"] >= 0.0
+    assert report["cost_quality_curve"]["summary"]["train_point_count"] == 1
+
+
+def test_train_from_config_writes_final_routing_report_when_checkpoint_report_disabled(tmp_path: Path) -> None:
+    train_config = _write_tiny_train_fixture(
+        tmp_path,
+        max_steps=1,
+        resume=False,
+        write_routing_report_on_checkpoint=False,
+    )
+
+    run_dir = train_from_config(train_config)
+
+    assert (run_dir / "routing_report.json").exists()
     report = json.loads((run_dir / "routing_report.json").read_text(encoding="utf-8"))
     assert report["latest_eval"]["validation_loss"] >= 0.0
     assert report["cost_quality_curve"]["summary"]["train_point_count"] == 1
@@ -163,7 +184,13 @@ def test_train_from_config_records_resume_event(tmp_path: Path) -> None:
     assert train_rows[-1]["step"] == 2
 
 
-def _write_tiny_train_fixture(tmp_path: Path, *, max_steps: int, resume: bool) -> Path:
+def _write_tiny_train_fixture(
+    tmp_path: Path,
+    *,
+    max_steps: int,
+    resume: bool,
+    write_routing_report_on_checkpoint: bool = True,
+) -> Path:
     tokenized = tmp_path / "tokenized_resume"
     sequences = [
         [1, 2, 3, 4],
@@ -217,6 +244,7 @@ def _write_tiny_train_fixture(tmp_path: Path, *, max_steps: int, resume: bool) -
             "save_interval": 1,
             "learning_rate": 0.001,
             "resume": resume,
+            "write_routing_report_on_checkpoint": write_routing_report_on_checkpoint,
         },
         train_config,
     )
