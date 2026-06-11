@@ -5,6 +5,7 @@ torch = pytest.importorskip("torch")
 from brian_sphere_llm.data.tokenize import SimpleByteTokenizer
 from brian_sphere_llm.eval.reasoning import (
     ReasoningSample,
+    _visible_cot_token_count,
     evaluate_reasoning_sample,
     generate_reasoning_samples,
     normalize_answer,
@@ -49,12 +50,20 @@ def test_normalize_answer_and_summary() -> None:
     summary = summarize_reasoning_rows(
         [
             {"exact_match": True, "teacher_forced_token_accuracy": 1.0},
-            {"exact_match": False, "teacher_forced_token_accuracy": 0.5},
+            {"exact_match": False, "teacher_forced_token_accuracy": 0.5, "visible_cot_tokens": 2},
         ]
     )
     assert summary["sample_count"] == 2
     assert summary["exact_match_accuracy"] == 0.5
     assert summary["teacher_forced_token_accuracy"] == 0.75
+    assert summary["visible_cot_tokens_mean"] == 2.0
+
+
+def test_visible_cot_token_count_uses_answer_suffix() -> None:
+    assert _visible_cot_token_count([8, 9], [8, 9]) == 0
+    assert _visible_cot_token_count([1, 2, 8, 9], [8, 9]) == 2
+    assert _visible_cot_token_count([1, 2, 8], [8, 9]) == 2
+    assert _visible_cot_token_count([1, 2], [8, 9]) == 2
 
 
 def test_evaluate_reasoning_sample_exact_match_with_fake_model() -> None:
@@ -76,4 +85,7 @@ def test_evaluate_reasoning_sample_exact_match_with_fake_model() -> None:
     )
     assert row["exact_match"] is True
     assert row["teacher_forced_token_accuracy"] == 1.0
+    assert row["generated_token_count"] == len(answer_ids)
+    assert row["answer_token_count"] == len(answer_ids)
+    assert row["visible_cot_tokens"] == 0
     assert row["routing_average_route_steps"] == 2.0

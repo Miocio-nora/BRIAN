@@ -188,7 +188,8 @@ python scripts/eval.py \
   --sample-count 24
 ```
 
-This writes a reasoning report with exact-match accuracy, teacher-forced target token accuracy, per-task/per-difficulty summaries, and routed compute diagnostics.
+This writes a reasoning report with exact-match accuracy, teacher-forced target token accuracy,
+visible-CoT token estimates, per-task/per-difficulty summaries, and routed compute diagnostics.
 
 Summarize whether the OUT action reduces routed compute on easy samples:
 

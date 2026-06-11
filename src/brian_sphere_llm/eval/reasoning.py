@@ -153,6 +153,9 @@ def evaluate_reasoning_sample(
         "generated_answer": generated_text,
         "exact_match": bool(exact_match),
         "teacher_forced_token_accuracy": teacher_accuracy,
+        "generated_token_count": len(generated_ids),
+        "answer_token_count": len(answer_ids),
+        "visible_cot_tokens": _visible_cot_token_count(generated_ids, answer_ids),
     }
     for key, value in outputs.get("routing_summary", {}).items():
         if isinstance(value, (int, float)):
@@ -190,6 +193,9 @@ def summarize_reasoning_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "sample_count": len(rows),
         "exact_match_accuracy": sum(1 for row in rows if row["exact_match"]) / len(rows),
         "teacher_forced_token_accuracy": _mean([row.get("teacher_forced_token_accuracy") for row in rows]),
+        "generated_tokens_mean": _mean([row.get("generated_token_count") for row in rows]),
+        "answer_tokens_mean": _mean([row.get("answer_token_count") for row in rows]),
+        "visible_cot_tokens_mean": _mean([row.get("visible_cot_tokens") for row in rows]),
     }
 
 
@@ -257,6 +263,22 @@ def _context_length(config: dict[str, Any]) -> int:
 def _token_accuracy(predicted: list[int], expected: list[int]) -> float:
     total = max(1, len(expected))
     return sum(1 for left, right in zip(predicted, expected) if int(left) == int(right)) / total
+
+
+def _visible_cot_token_count(generated_ids: list[int], answer_ids: list[int]) -> int:
+    if not generated_ids:
+        return 0
+    if len(generated_ids) >= len(answer_ids) and generated_ids[-len(answer_ids) :] == answer_ids:
+        return max(0, len(generated_ids) - len(answer_ids))
+    return max(0, len(generated_ids) - _longest_suffix_prefix_overlap(generated_ids, answer_ids))
+
+
+def _longest_suffix_prefix_overlap(generated_ids: list[int], answer_ids: list[int]) -> int:
+    max_len = min(len(generated_ids), len(answer_ids))
+    for length in range(max_len, 0, -1):
+        if generated_ids[-length:] == answer_ids[:length]:
+            return length
+    return 0
 
 
 def _group_summary(rows: list[dict[str, Any]], key: str) -> dict[str, dict[str, Any]]:
