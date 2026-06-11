@@ -114,6 +114,17 @@ python scripts/eval.py \
 
 This writes `difficulty_step_report.json` and per-sample JSONL rows into the routed run directory. The key metric is `difficulty_step_correlation = corr(baseline_cross_entropy, route_steps)`.
 
+Run the lightweight synthetic reasoning eval:
+
+```bash
+python scripts/eval.py \
+  --config configs/eval/reasoning_eval.yaml \
+  --run <run_dir> \
+  --sample-count 24
+```
+
+This writes a reasoning report with exact-match accuracy, teacher-forced target token accuracy, per-task/per-difficulty summaries, and routed compute diagnostics.
+
 Generate a compute-adjusted comparison report:
 
 ```bash

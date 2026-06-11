@@ -9,6 +9,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from brian_sphere_llm.eval.compute_report import make_compute_report
 from brian_sphere_llm.eval.cost_control_report import make_cost_control_report
 from brian_sphere_llm.eval.difficulty_report import make_difficulty_report
+from brian_sphere_llm.eval.reasoning import make_reasoning_report
 from brian_sphere_llm.eval.routing_report import make_routing_report
 from brian_sphere_llm.eval.stage_gate_report import make_stage_gate_report
 from brian_sphere_llm.utils.config import load_config
@@ -29,6 +30,8 @@ def main() -> None:
     parser.add_argument("--utilization", type=float, default=None, help="Reference utilization for compute reports.")
     parser.add_argument("--min-active-compute-range", type=float, default=None, help="Minimum active compute range for cost reports.")
     parser.add_argument("--cost-control-report", default=None, help="Cost-control report path for stage gate eval.")
+    parser.add_argument("--checkpoint", default=None, help="Checkpoint name for model-based evals.")
+    parser.add_argument("--sample-count", type=int, default=None, help="Sample count for synthetic evals.")
     args = parser.parse_args()
     config = load_config(args.config)
     eval_name = config.get("eval_name", "routing_eval")
@@ -78,6 +81,19 @@ def main() -> None:
             runs,
             output_path=args.output or config.get("output_path"),
             min_active_compute_range=float(args.min_active_compute_range or config.get("min_active_compute_range", 0.05)),
+        )
+    elif eval_name == "reasoning_eval":
+        if not args.run:
+            raise SystemExit("reasoning_eval requires --run")
+        report = make_reasoning_report(
+            args.run,
+            output_path=args.output or config.get("output_path"),
+            sample_count=int(args.sample_count or config.get("sample_count", 24)),
+            seed=int(config.get("seed", 1)),
+            checkpoint=str(args.checkpoint or config.get("checkpoint", "checkpoint_best")),
+            device_name=str(config.get("device", "auto")),
+            task_families=list(config.get("task_families", ["copy", "reverse", "arithmetic", "rewrite"])),
+            difficulties=list(config.get("difficulties", ["easy", "medium", "hard"])),
         )
     else:
         if not args.run:

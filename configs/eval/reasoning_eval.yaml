@@ -1,4 +1,17 @@
 eval_name: reasoning_eval
+sample_count: 24
+seed: 1
+checkpoint: checkpoint_best
+device: auto
+task_families:
+  - copy
+  - reverse
+  - arithmetic
+  - rewrite
+difficulties:
+  - easy
+  - medium
+  - hard
 metrics:
   - synthetic_arithmetic
   - symbolic_rewrite
