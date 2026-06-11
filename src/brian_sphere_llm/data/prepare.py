@@ -107,6 +107,9 @@ def prepare_data(config_path: str | Path) -> Path:
     manifest_path = Path(config.get("manifest_path", output_dir / "manifest.jsonl"))
     write_manifest(manifest_rows, manifest_path)
     manifest_text = output_manifest_path.read_text(encoding="utf-8")
+    source_mixture_realized = _realized_mixture(manifest_rows)
+    source_mixture_realized_share = _normalize_mixture(source_mixture_realized)
+    source_mixture_expected = _expected_mixture(config, source_mixture_realized)
     stats = {
         "recipe_name": config["recipe_name"],
         "num_documents": len(manifest_rows),
@@ -115,7 +118,9 @@ def prepare_data(config_path: str | Path) -> Path:
         "avg_tokens_per_doc": (train_tokens + val_tokens) / max(1, len(manifest_rows)),
         "sequence_length": sequence_length,
         "vocab_size": metadata.vocab_size,
-        "source_mixture_realized": _realized_mixture(manifest_rows),
+        "source_mixture_expected": source_mixture_expected,
+        "source_mixture_realized": source_mixture_realized,
+        "source_mixture_realized_share": source_mixture_realized_share,
         "sha256_manifest": sha256_text(manifest_text),
         "tokenizer": asdict(metadata),
     }
@@ -212,6 +217,34 @@ def _realized_mixture(rows: list[ManifestRow]) -> dict[str, int]:
     for row in rows:
         counts[row.mixture_tag] = counts.get(row.mixture_tag, 0) + row.token_count
     return counts
+
+
+def _expected_mixture(config: dict[str, Any], realized: dict[str, int]) -> dict[str, float]:
+    synthetic_cfg = _mapping_config(config.get("synthetic_only", {}), "synthetic_only")
+    synthetic_only = _bool_config(synthetic_cfg.get("enabled", False), "synthetic_only.enabled")
+    if synthetic_only:
+        return _normalize_mixture(realized)
+
+    mixture_cfg = _mapping_config(config.get("mixture", {}), "mixture")
+    weights: dict[str, float] = {}
+    for tag, item in mixture_cfg.items():
+        item = _mapping_config(item, f"mixture.{tag}")
+        weight = _float_config(item, "weight", minimum=0.0)
+        if weight > 0.0:
+            weights[str(tag)] = weight
+    return _normalize_mixture(weights)
+
+
+def _normalize_mixture(values: dict[str, int | float]) -> dict[str, float]:
+    positive_values = {
+        str(tag): float(value)
+        for tag, value in values.items()
+        if not isinstance(value, bool) and isinstance(value, (int, float)) and math.isfinite(float(value)) and float(value) > 0.0
+    }
+    total = sum(positive_values.values())
+    if total <= 0.0:
+        return {}
+    return {tag: value / total for tag, value in positive_values.items()}
 
 
 def _mapping_config(value: Any, name: str) -> dict[str, Any]:

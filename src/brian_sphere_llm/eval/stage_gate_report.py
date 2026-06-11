@@ -681,6 +681,14 @@ def _data_manifest_ref_checks(ref: Any) -> dict[str, bool]:
         "sha256_manifest_present": _nonempty_string(ref.get("sha256_manifest")),
         "source_mixture_present": isinstance(ref.get("source_mixture_realized"), dict)
         and bool(ref.get("source_mixture_realized")),
+        "source_mixture_expected_present": _positive_numeric_mapping(ref.get("source_mixture_expected")),
+        "source_mixture_realized_share_present": _positive_numeric_mapping(ref.get("source_mixture_realized_share")),
+        "source_mixture_expected_normalized": _numeric_mapping_sums_to_one(ref.get("source_mixture_expected")),
+        "source_mixture_realized_share_normalized": _numeric_mapping_sums_to_one(
+            ref.get("source_mixture_realized_share")
+        ),
+        "source_mixture_expected_tags_realized": _source_mixture_expected_tags_realized(ref),
+        "source_mixture_realized_share_matches_counts": _source_mixture_realized_share_matches_counts(ref),
     }
 
 
@@ -697,6 +705,48 @@ def _data_manifest_gate_extras(summary: dict[str, Any] | None) -> dict[str, Any]
         "data_manifest_ref": summary.get("data_manifest_ref") if summary else {},
         "data_manifest_ref_checks": summary.get("data_manifest_ref_checks") if summary else {},
     }
+
+
+def _source_mixture_expected_tags_realized(ref: dict[str, Any]) -> bool:
+    expected = ref.get("source_mixture_expected")
+    realized = ref.get("source_mixture_realized")
+    if not _positive_numeric_mapping(expected) or not _positive_numeric_mapping(realized):
+        return False
+    expected_tags = {str(tag) for tag, value in expected.items() if _positive_number(value)}
+    return bool(expected_tags) and all(_positive_number(realized.get(tag)) for tag in expected_tags)
+
+
+def _source_mixture_realized_share_matches_counts(ref: dict[str, Any]) -> bool:
+    realized = ref.get("source_mixture_realized")
+    shares = ref.get("source_mixture_realized_share")
+    if not _positive_numeric_mapping(realized) or not _positive_numeric_mapping(shares):
+        return False
+    expected_shares = _normalized_numeric_mapping(realized)
+    observed_shares = {str(tag): float(value) for tag, value in shares.items() if _positive_number(value)}
+    if set(expected_shares) != set(observed_shares):
+        return False
+    return all(math.isclose(expected_shares[tag], observed_shares[tag], rel_tol=1e-6, abs_tol=1e-6) for tag in expected_shares)
+
+
+def _numeric_mapping_sums_to_one(value: Any) -> bool:
+    if not _positive_numeric_mapping(value):
+        return False
+    total = sum(float(item) for item in value.values())
+    return math.isclose(total, 1.0, rel_tol=1e-6, abs_tol=1e-6)
+
+
+def _normalized_numeric_mapping(value: Any) -> dict[str, float]:
+    if not isinstance(value, dict):
+        return {}
+    numbers = {str(tag): float(item) for tag, item in value.items() if _positive_number(item)}
+    total = sum(numbers.values())
+    if total <= 0.0:
+        return {}
+    return {tag: item / total for tag, item in numbers.items()}
+
+
+def _positive_numeric_mapping(value: Any) -> bool:
+    return isinstance(value, dict) and bool(value) and all(_positive_number(item) for item in value.values())
 
 
 def _eval_determinism_checks_passed(checks: Any) -> bool:

@@ -159,7 +159,9 @@ def test_train_from_config_writes_routing_report_on_checkpoint(tmp_path: Path) -
                 "avg_tokens_per_doc": 8.0,
                 "sequence_length": 4,
                 "vocab_size": 32,
+                "source_mixture_expected": {"unit": 1.0},
                 "source_mixture_realized": {"unit": 32},
+                "source_mixture_realized_share": {"unit": 1.0},
                 "sha256_manifest": "abc123",
                 "tokenizer": {
                     "name": "unit-tokenizer",
@@ -235,7 +237,9 @@ def test_train_from_config_writes_routing_report_on_checkpoint(tmp_path: Path) -
     manifest_ref = json.loads((run_dir / "data_manifest_ref.json").read_text(encoding="utf-8"))
     assert manifest_ref["path"] == str(tmp_path / "manifest.jsonl")
     assert manifest_ref["sha256_manifest"] == "abc123"
+    assert manifest_ref["source_mixture_expected"] == {"unit": 1.0}
     assert manifest_ref["source_mixture_realized"] == {"unit": 32}
+    assert manifest_ref["source_mixture_realized_share"] == {"unit": 1.0}
     assert manifest_ref["tokenizer"]["name"] == "unit-tokenizer"
     report = json.loads((run_dir / "routing_report.json").read_text(encoding="utf-8"))
     assert report["latest_eval"]["validation_loss"] >= 0.0

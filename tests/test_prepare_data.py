@@ -1,5 +1,6 @@
 import json
 from itertools import islice
+import math
 from pathlib import Path
 
 import pytest
@@ -46,13 +47,17 @@ def test_prepare_tiny_synthetic_data(tmp_path: Path) -> None:
         "avg_tokens_per_doc",
         "sequence_length",
         "vocab_size",
+        "source_mixture_expected",
         "source_mixture_realized",
+        "source_mixture_realized_share",
         "sha256_manifest",
     ]:
         assert key in stats
     assert stats["sha256_manifest"]
     assert stats["sha256_manifest"] == sha256_text(manifest_text)
     assert stats["source_mixture_realized"]
+    assert stats["source_mixture_expected"] == stats["source_mixture_realized_share"]
+    assert math.isclose(sum(stats["source_mixture_expected"].values()), 1.0)
     assert {row["created_at"] for row in manifest_rows} == {DEFAULT_MANIFEST_CREATED_AT}
     assert manifest_rows[0]["route_metadata"]["pseudo_route_type"] in {
         "advance",
@@ -109,6 +114,47 @@ def test_prepare_data_rejects_non_mapping_mixture_config(tmp_path: Path) -> None
 
     with pytest.raises(ValueError, match="mixture"):
         prepare_data(config_path)
+
+
+def test_prepare_mixture_data_records_expected_and_realized_shares(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_hf_rows(*, dataset_name: str, split: str, streaming: bool):
+        for index in range(30):
+            yield {
+                "sample_id": f"{dataset_name}-{index}",
+                "text": f"{dataset_name} row {index}",
+                "source_url_or_id": f"{split}-{index}",
+            }
+
+    monkeypatch.setattr("brian_sphere_llm.data.prepare.iter_hf_text_dataset", fake_hf_rows)
+    cfg = load_yaml("configs/data/r125_tiny_debug.yaml")
+    cfg["output_dir"] = str(tmp_path / "tokenized")
+    cfg["manifest_path"] = str(tmp_path / "manifest.jsonl")
+    cfg["target_tokens"] = 1200
+    cfg["validation_tokens"] = 120
+    cfg["sequence_length"] = 32
+    cfg["synthetic_only"]["enabled"] = False
+    cfg["mixture"] = {
+        "synthetic_routing": {"weight": 0.5, "source_dataset": "brian_synthetic_routing"},
+        "fineweb_edu": {"weight": 0.25, "source_dataset": "fineweb", "split": "train"},
+        "code_structured": {"weight": 0.25, "source_dataset": "code", "split": "train"},
+    }
+    config_path = tmp_path / "data.yaml"
+    save_yaml(cfg, config_path)
+
+    output_dir = prepare_data(config_path)
+    stats = json.loads((output_dir / "stats.json").read_text(encoding="utf-8"))
+
+    assert stats["source_mixture_expected"] == {
+        "synthetic_routing": 0.5,
+        "fineweb_edu": 0.25,
+        "code_structured": 0.25,
+    }
+    assert set(stats["source_mixture_realized"]) == set(stats["source_mixture_expected"])
+    assert set(stats["source_mixture_realized_share"]) == set(stats["source_mixture_expected"])
+    assert math.isclose(sum(stats["source_mixture_realized_share"].values()), 1.0)
 
 
 def test_mixture_rows_interleave_sources_by_weight(monkeypatch: pytest.MonkeyPatch) -> None:

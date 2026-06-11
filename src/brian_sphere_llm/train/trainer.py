@@ -396,7 +396,9 @@ def _data_manifest_ref(data_config: dict[str, Any], tokenized_dir: Path) -> dict
         "num_tokens_val",
         "avg_tokens_per_doc",
         "vocab_size",
+        "source_mixture_expected",
         "source_mixture_realized",
+        "source_mixture_realized_share",
         "sha256_manifest",
     ]:
         if key in stats:

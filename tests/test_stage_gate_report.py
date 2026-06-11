@@ -142,7 +142,9 @@ def _data_manifest_ref() -> dict:
         "num_tokens_train": 24,
         "num_tokens_val": 8,
         "sha256_manifest": "abc123",
+        "source_mixture_expected": {"unit": 1.0},
         "source_mixture_realized": {"unit": 32},
+        "source_mixture_realized_share": {"unit": 1.0},
     }
 
 
@@ -449,7 +451,9 @@ def test_stage0_gate_requires_valid_data_manifest_ref(tmp_path: Path) -> None:
             "sequence_length": 8,
             "num_tokens_train": 24,
             "num_tokens_val": 8,
+            "source_mixture_expected": {"unit": 1.0},
             "source_mixture_realized": {},
+            "source_mixture_realized_share": {},
         },
     )
 
@@ -462,6 +466,8 @@ def test_stage0_gate_requires_valid_data_manifest_ref(tmp_path: Path) -> None:
     assert gate["data_manifest_ref_checks"]["path_present"] is False
     assert gate["data_manifest_ref_checks"]["sha256_manifest_present"] is False
     assert gate["data_manifest_ref_checks"]["source_mixture_present"] is False
+    assert gate["data_manifest_ref_checks"]["source_mixture_realized_share_present"] is False
+    assert gate["data_manifest_ref_checks"]["source_mixture_expected_tags_realized"] is False
 
 
 def test_stage0_gate_requires_valid_model_stats(tmp_path: Path) -> None:
