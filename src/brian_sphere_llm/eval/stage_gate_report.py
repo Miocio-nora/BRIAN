@@ -28,6 +28,7 @@ def make_stage_gate_report(
     output_path: str | Path | None = None,
     thresholds: dict[str, float] | None = None,
     cost_control_report_path: str | Path | None = None,
+    out_by_difficulty_report_path: str | Path | None = None,
     long_context_compare_report_path: str | Path | None = None,
     parallel_compare_report_path: str | Path | None = None,
 ) -> Path:
@@ -35,6 +36,7 @@ def make_stage_gate_report(
     summaries = [_summarize_run(Path(run_dir)) for run_dir in run_dirs]
     by_stage = {summary["stage"]: summary for summary in summaries if summary["stage"]}
     cost_control_report = _read_json_if_exists(Path(cost_control_report_path)) if cost_control_report_path else {}
+    out_by_difficulty_report = _read_json_if_exists(Path(out_by_difficulty_report_path)) if out_by_difficulty_report_path else {}
     long_context_compare_report = (
         _read_json_if_exists(Path(long_context_compare_report_path)) if long_context_compare_report_path else {}
     )
@@ -44,7 +46,7 @@ def make_stage_gate_report(
         "stage1_to_2": _gate_stage1(by_stage.get("stage1_fixed_route"), by_stage.get("stage0_baseline"), thresholds),
         "stage2_to_3": _gate_stage2(by_stage.get("stage2_router_imitation"), thresholds),
         "stage3_to_4": _gate_stage3(by_stage.get("stage3_scheduled_free_routing"), by_stage.get("stage1_fixed_route"), thresholds),
-        "stage4_to_5": _gate_stage4(by_stage.get("stage4_output_action"), cost_control_report),
+        "stage4_to_5": _gate_stage4(by_stage.get("stage4_output_action"), cost_control_report, out_by_difficulty_report),
         "stage5_to_6": _gate_stage5(by_stage.get("stage5_global_kv"), thresholds, long_context_compare_report),
         "stage6_to_scale": _gate_stage6(by_stage.get("stage6_parallel_passing"), parallel_compare_report),
     }
@@ -56,6 +58,7 @@ def make_stage_gate_report(
         "thresholds": thresholds,
         "supplemental_reports": {
             "cost_control_report": str(cost_control_report_path) if cost_control_report_path else None,
+            "out_by_difficulty_report": str(out_by_difficulty_report_path) if out_by_difficulty_report_path else None,
             "long_context_compare_report": str(long_context_compare_report_path) if long_context_compare_report_path else None,
             "parallel_compare_report": str(parallel_compare_report_path) if parallel_compare_report_path else None,
         },
@@ -244,12 +247,17 @@ def _gate_stage3(stage3: dict[str, Any] | None, stage1: dict[str, Any] | None, t
     )
 
 
-def _gate_stage4(stage4: dict[str, Any] | None, cost_control_report: dict[str, Any] | None = None) -> dict[str, Any]:
+def _gate_stage4(
+    stage4: dict[str, Any] | None,
+    cost_control_report: dict[str, Any] | None = None,
+    out_by_difficulty_report: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     exit_hist = _latest_exit_hist(stage4)
     total_exits = sum(exit_hist.values()) if exit_hist else 0
     immediate = exit_hist.get("1", 0) if exit_hist else 0
     cost_analysis = cost_control_report.get("analysis", {}) if cost_control_report else {}
     cost_checks = cost_analysis.get("checks", {}) if isinstance(cost_analysis.get("checks"), dict) else {}
+    out_checks = out_by_difficulty_report.get("checks", {}) if isinstance(out_by_difficulty_report.get("checks"), dict) else {}
     checks = {
         "exit_distribution_present": bool(exit_hist),
         "not_all_immediate_exit": bool(exit_hist) and immediate < total_exits,
@@ -258,16 +266,24 @@ def _gate_stage4(stage4: dict[str, Any] | None, cost_control_report: dict[str, A
         "cost_control_active_range_present": bool(cost_checks.get("active_compute_range_present", False)),
         "cost_control_active_not_increasing": bool(cost_checks.get("active_compute_not_increasing_with_cost", False)),
         "cost_control_output_not_decreasing": bool(cost_checks.get("output_probability_not_decreasing_with_cost", False)),
+        "out_by_difficulty_report_present": bool(out_by_difficulty_report),
+        "out_by_difficulty_passed": bool(out_by_difficulty_report.get("overall_status") == "pass"),
+        "hard_compute_not_below_easy": bool(out_checks.get("route_steps_non_decreasing_with_difficulty", False))
+        and bool(out_checks.get("active_compute_non_decreasing_with_difficulty", False)),
+        "easy_output_probability_not_below_hard": bool(out_checks.get("easy_output_probability_at_least_hard", False)),
         "checkpoint_present": bool(stage4 and stage4["has_checkpoint_latest"]),
     }
     return _gate(
-        "Stage 4 hard OUT produces a controllable exit distribution and cost-compute response",
+        "Stage 4 hard OUT produces controllable exits and difficulty-conditioned compute",
         checks,
         {
             "first_exit_step_histogram": exit_hist,
             "cost_control_status": cost_analysis.get("status") if cost_analysis else None,
             "cost_control_active_block_evals_range": cost_analysis.get("active_block_evals_range") if cost_analysis else None,
             "cost_control_report_run_count": cost_control_report.get("run_count") if cost_control_report else None,
+            "out_by_difficulty_status": out_by_difficulty_report.get("overall_status") if out_by_difficulty_report else None,
+            "out_by_difficulty_checks": out_checks,
+            "out_by_difficulty_deltas": out_by_difficulty_report.get("deltas", {}) if out_by_difficulty_report else {},
         },
     )
 

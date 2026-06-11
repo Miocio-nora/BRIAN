@@ -249,13 +249,42 @@ def test_stage_gate_report_uses_cost_control_report(tmp_path: Path) -> None:
         ),
         encoding="utf-8",
     )
-    report_path = make_stage_gate_report([stage4], output_path=tmp_path / "gate.json", cost_control_report_path=cost_report)
+    out_report = tmp_path / "out_by_difficulty.json"
+    out_report.write_text(
+        json.dumps(
+            {
+                "overall_status": "pass",
+                "checks": {
+                    "easy_and_hard_present": True,
+                    "route_steps_non_decreasing_with_difficulty": True,
+                    "active_compute_non_decreasing_with_difficulty": True,
+                    "easy_output_probability_at_least_hard": True,
+                },
+                "deltas": {
+                    "hard_minus_easy_route_steps": 1.0,
+                    "hard_minus_easy_active_block_evals_per_token": 0.5,
+                    "easy_minus_hard_p_output": 0.2,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    report_path = make_stage_gate_report(
+        [stage4],
+        output_path=tmp_path / "gate.json",
+        cost_control_report_path=cost_report,
+        out_by_difficulty_report_path=out_report,
+    )
     report = json.loads(report_path.read_text(encoding="utf-8"))
     gate = report["gates"]["stage4_to_5"]
     assert gate["checks"]["cost_control_report_present"] is True
     assert gate["checks"]["cost_control_active_range_present"] is True
+    assert gate["checks"]["out_by_difficulty_report_present"] is True
+    assert gate["checks"]["out_by_difficulty_passed"] is True
+    assert gate["checks"]["hard_compute_not_below_easy"] is True
     assert gate["cost_control_status"] == "pass"
     assert report["supplemental_reports"]["cost_control_report"] == str(cost_report)
+    assert report["supplemental_reports"]["out_by_difficulty_report"] == str(out_report)
 
 
 def test_stage5_gate_warns_without_long_context_compare_report(tmp_path: Path) -> None:

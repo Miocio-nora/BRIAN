@@ -65,6 +65,7 @@ def main() -> None:
             output_path=args.output or config.get("output_path"),
             thresholds=config.get("thresholds", {}),
             cost_control_report_path=args.cost_control_report or config.get("cost_control_report_path"),
+            out_by_difficulty_report_path=args.out_by_difficulty_report or config.get("out_by_difficulty_report_path"),
             long_context_compare_report_path=args.long_context_compare_report
             or config.get("long_context_compare_report_path"),
             parallel_compare_report_path=args.parallel_compare_report or config.get("parallel_compare_report_path"),

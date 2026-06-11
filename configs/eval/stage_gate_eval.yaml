@@ -1,6 +1,7 @@
 eval_name: stage_gate_eval
 output_path: reports/stage_gate_report.json
 cost_control_report_path: null
+out_by_difficulty_report_path: null
 long_context_compare_report_path: null
 parallel_compare_report_path: null
 thresholds:

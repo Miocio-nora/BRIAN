@@ -16,6 +16,7 @@ def main() -> None:
     parser.add_argument("--runs", nargs="+", required=True, help="Run directories in any order.")
     parser.add_argument("--output", default=None, help="Optional output path override.")
     parser.add_argument("--cost-control-report", default=None, help="Optional cost-control report path.")
+    parser.add_argument("--out-by-difficulty-report", default=None, help="Optional OUT-by-difficulty report path.")
     parser.add_argument("--long-context-compare-report", default=None, help="Optional long-context comparison report path.")
     parser.add_argument("--parallel-compare-report", default=None, help="Optional parallel comparison report path.")
     args = parser.parse_args()
@@ -26,6 +27,7 @@ def main() -> None:
         output_path=output_path,
         thresholds=config.get("thresholds", {}),
         cost_control_report_path=args.cost_control_report or config.get("cost_control_report_path"),
+        out_by_difficulty_report_path=args.out_by_difficulty_report or config.get("out_by_difficulty_report_path"),
         long_context_compare_report_path=args.long_context_compare_report
         or config.get("long_context_compare_report_path"),
         parallel_compare_report_path=args.parallel_compare_report or config.get("parallel_compare_report_path"),

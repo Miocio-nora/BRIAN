@@ -106,13 +106,14 @@ python scripts/make_stage_gate_report.py \
   --runs <stage0_run> <stage1_run> <stage2_run> <stage3_run> <stage4_run> <stage5_run> <stage6_run>
 ```
 
-Include Stage 4 cost-control evidence in the stage gate:
+Include Stage 4 cost-control and OUT-by-difficulty evidence in the stage gate:
 
 ```bash
 python scripts/eval.py \
   --config configs/eval/stage_gate_eval.yaml \
   --runs <stage0_run> <stage1_run> <stage2_run> <stage3_run> <stage4_run> \
-  --cost-control-report <cost_control_report.json>
+  --cost-control-report <cost_control_report.json> \
+  --out-by-difficulty-report <out_by_difficulty_report.json>
 ```
 
 Generate the required difficulty-step diagnostic for a routed run:
@@ -186,7 +187,7 @@ python scripts/eval.py \
   --reasoning-report <reasoning_report.json>
 ```
 
-This reads the reasoning report's sample JSONL and writes an OUT-by-difficulty report with easy/medium/hard route-step, active-compute, and output-probability summaries.
+This reads the reasoning report's sample JSONL and writes an OUT-by-difficulty report with easy/medium/hard route-step, active-compute, and output-probability summaries. Stage 4 gates use this as explicit evidence that hard samples do not use less routed compute than easy samples.
 
 Run the lightweight long-context / Global KV eval:
 
