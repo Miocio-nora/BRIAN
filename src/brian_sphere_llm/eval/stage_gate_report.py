@@ -129,6 +129,7 @@ def _summarize_run(run_dir: Path) -> dict[str, Any]:
     eval_rows = _read_jsonl(run_dir / "eval_log.jsonl")
     train_rows = _read_jsonl(run_dir / "train_log.jsonl")
     resume_rows = _read_jsonl(run_dir / "resume_events.jsonl")
+    rank_state_paths = sorted((run_dir / "checkpoint_latest").glob("rank_state_*.pt"))
     stage = str(config.get("stage", "")) if config else _stage_from_name(run_dir.name)
     lm_eval_report_path = run_dir / "lm_eval_report.json"
     if eval_rows:
@@ -152,6 +153,9 @@ def _summarize_run(run_dir: Path) -> dict[str, Any]:
         "model_stats_checks": _model_stats_checks(model_stats),
         "has_checkpoint_latest": (run_dir / "checkpoint_latest" / "state.pt").exists(),
         "has_checkpoint_best": (run_dir / "checkpoint_best" / "state.pt").exists(),
+        "has_checkpoint_latest_rank_state": bool(rank_state_paths),
+        "checkpoint_latest_rank_state_count": len(rank_state_paths),
+        "checkpoint_latest_rank_state_paths": [str(path) for path in rank_state_paths],
         "has_eval_log": bool(eval_rows),
         "has_train_log": bool(train_rows),
         "has_resume_event": bool(resume_rows),
@@ -211,12 +215,14 @@ def _summarize_run(run_dir: Path) -> dict[str, Any]:
 def _gate_stage0(stage0: dict[str, Any] | None) -> dict[str, Any]:
     resume_event = stage0.get("latest_resume_event") if stage0 else {}
     resume_event_checks = _resume_event_checks(resume_event)
+    rank_state_resume_checks = _rank_state_resume_event_checks(resume_event, stage0)
     determinism_checks = stage0.get("eval_determinism_checks", {}) if stage0 else {}
     checks = {
         "checkpoint_resume_artifact": bool(stage0 and stage0["has_checkpoint_latest"]),
         "checkpoint_best_artifact": bool(stage0 and stage0["has_checkpoint_best"]),
         "checkpoint_resume_event": bool(stage0 and stage0.get("has_resume_event")),
         "checkpoint_resume_event_valid": all(resume_event_checks.values()),
+        "checkpoint_rank_state_resume_metadata_valid": all(rank_state_resume_checks.values()),
         "eval_log_present": bool(stage0 and stage0["has_eval_log"]),
         "validation_loss_finite": _finite(stage0.get("validation_loss") if stage0 else None),
         "baseline_difficulty_report_present": bool(stage0 and stage0.get("baseline_difficulty_report_present")),
@@ -246,6 +252,7 @@ def _gate_stage0(stage0: dict[str, Any] | None) -> dict[str, Any]:
             "eval_determinism_checks": determinism_checks,
             "latest_resume_event": stage0.get("latest_resume_event") if stage0 else {},
             "resume_event_checks": resume_event_checks,
+            "rank_state_resume_event_checks": rank_state_resume_checks,
             **_validation_report_gate_extras(stage0),
             **_model_stats_gate_extras(stage0),
             **_data_manifest_gate_extras(stage0),
@@ -586,6 +593,37 @@ def _resume_event_checks(event: Any) -> dict[str, bool]:
     }
 
 
+def _rank_state_resume_event_checks(event: Any, summary: dict[str, Any] | None) -> dict[str, bool]:
+    if not isinstance(event, dict):
+        event = {}
+    run_dir = Path(str(summary.get("run_dir"))) if summary and summary.get("run_dir") else None
+    rank_state_loaded = event.get("rank_state_loaded")
+    rank_state_path = event.get("rank_state_path")
+    loaded_flag_present = isinstance(rank_state_loaded, bool)
+    path_present = _nonempty_string(rank_state_path)
+    path_name_valid = path_present and Path(str(rank_state_path)).name.startswith("rank_state_")
+    path_points_to_latest = path_present and Path(str(rank_state_path)).parent.name == "checkpoint_latest"
+    file_exists = _rank_state_event_path_exists(rank_state_path, run_dir) if path_present else False
+    return {
+        "rank_state_loaded_flag_present": loaded_flag_present,
+        "rank_state_path_empty_when_not_loaded": rank_state_loaded is not False or not path_present,
+        "rank_state_path_present_when_loaded": rank_state_loaded is not True or path_present,
+        "rank_state_path_name_valid_when_loaded": rank_state_loaded is not True or bool(path_name_valid),
+        "rank_state_path_points_to_latest_when_loaded": rank_state_loaded is not True or bool(path_points_to_latest),
+        "rank_state_file_exists_when_loaded": rank_state_loaded is not True or file_exists,
+    }
+
+
+def _rank_state_event_path_exists(value: Any, run_dir: Path | None) -> bool:
+    if not _nonempty_string(value):
+        return False
+    path = Path(str(value))
+    candidates = [path]
+    if run_dir is not None:
+        candidates.extend([run_dir / path, run_dir / "checkpoint_latest" / path.name])
+    return any(candidate.exists() for candidate in candidates)
+
+
 def _model_stats_checks(stats: Any) -> dict[str, bool]:
     if not isinstance(stats, dict):
         stats = {}
@@ -614,6 +652,7 @@ def _baseline_run_artifact_gate_checks(summary: dict[str, Any] | None) -> dict[s
     return {
         "config_resolved_present": bool(summary and summary.get("config_resolved_present")),
         "train_log_present": bool(summary and summary.get("has_train_log")),
+        "checkpoint_rank_state_present": bool(summary and summary.get("has_checkpoint_latest_rank_state")),
     }
 
 

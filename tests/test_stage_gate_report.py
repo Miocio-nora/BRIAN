@@ -29,11 +29,14 @@ def _write_run(
     write_data_manifest_ref: bool = True,
     default_routing_metrics: bool = True,
     write_checkpoint_best: bool = True,
+    write_rank_state: bool = True,
 ) -> Path:
     run_dir = root / name
     run_dir.mkdir(parents=True)
     (run_dir / "checkpoint_latest").mkdir()
     (run_dir / "checkpoint_latest" / "state.pt").write_bytes(b"stub")
+    if write_rank_state:
+        (run_dir / "checkpoint_latest" / "rank_state_00000.pt").write_bytes(b"stub")
     if write_checkpoint_best:
         (run_dir / "checkpoint_best").mkdir()
         (run_dir / "checkpoint_best" / "state.pt").write_bytes(b"stub")
@@ -171,6 +174,8 @@ def _resume_event(overrides: dict) -> dict:
         "target_max_steps": 2,
         "optimizer_state_loaded": True,
         "rng_state_loaded": True,
+        "rank_state_loaded": False,
+        "rank_state_path": None,
         "data_epoch": 0,
         "microbatch_in_epoch": 1,
     } | overrides
@@ -375,9 +380,17 @@ def test_stage_gate_report_writes_json(tmp_path: Path) -> None:
     assert report["gates"]["stage0_to_1"]["status"] == "pass"
     assert report["gates"]["stage0_to_1"]["checks"]["checkpoint_resume_event"] is True
     assert report["gates"]["stage0_to_1"]["checks"]["checkpoint_resume_event_valid"] is True
+    assert report["gates"]["stage0_to_1"]["checks"]["checkpoint_rank_state_present"] is True
+    assert report["gates"]["stage0_to_1"]["checks"]["checkpoint_rank_state_resume_metadata_valid"] is True
     assert report["gates"]["stage0_to_1"]["resume_event_checks"]["rng_state_loaded"] is True
     assert report["gates"]["stage0_to_1"]["resume_event_checks"]["data_epoch_nonnegative"] is True
     assert report["gates"]["stage0_to_1"]["resume_event_checks"]["microbatch_in_epoch_nonnegative"] is True
+    assert report["gates"]["stage0_to_1"]["rank_state_resume_event_checks"][
+        "rank_state_loaded_flag_present"
+    ] is True
+    assert report["gates"]["stage0_to_1"]["rank_state_resume_event_checks"][
+        "rank_state_path_empty_when_not_loaded"
+    ] is True
     assert report["gates"]["stage0_to_1"]["checks"]["checkpoint_best_artifact"] is True
     assert report["gates"]["stage0_to_1"]["checks"]["eval_determinism_checks_passed"] is True
     assert report["gates"]["stage0_to_1"]["checks"]["model_stats_valid"] is True
@@ -453,6 +466,56 @@ def test_stage0_gate_requires_rng_and_dataloader_resume_state(tmp_path: Path) ->
     assert gate["resume_event_checks"]["rng_state_loaded"] is False
     assert gate["resume_event_checks"]["data_epoch_nonnegative"] is False
     assert gate["resume_event_checks"]["microbatch_in_epoch_nonnegative"] is False
+
+
+def test_stage0_gate_accepts_loaded_rank_state_resume_path(tmp_path: Path) -> None:
+    baseline = _write_run(
+        tmp_path,
+        "baseline",
+        stage="stage0_baseline",
+        val_loss=10.0,
+        train_row={},
+        determinism_status="pass",
+        resume_event={
+            "rank_state_loaded": True,
+            "rank_state_path": "checkpoint_latest/rank_state_00000.pt",
+        },
+        baseline_difficulty_report=_baseline_difficulty_report(),
+    )
+
+    report_path = make_stage_gate_report([baseline], output_path=tmp_path / "gate.json")
+    gate = json.loads(report_path.read_text(encoding="utf-8"))["gates"]["stage0_to_1"]
+
+    assert gate["checks"]["checkpoint_rank_state_present"] is True
+    assert gate["checks"]["checkpoint_rank_state_resume_metadata_valid"] is True
+    assert gate["rank_state_resume_event_checks"]["rank_state_path_present_when_loaded"] is True
+    assert gate["rank_state_resume_event_checks"]["rank_state_path_name_valid_when_loaded"] is True
+    assert gate["rank_state_resume_event_checks"]["rank_state_path_points_to_latest_when_loaded"] is True
+    assert gate["rank_state_resume_event_checks"]["rank_state_file_exists_when_loaded"] is True
+
+
+def test_stage0_gate_requires_loaded_rank_state_file_to_exist(tmp_path: Path) -> None:
+    baseline = _write_run(
+        tmp_path,
+        "baseline",
+        stage="stage0_baseline",
+        val_loss=10.0,
+        train_row={},
+        determinism_status="pass",
+        resume_event={
+            "rank_state_loaded": True,
+            "rank_state_path": "checkpoint_latest/rank_state_00003.pt",
+        },
+        baseline_difficulty_report=_baseline_difficulty_report(),
+    )
+
+    report_path = make_stage_gate_report([baseline], output_path=tmp_path / "gate.json")
+    gate = json.loads(report_path.read_text(encoding="utf-8"))["gates"]["stage0_to_1"]
+
+    assert gate["status"] == "warn"
+    assert gate["checks"]["checkpoint_rank_state_present"] is True
+    assert gate["checks"]["checkpoint_rank_state_resume_metadata_valid"] is False
+    assert gate["rank_state_resume_event_checks"]["rank_state_file_exists_when_loaded"] is False
 
 
 def test_stage0_gate_requires_determinism_key_checks(tmp_path: Path) -> None:
