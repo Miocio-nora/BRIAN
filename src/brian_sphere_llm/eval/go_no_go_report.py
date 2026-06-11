@@ -198,7 +198,7 @@ def _r350_decision(
         _criterion(
             "difficulty_step_correlation_positive",
             _difficulty_positive(stage_gate_report, min_difficulty_step_correlation),
-            {"threshold": min_difficulty_step_correlation},
+            _difficulty_evidence(stage_gate_report, min_difficulty_step_correlation),
         ),
         _criterion(
             "out_action_reduces_compute_on_easy_samples",
@@ -917,13 +917,34 @@ def _reasoning_evidence(baseline: dict[str, Any], candidates: list[dict[str, Any
 
 
 def _difficulty_positive(stage_gate_report: dict[str, Any], minimum: float) -> bool | None:
+    values = _difficulty_values(stage_gate_report)
+    if not values:
+        return None
+    return any(row["difficulty_step_correlation"] > minimum for row in values)
+
+
+def _difficulty_evidence(stage_gate_report: dict[str, Any], minimum: float) -> dict[str, Any]:
+    return {
+        "threshold": minimum,
+        "runs": _difficulty_values(stage_gate_report),
+    }
+
+
+def _difficulty_values(stage_gate_report: dict[str, Any]) -> list[dict[str, Any]]:
+    values = []
     for run in stage_gate_report.get("runs", []):
         if not isinstance(run, dict):
             continue
-        value = run.get("difficulty_step_correlation")
-        if isinstance(value, (int, float)):
-            return float(value) > minimum
-    return None
+        value = _num(run.get("difficulty_step_correlation"))
+        if value is not None:
+            values.append(
+                {
+                    "run_dir": run.get("run_dir"),
+                    "stage": run.get("stage"),
+                    "difficulty_step_correlation": value,
+                }
+            )
+    return values
 
 
 def _overall_status(statuses: list[str]) -> str:

@@ -216,6 +216,29 @@ def test_go_no_go_r350_accepts_global_kv_ablation_memory_quality_evidence(tmp_pa
     ][0]["passes_memory_quality_proxy"] is True
 
 
+def test_go_no_go_r350_difficulty_uses_any_positive_correlation(tmp_path: Path) -> None:
+    stage_gate_data = _passing_stage_gate()
+    stage_gate_data["runs"] = [
+        {"run_dir": "stage2", "stage": "stage2_router_imitation", "difficulty_step_correlation": -0.5},
+        {"run_dir": "stage3", "stage": "stage3_scheduled_free_routing", "difficulty_step_correlation": 0.25},
+    ]
+    stage_gate = _write_json(tmp_path / "stage_gate.json", stage_gate_data)
+
+    output = make_go_no_go_report(
+        stage_gate_report_path=stage_gate,
+        phase="r350_to_1b",
+        output_path=tmp_path / "go.json",
+        min_difficulty_step_correlation=0.0,
+    )
+    report = json.loads(output.read_text(encoding="utf-8"))
+    criteria = {item["name"]: item for item in report["phases"]["r350_to_1b"]["criteria"]}
+    difficulty = criteria["difficulty_step_correlation_positive"]
+
+    assert difficulty["status"] == "pass"
+    assert [row["difficulty_step_correlation"] for row in difficulty["evidence"]["runs"]] == [-0.5, 0.25]
+    assert difficulty["evidence"]["runs"][1]["stage"] == "stage3_scheduled_free_routing"
+
+
 def test_go_no_go_includes_parallel_compare_as_optional_evidence(tmp_path: Path) -> None:
     stage_gate = _write_json(tmp_path / "stage_gate.json", _passing_stage_gate())
     parallel = _write_json(
