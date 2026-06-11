@@ -551,16 +551,41 @@ def test_train_from_config_logs_routed_behavior(tmp_path: Path) -> None:
     eval_rows = [json.loads(line) for line in (run_dir / "eval_log.jsonl").read_text(encoding="utf-8").splitlines()]
     train_row = train_rows[-1]
     eval_row = eval_rows[-1]
+    mandatory_train_numeric_keys = [
+        "route_entropy",
+        "block_load_entropy",
+        "active_block_evals_per_token",
+        "average_route_steps",
+        "p_output_mean",
+        "skip_ratio",
+        "recur_ratio",
+        "advance_ratio",
+        "location_distance_mean",
+        "position_norm_mean",
+        "cost_loss",
+        "balance_loss",
+        "location_loss",
+        "route_imitation_accuracy",
+    ]
+    for key in mandatory_train_numeric_keys:
+        assert isinstance(train_row[key], (int, float))
     for key in [
         "route_entropy",
         "block_load_entropy",
         "active_block_evals_per_token",
         "average_route_steps",
+        "p_output_mean",
+        "skip_ratio",
+        "recur_ratio",
+        "advance_ratio",
+        "location_distance_mean",
+        "position_norm_mean",
         "route_imitation_accuracy",
     ]:
-        assert isinstance(train_row[key], (int, float))
         assert isinstance(eval_row[key], (int, float))
     assert isinstance(train_row["top1_block_histogram"], dict)
+    assert isinstance(train_row["topk_block_histogram"], dict)
+    assert isinstance(train_row["exit_step_distribution"], list)
     assert train_row["route_path_examples"]
     report = json.loads((run_dir / "routing_report.json").read_text(encoding="utf-8"))
     assert report["summary"]["route_entropy"] >= 0.0
