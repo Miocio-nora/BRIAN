@@ -7,6 +7,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from brian_sphere_llm.eval.compute_report import make_compute_report
+from brian_sphere_llm.eval.cost_control_report import make_cost_control_report
 from brian_sphere_llm.eval.difficulty_report import make_difficulty_report
 from brian_sphere_llm.eval.routing_report import make_routing_report
 from brian_sphere_llm.eval.stage_gate_report import make_stage_gate_report
@@ -26,6 +27,7 @@ def main() -> None:
     parser.add_argument("--batch-size", type=int, default=None, help="Batch size override.")
     parser.add_argument("--tflops-per-gpu", type=float, default=None, help="Reference TFLOPs/GPU for compute reports.")
     parser.add_argument("--utilization", type=float, default=None, help="Reference utilization for compute reports.")
+    parser.add_argument("--min-active-compute-range", type=float, default=None, help="Minimum active compute range for cost reports.")
     args = parser.parse_args()
     config = load_config(args.config)
     eval_name = config.get("eval_name", "routing_eval")
@@ -65,6 +67,15 @@ def main() -> None:
             output_path=args.output or config.get("output_path"),
             tflops_per_gpu=float(args.tflops_per_gpu or config.get("tflops_per_gpu", 989.0)),
             utilization=float(args.utilization or config.get("utilization", 0.35)),
+        )
+    elif eval_name == "cost_control_report":
+        runs = args.runs or ([args.run] if args.run else config.get("runs", []))
+        if not runs:
+            raise SystemExit("cost_control_report requires --runs or --run")
+        report = make_cost_control_report(
+            runs,
+            output_path=args.output or config.get("output_path"),
+            min_active_compute_range=float(args.min_active_compute_range or config.get("min_active_compute_range", 0.05)),
         )
     else:
         if not args.run:

@@ -1,0 +1,20 @@
+experiment_name: tiny_cost_control
+description: Fast Stage 4 hard-OUT cost-control smoke package.
+baseline_train_config: configs/train/stage0_tiny_debug.yaml
+ablations:
+  - id: C0
+    name: cost_0
+    train_config: configs/train/stage4_cost0_tiny_debug.yaml
+    purpose: No route cost pressure.
+  - id: C1
+    name: cost_0_001
+    train_config: configs/train/stage4_cost001_tiny_debug.yaml
+    purpose: Light route cost pressure.
+  - id: C2
+    name: cost_0_01
+    train_config: configs/train/stage4_cost01_tiny_debug.yaml
+    purpose: Default Stage 4 route cost pressure.
+  - id: C3
+    name: cost_0_05
+    train_config: configs/train/stage4_cost05_tiny_debug.yaml
+    purpose: Strong route cost pressure.

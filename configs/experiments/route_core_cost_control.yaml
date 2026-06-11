@@ -1,0 +1,20 @@
+experiment_name: route_core_cost_control
+description: BRIAN-R125 Stage 4 hard-OUT cost-control sweep for compute controllability.
+baseline_train_config: configs/train/stage0_baseline.yaml
+ablations:
+  - id: C0
+    name: cost_0
+    train_config: configs/train/ablation_c0_cost0.yaml
+    purpose: No route cost pressure.
+  - id: C1
+    name: cost_0_001
+    train_config: configs/train/ablation_c1_cost001.yaml
+    purpose: Light route cost pressure.
+  - id: C2
+    name: cost_0_01
+    train_config: configs/train/ablation_c2_cost01.yaml
+    purpose: Default Stage 4 route cost pressure.
+  - id: C3
+    name: cost_0_05
+    train_config: configs/train/ablation_c3_cost05.yaml
+    purpose: Strong route cost pressure.

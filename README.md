@@ -142,6 +142,16 @@ python scripts/run_experiment.py \
   --limit 2
 ```
 
+Generate a cost-control report after a Stage 4 sweep:
+
+```bash
+python scripts/eval.py \
+  --config configs/eval/cost_control_report.yaml \
+  --runs <cost0_run> <cost001_run> <cost01_run> <cost05_run>
+```
+
+The fast smoke manifest is `configs/experiments/tiny_cost_control.yaml`; the BRIAN-R125 sweep manifest is `configs/experiments/route_core_cost_control.yaml`.
+
 Run tests:
 
 ```bash

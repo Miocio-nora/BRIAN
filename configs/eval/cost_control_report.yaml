@@ -1,0 +1,3 @@
+eval_name: cost_control_report
+output_path: reports/cost_control_report.json
+min_active_compute_range: 0.05

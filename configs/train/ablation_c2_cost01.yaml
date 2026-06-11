@@ -1,0 +1,6 @@
+extends: stage4_output_action.yaml
+loss_weights:
+  route: 0.05
+  balance: 0.01
+  cost: 0.01
+  location: 0.02
