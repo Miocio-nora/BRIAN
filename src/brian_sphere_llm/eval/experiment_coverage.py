@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+import math
 from pathlib import Path
 from typing import Any
 
@@ -42,6 +43,15 @@ PROFILE_ALIASES = {
     "package_d_r1b_main_validation": "package_d_r1b_main_validation",
 }
 
+PLANNED_PARAMETER_RANGES = {
+    "125m": (110_000_000, 150_000_000),
+    "r125": (110_000_000, 150_000_000),
+    "350m": (300_000_000, 400_000_000),
+    "r350": (300_000_000, 400_000_000),
+    "1b": (800_000_000, 1_300_000_000),
+    "r1b": (800_000_000, 1_300_000_000),
+}
+
 
 def make_experiment_coverage_report(
     manifest_path: str | Path,
@@ -81,6 +91,7 @@ def make_experiment_coverage_report(
         "baseline_data_config_exists": _baseline_check(baseline, "data_config_exists"),
         "baseline_data_config_loads": _baseline_check(baseline, "data_config_loads"),
         "baseline_data_config_consistent": _baseline_data_config_consistent(baseline, entries),
+        "planned_parameter_estimates_in_range": _planned_parameter_estimates_in_range([baseline, *entries]),
         "required_coverage_satisfied": bool(requirements)
         and all(requirement["status"] == "pass" for requirement in requirements),
     }
@@ -837,7 +848,103 @@ def _model_summary(config: dict[str, Any], base_config: dict[str, Any]) -> dict[
         base = config["base"]
         if "d_model" in base:
             summary["base_d_model"] = base.get("d_model")
+    estimated_parameters = _estimate_parameter_count(config, base_config)
+    if estimated_parameters is not None:
+        summary["estimated_parameter_count"] = estimated_parameters
+    planned_range = _planned_parameter_range(summary.get("model_name"))
+    if planned_range is not None:
+        minimum, maximum = planned_range
+        summary["planned_parameter_range"] = {"min": minimum, "max": maximum}
+        summary["estimated_parameter_count_in_plan_range"] = (
+            estimated_parameters is not None and minimum <= estimated_parameters <= maximum
+        )
     return summary
+
+
+def _estimate_parameter_count(config: dict[str, Any], base_config: dict[str, Any]) -> int | None:
+    architecture = config.get("architecture")
+    if architecture == "decoder_only_llama_like":
+        return _estimate_baseline_parameters(config)
+    if architecture != "brian_route_core":
+        return None
+    base = base_config if base_config else config.get("base")
+    if not isinstance(base, dict):
+        return None
+    base_count = _estimate_baseline_parameters(base)
+    route_pool_blocks = _int_or_none(config.get("route_pool_blocks"))
+    block_position_dim = _int_or_none(config.get("block_position_dim"))
+    if base_count is None or route_pool_blocks is None or block_position_dim is None:
+        return None
+    d_model = _int_or_none(base.get("d_model"))
+    n_heads = _int_or_none(base.get("n_heads"))
+    if d_model is None or n_heads is None:
+        return None
+    position_injection = str(config.get("block_position_injection", "adapter"))
+    position_adapter = 0 if position_injection == "direct_add" else block_position_dim * d_model
+    num_actions = route_pool_blocks + 1
+    route_adapter_params = route_pool_blocks * position_adapter
+    exit_block_params = position_adapter + d_model + (d_model * d_model)
+    position_table_params = num_actions * block_position_dim
+    router_params = ((d_model + block_position_dim) * d_model) + d_model + (d_model * num_actions) + num_actions
+    global_params = 0
+    if config.get("global_kv") is True:
+        code_dim = _int_or_none(config.get("global_code_dim")) or block_position_dim
+        head_delta_rank = _int_or_none(config.get("global_head_delta_rank")) or 0
+        adapter_count = num_actions if config.get("global_adapter_scope", "shared") == "per_block" else 1
+        global_params = adapter_count * _global_adapter_parameters(
+            d_model,
+            code_dim,
+            n_heads=n_heads,
+            head_delta_rank=head_delta_rank,
+        )
+    return base_count + route_adapter_params + exit_block_params + position_table_params + router_params + global_params
+
+
+def _estimate_baseline_parameters(config: dict[str, Any]) -> int | None:
+    vocab_size = _int_or_none(config.get("vocab_size"))
+    layers = _int_or_none(config.get("layers"))
+    d_model = _int_or_none(config.get("d_model"))
+    if vocab_size is None or layers is None or d_model is None:
+        return None
+    return (vocab_size * d_model) + (layers * _transformer_block_parameters(d_model)) + d_model
+
+
+def _transformer_block_parameters(d_model: int) -> int:
+    hidden_dim = int(math.ceil(4.0 * d_model / 256) * 256)
+    if d_model < 256:
+        hidden_dim = int(4.0 * d_model)
+    return (4 * d_model * d_model) + (3 * d_model * hidden_dim) + (2 * d_model)
+
+
+def _global_adapter_parameters(d_model: int, code_dim: int, *, n_heads: int, head_delta_rank: int) -> int:
+    write = d_model * code_dim
+    read = (d_model * code_dim) + (code_dim * d_model) + 1
+    if head_delta_rank > 0:
+        head_dim = d_model // n_heads
+        write += (n_heads * head_dim * head_delta_rank) + (n_heads * head_delta_rank * code_dim)
+        read += (n_heads * code_dim * head_delta_rank) + (n_heads * head_delta_rank * head_dim)
+    return write + read
+
+
+def _planned_parameter_range(model_name: Any) -> tuple[int, int] | None:
+    name = str(model_name or "").lower()
+    for scale, planned_range in PLANNED_PARAMETER_RANGES.items():
+        if scale in name:
+            return planned_range
+    return None
+
+
+def _planned_parameter_estimates_in_range(items: list[dict[str, Any] | None]) -> bool:
+    scoped = [
+        item
+        for item in items
+        if isinstance(item, dict)
+        and isinstance(item.get("model"), dict)
+        and _planned_parameter_range(item["model"].get("model_name")) is not None
+    ]
+    if not scoped:
+        return True
+    return all(item["model"].get("estimated_parameter_count_in_plan_range") is True for item in scoped)
 
 
 def _model_config_valid(config: dict[str, Any]) -> bool:
@@ -921,6 +1028,7 @@ def _overall_status(checks: dict[str, bool], requirements: list[dict[str, Any]])
         "baseline_data_config_exists",
         "baseline_data_config_loads",
         "baseline_data_config_consistent",
+        "planned_parameter_estimates_in_range",
     ]:
         if checks.get(critical_check) is False:
             return "fail"
@@ -937,3 +1045,10 @@ def _num(value: Any) -> float | None:
     if isinstance(value, (int, float)):
         return float(value)
     return None
+
+
+def _int_or_none(value: Any) -> int | None:
+    number = _num(value)
+    if number is None or not math.isfinite(number) or not number.is_integer():
+        return None
+    return int(number)

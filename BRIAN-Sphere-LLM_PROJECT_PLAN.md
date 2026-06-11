@@ -222,7 +222,7 @@ Recommended only after `BRIAN-R125` passes route-core success criteria.
 |---|---:|
 | Parameter range | 300M–400M |
 | Layers | 24 |
-| Hidden size | 1024 |
+| Hidden size | 960 configured, 1024 optional |
 | Attention heads | 16 |
 | Pre blocks | 4 |
 | Route pool | 16 |
@@ -1663,4 +1663,3 @@ Only after that should the project add global KV memory.
 ## 26. One-Sentence Project Definition
 
 **BRIAN-Sphere-LLM is a latent routing Transformer framework that learns to navigate a block/operator space with explicit computation-position state, terminal output actions, and optional shared canonical memory, replacing fixed middle-layer depth with adaptive internal computation paths.**
-

@@ -23,6 +23,8 @@ def test_r125_formal_package_coverage_passes(tmp_path: Path) -> None:
     assert report["checks"]["baseline_model_config_valid"] is True
     assert report["checks"]["baseline_data_config_loads"] is True
     assert report["checks"]["baseline_data_config_consistent"] is True
+    assert report["checks"]["planned_parameter_estimates_in_range"] is True
+    assert report["baseline"]["model"]["estimated_parameter_count_in_plan_range"] is True
     assert report["baseline"]["train_mode"] == "baseline"
     assert [row["id"] for row in report["requirements"]] == [
         "A0",
@@ -40,6 +42,8 @@ def test_r125_formal_package_coverage_passes(tmp_path: Path) -> None:
     assert _requirement(report, "A7")["checks"]["loss_weights_match"] is True
     assert _requirement(report, "A8")["checks"]["model_flags_match"] is True
     assert _requirement(report, "A9")["checks"]["model_flags_match"] is True
+    assert _entry(report, "A0")["model"]["estimated_parameter_count_in_plan_range"] is True
+    assert _entry(report, "A1")["model"]["estimated_parameter_count_in_plan_range"] is True
 
 
 def test_r350_scaling_package_coverage_passes(tmp_path: Path) -> None:
@@ -51,8 +55,11 @@ def test_r350_scaling_package_coverage_passes(tmp_path: Path) -> None:
 
     assert report["overall_status"] == "pass"
     assert report["profile"] == "package_b_r350_scaling"
+    assert report["checks"]["planned_parameter_estimates_in_range"] is True
     assert [row["id"] for row in report["requirements"]] == ["B0", "B1", "B2", "B3", "B4"]
     assert _requirement(report, "B2")["checks"]["model_flags_match"] is True
+    assert _entry(report, "B0")["model"]["estimated_parameter_count_in_plan_range"] is True
+    assert _entry(report, "B1")["model"]["estimated_parameter_count_in_plan_range"] is True
 
 
 def test_r1b_pilot_package_coverage_passes(tmp_path: Path) -> None:
@@ -64,11 +71,15 @@ def test_r1b_pilot_package_coverage_passes(tmp_path: Path) -> None:
 
     assert report["overall_status"] == "pass"
     assert report["profile"] == "package_d_r1b_pilot"
+    assert report["checks"]["planned_parameter_estimates_in_range"] is True
     assert [row["id"] for row in report["requirements"]] == ["D0", "D1"]
     assert _requirement(report, "D0")["checks"]["model_flags_match"] is True
     assert _requirement(report, "D0")["checks"]["train_flags_match"] is True
     assert _requirement(report, "D1")["checks"]["model_flags_match"] is True
     assert _requirement(report, "D1")["checks"]["train_flags_match"] is True
+    assert _entry(report, "D0")["model"]["estimated_parameter_count_in_plan_range"] is True
+    assert _entry(report, "D1")["model"]["estimated_parameter_count_in_plan_range"] is True
+    assert 800_000_000 <= _entry(report, "D0")["model"]["estimated_parameter_count"] <= 1_300_000_000
     assert report["checks"]["baseline_data_config_consistent"] is True
 
 
@@ -270,6 +281,45 @@ def test_experiment_coverage_fails_data_config_load_error(tmp_path: Path) -> Non
     assert broken_entry["checks"]["data_config_exists"] is True
     assert broken_entry["checks"]["data_config_loads"] is False
     assert "Expected mapping" in broken_entry["errors"]["data_config"]
+
+
+def test_experiment_coverage_fails_out_of_range_planned_parameters(tmp_path: Path) -> None:
+    source = load_config("configs/experiments/route_core_r1b_pilot.yaml")
+    oversized_model = tmp_path / "oversized_1b.yaml"
+    oversized_model.write_text(
+        yaml.safe_dump(
+            {
+                "extends": str(Path("configs/model/baseline_1b.yaml").resolve()),
+                "d_model": 2048,
+                "n_heads": 32,
+            }
+        ),
+        encoding="utf-8",
+    )
+    oversized_train = tmp_path / "oversized_1b_train.yaml"
+    oversized_train.write_text(
+        yaml.safe_dump(
+            {
+                "extends": str(Path("configs/train/stage0_r1b_baseline.yaml").resolve()),
+                "model_config": str(oversized_model),
+            }
+        ),
+        encoding="utf-8",
+    )
+    source["ablations"][0]["train_config"] = str(oversized_train)
+    manifest = tmp_path / "oversized_manifest.yaml"
+    manifest.write_text(yaml.safe_dump(source), encoding="utf-8")
+
+    output = make_experiment_coverage_report(
+        manifest,
+        output_path=tmp_path / "coverage.json",
+        profile="route_core_r1b_pilot",
+    )
+    report = json.loads(output.read_text(encoding="utf-8"))
+
+    assert report["overall_status"] == "fail"
+    assert report["checks"]["planned_parameter_estimates_in_range"] is False
+    assert _entry(report, "D0")["model"]["estimated_parameter_count_in_plan_range"] is False
 
 
 def test_global_kv_package_coverage_passes_window_and_sink_requirements(tmp_path: Path) -> None:
@@ -505,3 +555,7 @@ def test_experiment_coverage_eval_config_resolves() -> None:
 
 def _requirement(report: dict, requirement_id: str) -> dict:
     return next(row for row in report["requirements"] if row["id"] == requirement_id)
+
+
+def _entry(report: dict, entry_id: str) -> dict:
+    return next(row for row in report["entries"] if row["id"] == entry_id)

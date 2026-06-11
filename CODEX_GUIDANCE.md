@@ -472,7 +472,7 @@ vocab_size: 32000
 ```yaml
 model_name: baseline_350m
 layers: 24
-d_model: 1024
+d_model: 960
 n_heads: 16
 ffn_type: swiglu
 norm: rmsnorm
@@ -486,8 +486,8 @@ vocab_size: 32000
 ```yaml
 model_name: baseline_1b
 layers: 32
-d_model: 2048
-n_heads: 16_or_32
+d_model: 1536
+n_heads: 24
 ffn_type: swiglu
 norm: rmsnorm
 token_position: rope
@@ -1197,4 +1197,3 @@ Implement the system in this order:
 Do not skip directly to the full architecture.
 
 The project succeeds only if we can explain *why* a result happened from route metrics, not merely report a validation loss.
-
