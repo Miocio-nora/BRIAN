@@ -136,6 +136,35 @@ python scripts/eval.py \
 
 This writes a needle-retrieval / two-hop tracing report with exact-match accuracy, teacher-forced target token accuracy, truncation rate, and Global KV routing diagnostics.
 
+Compare a local-KV baseline against one or more Global KV candidates:
+
+```bash
+python scripts/eval.py \
+  --config configs/eval/long_context_eval.yaml \
+  --run <stage4_local_kv_run> \
+  --output reports/long_context_local.json
+
+python scripts/eval.py \
+  --config configs/eval/long_context_eval.yaml \
+  --run <stage5_global_kv_run> \
+  --output reports/long_context_global.json
+
+python scripts/eval.py \
+  --config configs/eval/long_context_compare.yaml \
+  --baseline-report reports/long_context_local.json \
+  --reports reports/long_context_global.json \
+  --output reports/long_context_compare.json
+```
+
+The comparison report checks that Global KV is active and that exact-match / teacher-forced quality is not worse than the local-KV report beyond `quality_tolerance`. Pass it into the Stage 5 gate:
+
+```bash
+python scripts/eval.py \
+  --config configs/eval/stage_gate_eval.yaml \
+  --runs <stage0_run> <stage1_run> <stage2_run> <stage3_run> <stage4_run> <stage5_run> \
+  --long-context-compare-report reports/long_context_compare.json
+```
+
 Generate a compute-adjusted comparison report:
 
 ```bash
@@ -184,6 +213,16 @@ python scripts/eval.py \
 ```
 
 The fast smoke manifest is `configs/experiments/tiny_cost_control.yaml`; the BRIAN-R125 sweep manifest is `configs/experiments/route_core_cost_control.yaml`.
+
+Run the Stage 5 Global KV ablation packages:
+
+```bash
+python scripts/run_experiment.py \
+  --config configs/experiments/tiny_global_kv.yaml \
+  --dry-run
+```
+
+The fast smoke manifest is `configs/experiments/tiny_global_kv.yaml`; the BRIAN-R125 sweep manifest is `configs/experiments/route_core_global_kv.yaml`. These cover the local-KV baseline, no-sink Global KV, default sink+window Global KV, and a small cache-window sweep.
 
 Run tests:
 

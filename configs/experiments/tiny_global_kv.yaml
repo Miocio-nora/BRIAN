@@ -1,0 +1,24 @@
+experiment_name: tiny_global_kv
+description: Fast Stage 5 Global KV smoke package for local-vs-global and cache-window checks.
+baseline_train_config: configs/train/stage4_tiny_debug.yaml
+ablations:
+  - id: K0
+    name: local_kv_only
+    train_config: configs/train/stage4_tiny_debug.yaml
+    purpose: Local-only hard-OUT memory baseline.
+  - id: K3
+    name: global_kv_no_sink
+    train_config: configs/train/stage5_tiny_global_kv_no_sink.yaml
+    purpose: Test whether sink retention is needed in the tiny Global KV path.
+  - id: K4
+    name: global_kv_with_sink
+    train_config: configs/train/stage5_tiny_debug.yaml
+    purpose: Main tiny Global KV path with sink plus sliding window.
+  - id: K5a
+    name: global_kv_window1
+    train_config: configs/train/stage5_tiny_global_kv_window1.yaml
+    purpose: Small cache-window point for the memory-quality curve.
+  - id: K5b
+    name: global_kv_window6
+    train_config: configs/train/stage5_tiny_global_kv_window6.yaml
+    purpose: Larger cache-window point for the memory-quality curve.

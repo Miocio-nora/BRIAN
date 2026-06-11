@@ -10,6 +10,7 @@ from brian_sphere_llm.eval.compute_report import make_compute_report
 from brian_sphere_llm.eval.cost_control_report import make_cost_control_report
 from brian_sphere_llm.eval.difficulty_report import make_difficulty_report
 from brian_sphere_llm.eval.long_context import make_long_context_report
+from brian_sphere_llm.eval.long_context_compare import make_long_context_comparison_report
 from brian_sphere_llm.eval.reasoning import make_reasoning_report
 from brian_sphere_llm.eval.routing_report import make_routing_report
 from brian_sphere_llm.eval.stage_gate_report import make_stage_gate_report
@@ -31,8 +32,11 @@ def main() -> None:
     parser.add_argument("--utilization", type=float, default=None, help="Reference utilization for compute reports.")
     parser.add_argument("--min-active-compute-range", type=float, default=None, help="Minimum active compute range for cost reports.")
     parser.add_argument("--cost-control-report", default=None, help="Cost-control report path for stage gate eval.")
+    parser.add_argument("--long-context-compare-report", default=None, help="Long-context comparison report path for stage gate eval.")
     parser.add_argument("--checkpoint", default=None, help="Checkpoint name for model-based evals.")
     parser.add_argument("--sample-count", type=int, default=None, help="Sample count for synthetic evals.")
+    parser.add_argument("--baseline-report", default=None, help="Baseline report path for comparison evals.")
+    parser.add_argument("--reports", nargs="*", default=None, help="Candidate report paths for comparison evals.")
     args = parser.parse_args()
     config = load_config(args.config)
     eval_name = config.get("eval_name", "routing_eval")
@@ -45,6 +49,8 @@ def main() -> None:
             output_path=args.output or config.get("output_path"),
             thresholds=config.get("thresholds", {}),
             cost_control_report_path=args.cost_control_report or config.get("cost_control_report_path"),
+            long_context_compare_report_path=args.long_context_compare_report
+            or config.get("long_context_compare_report_path"),
         )
     elif eval_name == "difficulty_step_eval":
         baseline_run = args.baseline_run or config.get("baseline_run")
@@ -108,6 +114,19 @@ def main() -> None:
             device_name=str(config.get("device", "auto")),
             task_families=list(config.get("task_families", ["needle_retrieval", "two_hop_tracing"])),
             difficulties=list(config.get("difficulties", ["near", "middle", "far"])),
+        )
+    elif eval_name == "long_context_compare":
+        baseline_report = args.baseline_report or config.get("baseline_report")
+        candidate_reports = args.reports or config.get("candidate_reports", [])
+        if not baseline_report or not candidate_reports:
+            raise SystemExit("long_context_compare requires --baseline-report and --reports")
+        report = make_long_context_comparison_report(
+            baseline_report,
+            candidate_reports,
+            output_path=args.output or config.get("output_path"),
+            min_global_attention_mass=float(config.get("min_global_attention_mass", 1e-6)),
+            min_global_read_gate=float(config.get("min_global_read_gate", 1e-6)),
+            quality_tolerance=float(config.get("quality_tolerance", 0.0)),
         )
     else:
         if not args.run:

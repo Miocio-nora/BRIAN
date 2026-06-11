@@ -1,6 +1,7 @@
 eval_name: stage_gate_eval
 output_path: reports/stage_gate_report.json
 cost_control_report_path: null
+long_context_compare_report_path: null
 thresholds:
   fixed_route_loss_ratio_max: 1.03
   stage3_loss_ratio_max: 1.20

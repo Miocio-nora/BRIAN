@@ -1,0 +1,24 @@
+experiment_name: route_core_global_kv
+description: BRIAN-R125 Stage 5 Global KV ablations for local-vs-global and cache-window validation.
+baseline_train_config: configs/train/stage4_output_action.yaml
+ablations:
+  - id: K0
+    name: local_kv_only
+    train_config: configs/train/stage4_output_action.yaml
+    purpose: Local-only hard-OUT memory baseline.
+  - id: K3
+    name: global_kv_no_sink
+    train_config: configs/train/ablation_k3_global_kv_no_sink.yaml
+    purpose: Test sink retention by removing permanent global sink slots.
+  - id: K4
+    name: global_kv_with_sink
+    train_config: configs/train/stage5_global_kv.yaml
+    purpose: Main canonical Global KV path with sink plus sliding window.
+  - id: K5a
+    name: global_kv_window8
+    train_config: configs/train/ablation_k5_global_kv_window8.yaml
+    purpose: Smaller cache-window point for memory-quality comparison.
+  - id: K5b
+    name: global_kv_window64
+    train_config: configs/train/ablation_k5_global_kv_window64.yaml
+    purpose: Larger cache-window point for memory-quality comparison.

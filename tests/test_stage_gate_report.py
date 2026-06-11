@@ -67,13 +67,29 @@ def test_stage_gate_report_writes_json(tmp_path: Path) -> None:
             "top1_block_histogram": {"0": 1, "1": 1, "2": 1},
         },
     )
+    long_context_compare = tmp_path / "long_context_compare.json"
+    long_context_compare.write_text(
+        json.dumps(
+            {
+                "overall_status": "pass",
+                "candidate_count": 1,
+                "comparisons": [{"status": "pass", "checks": {"global_kv_active": True, "quality_not_worse": True}}],
+            }
+        ),
+        encoding="utf-8",
+    )
     output = tmp_path / "gate.json"
-    report_path = make_stage_gate_report([baseline, fixed, stage5], output_path=output)
+    report_path = make_stage_gate_report(
+        [baseline, fixed, stage5],
+        output_path=output,
+        long_context_compare_report_path=long_context_compare,
+    )
     report = json.loads(report_path.read_text(encoding="utf-8"))
     assert report["run_count"] == 3
     assert report["gates"]["stage0_to_1"]["status"] == "pass"
     assert report["gates"]["stage1_to_2"]["status"] == "pass"
     assert report["gates"]["stage5_to_6"]["status"] == "pass"
+    assert report["supplemental_reports"]["long_context_compare_report"] == str(long_context_compare)
 
 
 def test_stage_gate_report_uses_cost_control_report(tmp_path: Path) -> None:
@@ -113,3 +129,23 @@ def test_stage_gate_report_uses_cost_control_report(tmp_path: Path) -> None:
     assert gate["checks"]["cost_control_active_range_present"] is True
     assert gate["cost_control_status"] == "pass"
     assert report["supplemental_reports"]["cost_control_report"] == str(cost_report)
+
+
+def test_stage5_gate_warns_without_long_context_compare_report(tmp_path: Path) -> None:
+    stage5 = _write_run(
+        tmp_path,
+        "global",
+        stage="stage5_global_kv",
+        val_loss=10.0,
+        train_row={
+            "global_attention_mass": 1.0,
+            "global_read_gate_mean": 0.01,
+            "global_cache_slots_mean": 2.0,
+            "top1_block_histogram": {"0": 1, "1": 1, "2": 1},
+        },
+    )
+    report_path = make_stage_gate_report([stage5], output_path=tmp_path / "gate.json")
+    gate = json.loads(report_path.read_text(encoding="utf-8"))["gates"]["stage5_to_6"]
+    assert gate["status"] == "warn"
+    assert gate["checks"]["long_context_compare_report_present"] is False
+    assert gate["checks"]["long_context_global_kv_benefit_proxy"] is False

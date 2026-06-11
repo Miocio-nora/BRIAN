@@ -15,6 +15,15 @@ def test_build_experiment_plan_resolves_repo_paths() -> None:
     assert plan.entries[1].train_config.name == "stage3_no_position_tiny_debug.yaml"
 
 
+def test_global_kv_experiment_manifest_resolves_repo_paths() -> None:
+    plan = build_experiment_plan("configs/experiments/tiny_global_kv.yaml", include_baseline=True)
+    assert plan.experiment_name == "tiny_global_kv"
+    assert plan.entries[0].role == "baseline"
+    assert plan.entries[0].train_config.name == "stage4_tiny_debug.yaml"
+    assert [entry.id for entry in plan.entries[1:]] == ["K0", "K3", "K4", "K5a", "K5b"]
+    assert plan.entries[3].train_config.name == "stage5_tiny_debug.yaml"
+
+
 def test_run_experiment_dry_run_writes_resolved_plan(tmp_path: Path) -> None:
     output = run_experiment(
         "configs/experiments/tiny_position_ablations.yaml",

@@ -28,18 +28,22 @@ def make_stage_gate_report(
     output_path: str | Path | None = None,
     thresholds: dict[str, float] | None = None,
     cost_control_report_path: str | Path | None = None,
+    long_context_compare_report_path: str | Path | None = None,
 ) -> Path:
     thresholds = {**DEFAULT_THRESHOLDS, **(thresholds or {})}
     summaries = [_summarize_run(Path(run_dir)) for run_dir in run_dirs]
     by_stage = {summary["stage"]: summary for summary in summaries if summary["stage"]}
     cost_control_report = _read_json_if_exists(Path(cost_control_report_path)) if cost_control_report_path else {}
+    long_context_compare_report = (
+        _read_json_if_exists(Path(long_context_compare_report_path)) if long_context_compare_report_path else {}
+    )
     gates = {
         "stage0_to_1": _gate_stage0(by_stage.get("stage0_baseline")),
         "stage1_to_2": _gate_stage1(by_stage.get("stage1_fixed_route"), by_stage.get("stage0_baseline"), thresholds),
         "stage2_to_3": _gate_stage2(by_stage.get("stage2_router_imitation"), thresholds),
         "stage3_to_4": _gate_stage3(by_stage.get("stage3_scheduled_free_routing"), by_stage.get("stage1_fixed_route"), thresholds),
         "stage4_to_5": _gate_stage4(by_stage.get("stage4_output_action"), cost_control_report),
-        "stage5_to_6": _gate_stage5(by_stage.get("stage5_global_kv"), thresholds),
+        "stage5_to_6": _gate_stage5(by_stage.get("stage5_global_kv"), thresholds, long_context_compare_report),
         "stage6_to_scale": _gate_stage6(by_stage.get("stage6_parallel_passing")),
     }
     report = {
@@ -50,6 +54,7 @@ def make_stage_gate_report(
         "thresholds": thresholds,
         "supplemental_reports": {
             "cost_control_report": str(cost_control_report_path) if cost_control_report_path else None,
+            "long_context_compare_report": str(long_context_compare_report_path) if long_context_compare_report_path else None,
         },
     }
     if output_path is None:
@@ -186,14 +191,31 @@ def _gate_stage4(stage4: dict[str, Any] | None, cost_control_report: dict[str, A
     )
 
 
-def _gate_stage5(stage5: dict[str, Any] | None, thresholds: dict[str, float]) -> dict[str, Any]:
+def _gate_stage5(
+    stage5: dict[str, Any] | None,
+    thresholds: dict[str, float],
+    long_context_compare_report: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    comparisons = long_context_compare_report.get("comparisons", []) if long_context_compare_report else []
+    any_long_context_pass = any(item.get("status") == "pass" for item in comparisons if isinstance(item, dict))
     checks = {
         "global_attention_mass_nonzero": _metric_at_least(stage5, "global_attention_mass", thresholds["global_attention_mass_min"]),
         "global_read_gate_nonzero": _metric_at_least(stage5, "global_read_gate_mean", thresholds["global_read_gate_min"]),
         "global_cache_slots_present": _metric_at_least(stage5, "global_cache_slots_mean", 1.0),
+        "long_context_compare_report_present": bool(long_context_compare_report),
+        "long_context_global_kv_benefit_proxy": any_long_context_pass,
         "checkpoint_present": bool(stage5 and stage5["has_checkpoint_latest"]),
     }
-    return _gate("Stage 5 Global KV is active and measurable", checks)
+    return _gate(
+        "Stage 5 Global KV is active and has long-context comparison evidence",
+        checks,
+        {
+            "long_context_compare_status": long_context_compare_report.get("overall_status") if long_context_compare_report else None,
+            "long_context_compare_candidate_count": long_context_compare_report.get("candidate_count")
+            if long_context_compare_report
+            else None,
+        },
+    )
 
 
 def _gate_stage6(stage6: dict[str, Any] | None) -> dict[str, Any]:
