@@ -36,6 +36,76 @@ def test_model_configs_have_known_architecture_and_base_refs() -> None:
     assert errors == []
 
 
+def test_planned_model_architecture_ladder_is_declared() -> None:
+    baseline_expected = {
+        "baseline_125m.yaml": {"layers": 12, "d_model": 768, "n_heads": 12, "context_length": 2048},
+        "baseline_350m.yaml": {"layers": 24, "d_model": 960, "n_heads": 16, "context_length": 4096},
+        "baseline_1b.yaml": {"layers": 32, "d_model": 1536, "n_heads": 24, "context_length": 4096},
+    }
+    route_expected = {
+        "brian_r125.yaml": {
+            "base_config": "baseline_125m.yaml",
+            "pre_blocks": 2,
+            "route_pool_blocks": 8,
+            "post_blocks": 2,
+            "block_position_dim": 64,
+            "max_route_steps": 4,
+            "top_k": 1,
+            "later_top_k": 2,
+            "global_kv": False,
+            "parallel_passing": False,
+        },
+        "brian_r350.yaml": {
+            "base_config": "baseline_350m.yaml",
+            "pre_blocks": 4,
+            "route_pool_blocks": 16,
+            "post_blocks": 4,
+            "block_position_dim": 128,
+            "max_route_steps": 8,
+            "top_k": 1,
+            "later_top_k": 2,
+            "global_kv": False,
+            "global_kv_phase": "phase_2_only",
+            "parallel_passing": False,
+        },
+        "brian_r1b.yaml": {
+            "base_config": "baseline_1b.yaml",
+            "pre_blocks": 6,
+            "route_pool_blocks": 20,
+            "post_blocks": 6,
+            "block_position_dim": 256,
+            "max_route_steps": 12,
+            "top_k": 2,
+            "later_top_k": 2,
+            "global_kv": True,
+            "global_kv_phase": "after_route_core",
+            "parallel_passing": False,
+            "parallel_passing_phase": "experimental_only",
+        },
+    }
+
+    for filename, expected in baseline_expected.items():
+        config = load_config(CONFIG_ROOT / "model" / filename)
+        assert config["architecture"] == "decoder_only_llama_like"
+        assert config["ffn_type"] == "swiglu"
+        assert config["norm"] == "rmsnorm"
+        assert config["token_position"] == "rope"
+        assert config["vocab_size"] == 32000
+        for key, value in expected.items():
+            assert config[key] == value
+
+    for filename, expected in route_expected.items():
+        config = load_config(CONFIG_ROOT / "model" / filename)
+        assert config["architecture"] == "brian_route_core"
+        assert config["block_position_mode"] == "open_arc"
+        assert config["block_position_injection"] == "adapter"
+        assert config["position_to_router"] is True
+        assert config["position_to_blocks"] is True
+        assert config["hard_exit"] is False
+        for key, value in expected.items():
+            assert config[key] == value
+
+
 def test_train_configs_resolve_stage_model_and_data_refs() -> None:
     errors: list[str] = []
     for path in _yaml_files(CONFIG_ROOT / "train"):
