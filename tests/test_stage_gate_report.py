@@ -28,13 +28,15 @@ def _write_run(
     data_manifest_ref: dict | None = None,
     write_data_manifest_ref: bool = True,
     default_routing_metrics: bool = True,
+    write_checkpoint_best: bool = True,
 ) -> Path:
     run_dir = root / name
     run_dir.mkdir(parents=True)
     (run_dir / "checkpoint_latest").mkdir()
     (run_dir / "checkpoint_latest" / "state.pt").write_bytes(b"stub")
-    (run_dir / "checkpoint_best").mkdir()
-    (run_dir / "checkpoint_best" / "state.pt").write_bytes(b"stub")
+    if write_checkpoint_best:
+        (run_dir / "checkpoint_best").mkdir()
+        (run_dir / "checkpoint_best" / "state.pt").write_bytes(b"stub")
     stats = _model_stats(name) if model_stats is None else model_stats
     (run_dir / "model_stats.json").write_text(json.dumps(stats), encoding="utf-8")
     if write_data_manifest_ref:
@@ -326,10 +328,13 @@ def test_stage_gate_report_writes_json(tmp_path: Path) -> None:
     assert report["gates"]["stage0_to_1"]["checks"]["eval_determinism_checks_passed"] is True
     assert report["gates"]["stage0_to_1"]["checks"]["model_stats_valid"] is True
     assert report["gates"]["stage0_to_1"]["checks"]["data_manifest_ref_valid"] is True
+    assert report["gates"]["stage0_to_1"]["checks"]["config_resolved_present"] is True
+    assert report["gates"]["stage0_to_1"]["checks"]["train_log_present"] is True
     assert report["gates"]["stage0_to_1"]["checks"]["baseline_difficulty_bins_present"] is True
     assert report["gates"]["stage1_to_2"]["status"] == "pass"
     assert report["gates"]["stage1_to_2"]["checks"]["fixed_route_stability_passed"] is True
     assert report["gates"]["stage1_to_2"]["checks"]["routing_report_valid"] is True
+    assert report["gates"]["stage1_to_2"]["checks"]["checkpoint_best_present"] is True
     assert report["gates"]["stage2_to_3"]["status"] == "pass"
     assert report["gates"]["stage2_to_3"]["checks"]["pseudo_route_curriculum_passed"] is True
     assert report["gates"]["stage3_to_4"]["status"] == "pass"
@@ -511,6 +516,56 @@ def test_stage1_gate_requires_valid_routing_report(tmp_path: Path) -> None:
     assert gate["routing_report_status"] == "warn"
     assert gate["routing_report_checks"]["core_route_metrics_present"] is False
     assert gate["routing_report_checks"]["route_path_examples_present"] is False
+
+
+def test_stage1_gate_requires_best_checkpoint_artifact(tmp_path: Path) -> None:
+    baseline = _write_run(
+        tmp_path,
+        "baseline",
+        stage="stage0_baseline",
+        val_loss=10.0,
+        train_row={},
+        determinism_status="pass",
+        resume_event={
+            "checkpoint": "checkpoint_latest",
+            "resumed_from_step": 1,
+            "target_max_steps": 2,
+            "optimizer_state_loaded": True,
+        },
+        baseline_difficulty_report=_baseline_difficulty_report(),
+    )
+    fixed = _write_run(
+        tmp_path,
+        "fixed",
+        stage="stage1_fixed_route",
+        val_loss=10.1,
+        train_row={
+            "route_imitation_accuracy": 0.99,
+            "position_norm_mean": 1.0,
+        },
+        fixed_route_stability_report={
+            "overall_status": "pass",
+            "checks": {
+                "forward_completed": True,
+                "logits_shape_matches": True,
+                "logits_finite": True,
+                "sample_losses_finite": True,
+                "fixed_route_matches_targets": True,
+                "route_imitation_accuracy_is_one": True,
+                "position_norm_finite": True,
+                "routing_summary_finite": True,
+            },
+        },
+        write_checkpoint_best=False,
+    )
+
+    report_path = make_stage_gate_report([baseline, fixed], output_path=tmp_path / "gate.json")
+    gate = json.loads(report_path.read_text(encoding="utf-8"))["gates"]["stage1_to_2"]
+
+    assert gate["status"] == "warn"
+    assert gate["checks"]["checkpoint_present"] is True
+    assert gate["checks"]["checkpoint_best_present"] is False
+    assert gate["checks"]["routing_report_valid"] is True
 
 
 def test_stage_gate_report_uses_cost_control_report(tmp_path: Path) -> None:

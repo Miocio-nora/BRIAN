@@ -136,6 +136,7 @@ def _summarize_run(run_dir: Path) -> dict[str, Any]:
     summary = {
         "run_dir": str(run_dir),
         "stage": stage,
+        "config_resolved_present": bool(config),
         "model_name": model_stats.get("model_name", ""),
         "parameter_count": model_stats.get("parameter_count"),
         "model_stats": model_stats,
@@ -219,6 +220,7 @@ def _gate_stage0(stage0: dict[str, Any] | None) -> dict[str, Any]:
         "eval_determinism_report_present": bool(stage0 and stage0.get("eval_determinism_report_present")),
         "eval_deterministic": bool(stage0 and stage0.get("eval_determinism_status") == "pass"),
         "eval_determinism_checks_passed": _eval_determinism_checks_passed(determinism_checks),
+        **_baseline_run_artifact_gate_checks(stage0),
         **_model_stats_gate_checks(stage0),
         **_data_manifest_gate_checks(stage0),
     }
@@ -248,6 +250,7 @@ def _gate_stage1(stage1: dict[str, Any] | None, stage0: dict[str, Any] | None, t
         "fixed_route_stability_report_present": bool(stage1 and stage1.get("fixed_route_stability_report_present")),
         "fixed_route_stability_passed": bool(stage1 and stage1.get("fixed_route_stability_status") == "pass"),
         "checkpoint_present": bool(stage1 and stage1["has_checkpoint_latest"]),
+        **_routed_run_artifact_gate_checks(stage1),
         **_routing_report_gate_checks(stage1),
         **_model_stats_gate_checks(stage1),
         **_data_manifest_gate_checks(stage1),
@@ -275,6 +278,7 @@ def _gate_stage2(stage2: dict[str, Any] | None, thresholds: dict[str, float]) ->
         "pseudo_route_curriculum_report_present": bool(stage2 and stage2.get("pseudo_route_curriculum_report_present")),
         "pseudo_route_curriculum_passed": bool(stage2 and stage2.get("pseudo_route_curriculum_status") == "pass"),
         "checkpoint_present": bool(stage2 and stage2["has_checkpoint_latest"]),
+        **_routed_run_artifact_gate_checks(stage2),
         **_routing_report_gate_checks(stage2),
         **_model_stats_gate_checks(stage2),
         **_data_manifest_gate_checks(stage2),
@@ -309,6 +313,7 @@ def _gate_stage3(stage3: dict[str, Any] | None, stage1: dict[str, Any] | None, t
         "scheduled_routing_report_present": bool(stage3 and stage3.get("scheduled_routing_report_present")),
         "scheduled_routing_passed": bool(stage3 and stage3.get("scheduled_routing_status") == "pass"),
         "checkpoint_present": bool(stage3 and stage3["has_checkpoint_latest"]),
+        **_routed_run_artifact_gate_checks(stage3),
         **_routing_report_gate_checks(stage3),
         **_model_stats_gate_checks(stage3),
         **_data_manifest_gate_checks(stage3),
@@ -355,6 +360,7 @@ def _gate_stage4(
         and bool(out_checks.get("active_compute_non_decreasing_with_difficulty", False)),
         "easy_output_probability_not_below_hard": bool(out_checks.get("easy_output_probability_at_least_hard", False)),
         "checkpoint_present": bool(stage4 and stage4["has_checkpoint_latest"]),
+        **_routed_run_artifact_gate_checks(stage4),
         **_routing_report_gate_checks(stage4),
         **_model_stats_gate_checks(stage4),
         **_data_manifest_gate_checks(stage4),
@@ -410,6 +416,7 @@ def _gate_stage5(
         ),
         "long_context_global_kv_benefit_proxy": any_long_context_pass,
         "checkpoint_present": bool(stage5 and stage5["has_checkpoint_latest"]),
+        **_routed_run_artifact_gate_checks(stage5),
         **_routing_report_gate_checks(stage5),
         **_model_stats_gate_checks(stage5),
         **_data_manifest_gate_checks(stage5),
@@ -467,6 +474,7 @@ def _gate_stage6(
         ),
         "parallel_branch_benefit_proxy": any_parallel_pass,
         "checkpoint_present": bool(stage6 and stage6["has_checkpoint_latest"]),
+        **_routed_run_artifact_gate_checks(stage6),
         **_routing_report_gate_checks(stage6),
         **_model_stats_gate_checks(stage6),
         **_data_manifest_gate_checks(stage6),
@@ -562,6 +570,20 @@ def _model_stats_gate_extras(summary: dict[str, Any] | None) -> dict[str, Any]:
     return {
         "model_stats": summary.get("model_stats") if summary else {},
         "model_stats_checks": summary.get("model_stats_checks") if summary else {},
+    }
+
+
+def _baseline_run_artifact_gate_checks(summary: dict[str, Any] | None) -> dict[str, bool]:
+    return {
+        "config_resolved_present": bool(summary and summary.get("config_resolved_present")),
+        "train_log_present": bool(summary and summary.get("has_train_log")),
+    }
+
+
+def _routed_run_artifact_gate_checks(summary: dict[str, Any] | None) -> dict[str, bool]:
+    return {
+        **_baseline_run_artifact_gate_checks(summary),
+        "checkpoint_best_present": bool(summary and summary.get("has_checkpoint_best")),
     }
 
 
