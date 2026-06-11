@@ -69,6 +69,7 @@ def train_from_config(config_path: str | Path) -> Path:
     data_config = load_config(data_config_path)
     tokenized_dir = Path(data_config["output_dir"])
     model = build_model_from_config(model_config_path)
+    _set_activation_checkpointing(model, _bool_config(config, "activation_checkpointing", default=False))
     device = _device(str(config.get("device", "auto")))
     model.to(device)
 
@@ -207,6 +208,11 @@ def _forward_for_stage(model: Any, batch: "torch.Tensor", *, config: dict[str, A
     if schedule_values:
         outputs["schedule_values"] = schedule_values
     return outputs
+
+
+def _set_activation_checkpointing(model: Any, enabled: bool) -> None:
+    if hasattr(model, "activation_checkpointing"):
+        model.activation_checkpointing = enabled
 
 
 def _schedule_values(config: dict[str, Any], *, route_mode: str, global_step: int) -> dict[str, float]:

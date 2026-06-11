@@ -66,7 +66,9 @@ def test_r1b_pilot_package_coverage_passes(tmp_path: Path) -> None:
     assert report["profile"] == "package_d_r1b_pilot"
     assert [row["id"] for row in report["requirements"]] == ["D0", "D1"]
     assert _requirement(report, "D0")["checks"]["model_flags_match"] is True
+    assert _requirement(report, "D0")["checks"]["train_flags_match"] is True
     assert _requirement(report, "D1")["checks"]["model_flags_match"] is True
+    assert _requirement(report, "D1")["checks"]["train_flags_match"] is True
     assert report["checks"]["baseline_data_config_consistent"] is True
 
 

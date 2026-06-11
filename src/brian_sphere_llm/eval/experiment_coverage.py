@@ -166,6 +166,7 @@ def _requirements(profile: str, plan: ExperimentPlan, entries: list[dict[str, An
                     stage="stage0_baseline",
                     mode="baseline",
                     model_flags={"model_name": "baseline_1b"},
+                    train_flags={"activation_checkpointing": True},
                 ),
                 _req(
                     "D1",
@@ -178,6 +179,7 @@ def _requirements(profile: str, plan: ExperimentPlan, entries: list[dict[str, An
                         "parallel_passing": False,
                         "top_k": 2,
                     },
+                    train_flags={"activation_checkpointing": True},
                 ),
             ],
         )
@@ -192,6 +194,7 @@ def _req(
     mode: str | None = None,
     model_flags: dict[str, Any] | None = None,
     loss_weights: dict[str, float] | None = None,
+    train_flags: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     return {
         "entry_id": entry_id,
@@ -200,6 +203,7 @@ def _req(
         "mode": mode,
         "model_flags": model_flags or {},
         "loss_weights": loss_weights or {},
+        "train_flags": train_flags or {},
     }
 
 
@@ -508,6 +512,7 @@ def _requirement_row(spec: dict[str, Any], matches: list[dict[str, Any]]) -> dic
         "mode_matches": _check_mode(entry, spec.get("mode")),
         "model_flags_match": _check_mapping(entry, "model", spec["model_flags"]),
         "loss_weights_match": _check_mapping(entry, "loss_weights", spec["loss_weights"]),
+        "train_flags_match": _check_mapping(entry, "train", spec["train_flags"]),
     }
     return {
         "id": spec["entry_id"],
@@ -583,6 +588,9 @@ def _summarize_train_config(train_config_path: Path) -> dict[str, Any]:
         "stage": stage or None,
         "train_mode": train_mode,
         "routing_mode": routing.get("mode"),
+        "train": {
+            "activation_checkpointing": train_config.get("activation_checkpointing", False),
+        },
         "model_config": str(model_config_path) if model_config_path else None,
         "model_base_config": str(model_base_config_path) if model_base_config_path else None,
         "data_config": str(data_config_path) if data_config_path else None,

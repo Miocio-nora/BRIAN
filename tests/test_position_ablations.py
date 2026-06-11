@@ -79,6 +79,18 @@ def test_no_position_ablation_forward_uses_zero_position_state() -> None:
     assert model.model_stats()["parameter_count"] == BrianRouteCore(_config()).model_stats()["parameter_count"]
 
 
+def test_brian_route_activation_checkpointing_backward() -> None:
+    model = BrianRouteCore(_config(top_k=1, later_top_k=1))
+    model.activation_checkpointing = True
+    model.train()
+    input_ids = torch.randint(0, 64, (2, 8))
+    output = model(input_ids, targets=input_ids, route_mode="fixed")
+
+    output["loss"].backward()
+
+    assert model.token_embedding.weight.grad is not None
+
+
 def test_position_router_only_ablation_keeps_state_but_masks_blocks() -> None:
     model = BrianRouteCore(_config(position_to_router=True, position_to_blocks=False))
     position = torch.randn(2, 8)

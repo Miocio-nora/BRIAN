@@ -12,12 +12,25 @@ except ModuleNotFoundError:  # pragma: no cover - imported in environments witho
     nn = None
     F = None
 
+if torch is not None:  # pragma: no cover - import path is exercised through model tests
+    from torch.utils.checkpoint import checkpoint as torch_checkpoint
+else:  # pragma: no cover
+    torch_checkpoint = None
+
 ModuleBase = nn.Module if nn is not None else object
 
 
 def require_torch() -> None:
     if torch is None:
         raise ModuleNotFoundError("PyTorch is required for model code. Install the B200/cu128 environment first.")
+
+
+def checkpoint_if_enabled(owner: nn.Module, module: nn.Module, *args: torch.Tensor) -> torch.Tensor:
+    if bool(getattr(owner, "activation_checkpointing", False)) and owner.training and torch.is_grad_enabled():
+        if torch_checkpoint is None:  # pragma: no cover
+            raise ModuleNotFoundError("PyTorch checkpointing is unavailable.")
+        return torch_checkpoint(module, *args, use_reentrant=False)
+    return module(*args)
 
 
 @dataclass(frozen=True)

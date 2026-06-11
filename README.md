@@ -512,7 +512,7 @@ python scripts/eval.py \
   --output reports/route_core_r1b_pilot_coverage.json
 ```
 
-This manifest defines D0 fixed 1B baseline and D1 routed 1B Global KV pilot on `configs/data/r1b_pilot.yaml`. It keeps `parallel_passing: false`; parallel remains an experimental follow-up rather than part of the R1B pilot default.
+This manifest defines D0 fixed 1B baseline and D1 routed 1B Global KV pilot on `configs/data/r1b_pilot.yaml`. It uses BF16 with `activation_checkpointing: true` for B200/H100 memory control and keeps `parallel_passing: false`; parallel remains an experimental follow-up rather than part of the R1B pilot default.
 
 Run tests:
 

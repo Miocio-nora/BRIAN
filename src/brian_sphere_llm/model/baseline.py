@@ -9,6 +9,7 @@ from brian_sphere_llm.model.llama_backbone import (
     RMSNorm,
     TransformerBlock,
     build_causal_lm_loss,
+    checkpoint_if_enabled,
     count_parameters,
     require_torch,
 )
@@ -61,6 +62,7 @@ class BaselineLM(ModuleBase):
         require_torch()
         super().__init__()
         self.config = config
+        self.activation_checkpointing = False
         backbone = config.backbone()
         self.token_embedding = nn.Embedding(config.vocab_size, config.d_model)
         self.blocks = nn.ModuleList([TransformerBlock(backbone) for _ in range(config.layers)])
@@ -71,7 +73,7 @@ class BaselineLM(ModuleBase):
     def forward(self, input_ids: torch.Tensor, targets: torch.Tensor | None = None) -> dict[str, torch.Tensor]:
         hidden = self.token_embedding(input_ids)
         for block in self.blocks:
-            hidden = block(hidden)
+            hidden = checkpoint_if_enabled(self, block, hidden)
         logits = self.lm_head(self.norm(hidden))
         output = {"logits": logits}
         if targets is not None:

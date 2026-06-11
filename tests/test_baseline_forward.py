@@ -13,6 +13,18 @@ def test_baseline_forward_shapes() -> None:
     assert output["loss"].ndim == 0
 
 
+def test_baseline_activation_checkpointing_backward() -> None:
+    model = BaselineLM(BaselineConfig(vocab_size=64, context_length=8, layers=2, d_model=32, n_heads=4))
+    model.activation_checkpointing = True
+    model.train()
+    input_ids = torch.randint(0, 64, (2, 8))
+    output = model(input_ids, targets=input_ids)
+
+    output["loss"].backward()
+
+    assert model.token_embedding.weight.grad is not None
+
+
 def test_baseline_model_stats_preserve_config_name() -> None:
     config = BaselineConfig.from_dict(
         {

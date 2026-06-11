@@ -16,6 +16,7 @@ from brian_sphere_llm.model.llama_backbone import (
     RMSNorm,
     TransformerBlock,
     build_causal_lm_loss,
+    checkpoint_if_enabled,
     count_parameters,
     require_torch,
 )
@@ -120,6 +121,7 @@ class BrianRouteCore(ModuleBase):
         require_torch()
         super().__init__()
         self.config = config
+        self.activation_checkpointing = False
         if config.pre_blocks + config.route_pool_blocks + config.post_blocks != config.base.layers:
             raise ValueError("pre + route_pool + post must equal base layer count")
         backbone = config.base.backbone()
@@ -197,7 +199,7 @@ class BrianRouteCore(ModuleBase):
         batch_size = input_ids.size(0)
         hidden = self.token_embedding(input_ids)
         for block in self.pre_blocks:
-            hidden = block(hidden)
+            hidden = checkpoint_if_enabled(self, block, hidden)
 
         position = self.position_table.initial(batch_size, input_ids.device)
         route_info: dict[str, Any] = {
@@ -304,7 +306,7 @@ class BrianRouteCore(ModuleBase):
             if hard_exit and torch.all(exited):
                 break
 
-        hidden = self.exit_block(hidden, self._block_position(position))
+        hidden = checkpoint_if_enabled(self, self.exit_block, hidden, self._block_position(position))
         if self.config.global_kv and global_state is not None:
             assert self.global_read is not None
             hidden, global_metrics = self._global_read(
@@ -321,7 +323,7 @@ class BrianRouteCore(ModuleBase):
                 torch.tensor(float(global_state.slots), device=input_ids.device, dtype=hidden.dtype)
             )
         for block in self.post_blocks:
-            hidden = block(hidden)
+            hidden = checkpoint_if_enabled(self, block, hidden)
         logits = self.lm_head(self.norm(hidden))
 
         output: dict[str, Any] = {
@@ -562,7 +564,7 @@ class BrianRouteCore(ModuleBase):
         for action, block in enumerate(self.route_blocks):
             mask = selected == action
             if torch.any(mask):
-                next_hidden[mask] = block(hidden[mask], block_position[mask])
+                next_hidden[mask] = checkpoint_if_enabled(self, block, hidden[mask], block_position[mask])
         return next_hidden
 
     def _top_k_for_step(self, step: int) -> int:
@@ -592,7 +594,7 @@ class BrianRouteCore(ModuleBase):
         for action, block in enumerate(self.route_blocks):
             top1_mask = (selected == action) & ~use_weighted_fusion
             if torch.any(top1_mask):
-                next_hidden[top1_mask] = block(hidden[top1_mask], block_position[top1_mask])
+                next_hidden[top1_mask] = checkpoint_if_enabled(self, block, hidden[top1_mask], block_position[top1_mask])
 
         if torch.any(use_weighted_fusion):
             accum = torch.zeros_like(hidden)
@@ -602,7 +604,7 @@ class BrianRouteCore(ModuleBase):
                     mask = use_weighted_fusion & (top_actions[:, rank] == action)
                     if not torch.any(mask):
                         continue
-                    action_output = block(hidden[mask], block_position[mask])
+                    action_output = checkpoint_if_enabled(self, block, hidden[mask], block_position[mask])
                     weight = top_weights[mask, rank].to(hidden.dtype)
                     accum[mask] = accum[mask] + action_output * weight.view(-1, 1, 1)
                     weight_sum[mask] = weight_sum[mask] + weight
