@@ -16,6 +16,8 @@ def test_routing_report_preserves_latest_route_examples_and_trajectories(tmp_pat
                 "step": 1,
                 "loss": 3.0,
                 "route_entropy": 0.1,
+                "block_load_entropy": 0.2,
+                "route_path_diversity": 0.4,
                 "active_block_evals_per_token": 0.5,
                 "average_route_steps": 2.0,
                 "p_output_mean": 0.25,
@@ -37,6 +39,8 @@ def test_routing_report_preserves_latest_route_examples_and_trajectories(tmp_pat
                 "step": 2,
                 "loss": 2.0,
                 "route_entropy": 0.3,
+                "block_load_entropy": 0.4,
+                "route_path_diversity": 0.6,
                 "active_block_evals_per_token": 0.25,
                 "average_route_steps": 1.0,
                 "p_output_mean": 0.75,
@@ -74,6 +78,11 @@ def test_routing_report_preserves_latest_route_examples_and_trajectories(tmp_pat
     report = json.loads(output.read_text(encoding="utf-8"))
 
     assert report["summary"]["route_entropy"] == 0.2
+    assert report["overall_status"] == "pass"
+    assert report["checks"]["core_route_metrics_present"] is True
+    assert report["checks"]["route_path_examples_present"] is True
+    assert report["checks"]["cost_quality_train_points_present"] is True
+    assert report["checks"]["cost_quality_eval_points_present"] is True
     assert report["summary"]["global_read_gate_mean"] == 0.5
     assert report["summary"]["local_read_fraction_mean"] == 0.5
     assert report["summary"]["global_to_local_read_ratio"] == pytest.approx((1 / 3 + 3.0) / 2)
@@ -125,6 +134,24 @@ def test_routing_report_preserves_latest_route_examples_and_trajectories(tmp_pat
     ]
     assert report["cost_quality_curve"]["summary"]["active_compute_range"] == 0.25
     assert report["cost_quality_curve"]["summary"]["train_loss_vs_active_compute_correlation"] == pytest.approx(1.0)
+
+
+def test_routing_report_warns_when_route_behavior_is_missing(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    _write_jsonl(run_dir / "train_log.jsonl", [{"step": 1, "loss": 3.0}])
+    _write_jsonl(run_dir / "eval_log.jsonl", [{"step": 1, "validation_loss": 2.0, "perplexity": 7.4}])
+
+    report = json.loads(make_routing_report(run_dir).read_text(encoding="utf-8"))
+
+    assert report["overall_status"] == "warn"
+    assert report["checks"]["train_log_present"] is True
+    assert report["checks"]["eval_log_present"] is True
+    assert report["checks"]["core_route_metrics_present"] is False
+    assert report["checks"]["block_histogram_present"] is False
+    assert report["checks"]["route_path_examples_present"] is False
+    assert report["checks"]["cost_quality_train_points_present"] is False
+    assert report["checks"]["cost_quality_eval_points_present"] is False
 
 
 def test_routing_report_matches_eval_curve_to_previous_train_step(tmp_path: Path) -> None:

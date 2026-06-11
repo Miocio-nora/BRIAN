@@ -107,8 +107,11 @@ def pearson_correlation(x_values: list[float], y_values: list[float]) -> float |
 
 
 def _summarize_run(run_dir: Path) -> dict[str, Any]:
-    if not (run_dir / "routing_report.json").exists() and (run_dir / "train_log.jsonl").exists():
-        make_routing_report(run_dir)
+    routing_report_path = run_dir / "routing_report.json"
+    if (run_dir / "train_log.jsonl").exists():
+        existing_routing_report = _read_json_if_exists(routing_report_path)
+        if not existing_routing_report or "checks" not in existing_routing_report:
+            make_routing_report(run_dir)
     config = _read_yaml_if_exists(run_dir / "config_resolved.yaml")
     model_stats = _read_json_if_exists(run_dir / "model_stats.json")
     routing_report = _read_json_if_exists(run_dir / "routing_report.json")
@@ -151,6 +154,9 @@ def _summarize_run(run_dir: Path) -> dict[str, Any]:
         "perplexity": _num(final_eval.get("perplexity")),
         "train_loss": _num(final_train.get("loss")),
         "routing": routing_report.get("summary", {}),
+        "routing_report_present": bool(routing_report),
+        "routing_report_status": routing_report.get("overall_status"),
+        "routing_report_checks": routing_report.get("checks", {}),
         "latest_eval": final_eval,
         "baseline_difficulty_report_present": bool(baseline_difficulty_report),
         "baseline_difficulty_sample_count": _num(baseline_difficulty_report.get("sample_count")),
@@ -242,6 +248,7 @@ def _gate_stage1(stage1: dict[str, Any] | None, stage0: dict[str, Any] | None, t
         "fixed_route_stability_report_present": bool(stage1 and stage1.get("fixed_route_stability_report_present")),
         "fixed_route_stability_passed": bool(stage1 and stage1.get("fixed_route_stability_status") == "pass"),
         "checkpoint_present": bool(stage1 and stage1["has_checkpoint_latest"]),
+        **_routing_report_gate_checks(stage1),
         **_model_stats_gate_checks(stage1),
         **_data_manifest_gate_checks(stage1),
     }
@@ -252,6 +259,7 @@ def _gate_stage1(stage1: dict[str, Any] | None, stage0: dict[str, Any] | None, t
             "loss_ratio": ratio,
             "fixed_route_stability_status": stage1.get("fixed_route_stability_status") if stage1 else None,
             "fixed_route_stability_checks": stage1.get("fixed_route_stability_checks") if stage1 else {},
+            **_routing_report_gate_extras(stage1),
             **_model_stats_gate_extras(stage1),
             **_data_manifest_gate_extras(stage1),
         },
@@ -267,6 +275,7 @@ def _gate_stage2(stage2: dict[str, Any] | None, thresholds: dict[str, float]) ->
         "pseudo_route_curriculum_report_present": bool(stage2 and stage2.get("pseudo_route_curriculum_report_present")),
         "pseudo_route_curriculum_passed": bool(stage2 and stage2.get("pseudo_route_curriculum_status") == "pass"),
         "checkpoint_present": bool(stage2 and stage2["has_checkpoint_latest"]),
+        **_routing_report_gate_checks(stage2),
         **_model_stats_gate_checks(stage2),
         **_data_manifest_gate_checks(stage2),
     }
@@ -277,6 +286,7 @@ def _gate_stage2(stage2: dict[str, Any] | None, thresholds: dict[str, float]) ->
             "pseudo_route_curriculum_status": stage2.get("pseudo_route_curriculum_status") if stage2 else None,
             "pseudo_route_curriculum_checks": stage2.get("pseudo_route_curriculum_checks") if stage2 else {},
             "pseudo_route_curriculum_by_difficulty": stage2.get("pseudo_route_curriculum_by_difficulty") if stage2 else {},
+            **_routing_report_gate_extras(stage2),
             **_model_stats_gate_extras(stage2),
             **_data_manifest_gate_extras(stage2),
         },
@@ -299,6 +309,7 @@ def _gate_stage3(stage3: dict[str, Any] | None, stage1: dict[str, Any] | None, t
         "scheduled_routing_report_present": bool(stage3 and stage3.get("scheduled_routing_report_present")),
         "scheduled_routing_passed": bool(stage3 and stage3.get("scheduled_routing_status") == "pass"),
         "checkpoint_present": bool(stage3 and stage3["has_checkpoint_latest"]),
+        **_routing_report_gate_checks(stage3),
         **_model_stats_gate_checks(stage3),
         **_data_manifest_gate_checks(stage3),
     }
@@ -310,6 +321,7 @@ def _gate_stage3(stage3: dict[str, Any] | None, stage1: dict[str, Any] | None, t
             "scheduled_routing_status": stage3.get("scheduled_routing_status") if stage3 else None,
             "scheduled_routing_checks": stage3.get("scheduled_routing_checks") if stage3 else {},
             "scheduled_routing_logged_values": stage3.get("scheduled_routing_logged_values") if stage3 else [],
+            **_routing_report_gate_extras(stage3),
             **_model_stats_gate_extras(stage3),
             **_data_manifest_gate_extras(stage3),
         },
@@ -343,6 +355,7 @@ def _gate_stage4(
         and bool(out_checks.get("active_compute_non_decreasing_with_difficulty", False)),
         "easy_output_probability_not_below_hard": bool(out_checks.get("easy_output_probability_at_least_hard", False)),
         "checkpoint_present": bool(stage4 and stage4["has_checkpoint_latest"]),
+        **_routing_report_gate_checks(stage4),
         **_model_stats_gate_checks(stage4),
         **_data_manifest_gate_checks(stage4),
     }
@@ -357,6 +370,7 @@ def _gate_stage4(
             "out_by_difficulty_status": out_by_difficulty_report.get("overall_status") if out_by_difficulty_report else None,
             "out_by_difficulty_checks": out_checks,
             "out_by_difficulty_deltas": out_by_difficulty_report.get("deltas", {}) if out_by_difficulty_report else {},
+            **_routing_report_gate_extras(stage4),
             **_model_stats_gate_extras(stage4),
             **_data_manifest_gate_extras(stage4),
         },
@@ -396,6 +410,7 @@ def _gate_stage5(
         ),
         "long_context_global_kv_benefit_proxy": any_long_context_pass,
         "checkpoint_present": bool(stage5 and stage5["has_checkpoint_latest"]),
+        **_routing_report_gate_checks(stage5),
         **_model_stats_gate_checks(stage5),
         **_data_manifest_gate_checks(stage5),
     }
@@ -411,6 +426,7 @@ def _gate_stage5(
             "long_context_compare_candidate_count": long_context_compare_report.get("candidate_count")
             if long_context_compare_report
             else None,
+            **_routing_report_gate_extras(stage5),
             **_model_stats_gate_extras(stage5),
             **_data_manifest_gate_extras(stage5),
         },
@@ -451,6 +467,7 @@ def _gate_stage6(
         ),
         "parallel_branch_benefit_proxy": any_parallel_pass,
         "checkpoint_present": bool(stage6 and stage6["has_checkpoint_latest"]),
+        **_routing_report_gate_checks(stage6),
         **_model_stats_gate_checks(stage6),
         **_data_manifest_gate_checks(stage6),
     }
@@ -466,6 +483,7 @@ def _gate_stage6(
             "parallel_compare_candidate_count": parallel_compare_report.get("candidate_count")
             if parallel_compare_report
             else None,
+            **_routing_report_gate_extras(stage6),
             **_model_stats_gate_extras(stage6),
             **_data_manifest_gate_extras(stage6),
         },
@@ -544,6 +562,23 @@ def _model_stats_gate_extras(summary: dict[str, Any] | None) -> dict[str, Any]:
     return {
         "model_stats": summary.get("model_stats") if summary else {},
         "model_stats_checks": summary.get("model_stats_checks") if summary else {},
+    }
+
+
+def _routing_report_gate_checks(summary: dict[str, Any] | None) -> dict[str, bool]:
+    checks = summary.get("routing_report_checks", {}) if summary else {}
+    return {
+        "routing_report_present": bool(summary and summary.get("routing_report_present")),
+        "routing_report_valid": bool(summary and summary.get("routing_report_status") == "pass")
+        and isinstance(checks, dict)
+        and all(checks.values()),
+    }
+
+
+def _routing_report_gate_extras(summary: dict[str, Any] | None) -> dict[str, Any]:
+    return {
+        "routing_report_status": summary.get("routing_report_status") if summary else None,
+        "routing_report_checks": summary.get("routing_report_checks") if summary else {},
     }
 
 

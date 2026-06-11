@@ -67,21 +67,74 @@ def make_routing_report(run_dir: str | Path) -> Path:
             latest_position_norm_trajectory = row["position_norm_trajectory"]
         if isinstance(row.get("location_distance_trajectory"), list):
             latest_location_distance_trajectory = row["location_distance_trajectory"]
+    summary = {key: sum(values) / max(1, len(values)) for key, values in aggregates.items()}
+    cost_quality_curve = _cost_quality_curve(rows, eval_rows)
+    checks = _report_checks(
+        rows=rows,
+        eval_rows=eval_rows,
+        summary=summary,
+        latest_histogram=latest_histogram,
+        latest_route_path_examples=latest_route_path_examples,
+        cost_quality_curve=cost_quality_curve,
+    )
     report = {
         "run_dir": str(run_dir),
-        "summary": {key: sum(values) / max(1, len(values)) for key, values in aggregates.items()},
+        "summary": summary,
         "latest_block_histogram": latest_histogram or {},
         "latest_exit_step_distribution": latest_exit_distribution or [],
         "latest_first_exit_step_histogram": latest_first_exit_histogram or {},
         "latest_route_path_examples": latest_route_path_examples or [],
         "latest_position_norm_trajectory": latest_position_norm_trajectory or [],
         "latest_location_distance_trajectory": latest_location_distance_trajectory or [],
-        "cost_quality_curve": _cost_quality_curve(rows, eval_rows),
+        "cost_quality_curve": cost_quality_curve,
         "latest_eval": eval_rows[-1] if eval_rows else {},
+        "checks": checks,
+        "overall_status": _overall_status(checks),
     }
     output = run_dir / "routing_report.json"
     write_json(report, output)
     return output
+
+
+def _report_checks(
+    *,
+    rows: list[dict[str, Any]],
+    eval_rows: list[dict[str, Any]],
+    summary: dict[str, float],
+    latest_histogram: dict[str, Any] | None,
+    latest_route_path_examples: list[Any] | None,
+    cost_quality_curve: dict[str, Any],
+) -> dict[str, bool]:
+    curve_summary = cost_quality_curve.get("summary", {})
+    latest_eval = eval_rows[-1] if eval_rows else {}
+    return {
+        "train_log_present": bool(rows),
+        "eval_log_present": bool(eval_rows),
+        "latest_eval_validation_loss_present": _finite(latest_eval.get("validation_loss")),
+        "core_route_metrics_present": all(
+            _finite(summary.get(key))
+            for key in [
+                "route_entropy",
+                "block_load_entropy",
+                "route_path_diversity",
+                "active_block_evals_per_token",
+                "average_route_steps",
+            ]
+        ),
+        "block_histogram_present": bool(latest_histogram),
+        "route_path_examples_present": bool(latest_route_path_examples),
+        "cost_quality_train_points_present": int(curve_summary.get("train_point_count") or 0) >= 1,
+        "cost_quality_eval_points_present": int(curve_summary.get("eval_point_count") or 0) >= 1,
+    }
+
+
+def _overall_status(checks: dict[str, bool]) -> str:
+    if all(checks.values()):
+        return "pass"
+    required_logs = [checks["train_log_present"], checks["eval_log_present"], checks["latest_eval_validation_loss_present"]]
+    if not all(required_logs):
+        return "fail" if any(required_logs) else "unknown"
+    return "warn"
 
 
 def _read_jsonl(path: Path) -> list[dict[str, Any]]:
@@ -219,7 +272,14 @@ def _range(values: list[float | None]) -> float | None:
     return max(finite) - min(finite)
 
 
+def _finite(value: Any) -> bool:
+    numeric = _num(value)
+    return numeric is not None and math.isfinite(numeric)
+
+
 def _num(value: Any) -> float | None:
+    if isinstance(value, bool):
+        return None
     if isinstance(value, (int, float)):
         return float(value)
     return None

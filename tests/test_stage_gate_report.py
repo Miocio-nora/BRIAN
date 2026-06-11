@@ -27,6 +27,7 @@ def _write_run(
     model_stats: dict | None = None,
     data_manifest_ref: dict | None = None,
     write_data_manifest_ref: bool = True,
+    default_routing_metrics: bool = True,
 ) -> Path:
     run_dir = root / name
     run_dir.mkdir(parents=True)
@@ -39,6 +40,8 @@ def _write_run(
     if write_data_manifest_ref:
         manifest_ref = _data_manifest_ref() if data_manifest_ref is None else data_manifest_ref
         (run_dir / "data_manifest_ref.json").write_text(json.dumps(manifest_ref), encoding="utf-8")
+    if default_routing_metrics and stage != "stage0_baseline":
+        train_row = _routed_train_row() | train_row
     (run_dir / "config_resolved.yaml").write_text(yaml.safe_dump({"stage": stage}), encoding="utf-8")
     (run_dir / "eval_log.jsonl").write_text(json.dumps({"validation_loss": val_loss, "perplexity": 1.0}) + "\n", encoding="utf-8")
     (run_dir / "train_log.jsonl").write_text(json.dumps(train_row | {"loss": val_loss}) + "\n", encoding="utf-8")
@@ -131,6 +134,19 @@ def _data_manifest_ref() -> dict:
 
 def _model_stats(name: str) -> dict:
     return {"model_name": name, "parameter_count": 100}
+
+
+def _routed_train_row() -> dict:
+    return {
+        "route_entropy": 0.5,
+        "block_load_entropy": 0.5,
+        "route_path_diversity": 0.5,
+        "active_block_evals_per_token": 0.5,
+        "average_route_steps": 2.0,
+        "p_output_mean": 0.5,
+        "top1_block_histogram": {"0": 1, "1": 1, "2": 1},
+        "route_path_examples": [{"sample_index": 0, "actions": [0, 1, 2]}],
+    }
 
 
 def test_stage_gate_report_writes_json(tmp_path: Path) -> None:
@@ -313,6 +329,7 @@ def test_stage_gate_report_writes_json(tmp_path: Path) -> None:
     assert report["gates"]["stage0_to_1"]["checks"]["baseline_difficulty_bins_present"] is True
     assert report["gates"]["stage1_to_2"]["status"] == "pass"
     assert report["gates"]["stage1_to_2"]["checks"]["fixed_route_stability_passed"] is True
+    assert report["gates"]["stage1_to_2"]["checks"]["routing_report_valid"] is True
     assert report["gates"]["stage2_to_3"]["status"] == "pass"
     assert report["gates"]["stage2_to_3"]["checks"]["pseudo_route_curriculum_passed"] is True
     assert report["gates"]["stage3_to_4"]["status"] == "pass"
@@ -442,6 +459,58 @@ def test_stage0_gate_requires_valid_model_stats(tmp_path: Path) -> None:
     assert gate["checks"]["model_stats_valid"] is False
     assert gate["model_stats_checks"]["model_name_present"] is True
     assert gate["model_stats_checks"]["parameter_count_positive_integer"] is False
+
+
+def test_stage1_gate_requires_valid_routing_report(tmp_path: Path) -> None:
+    baseline = _write_run(
+        tmp_path,
+        "baseline",
+        stage="stage0_baseline",
+        val_loss=10.0,
+        train_row={},
+        determinism_status="pass",
+        resume_event={
+            "checkpoint": "checkpoint_latest",
+            "resumed_from_step": 1,
+            "target_max_steps": 2,
+            "optimizer_state_loaded": True,
+        },
+        baseline_difficulty_report=_baseline_difficulty_report(),
+    )
+    fixed = _write_run(
+        tmp_path,
+        "fixed",
+        stage="stage1_fixed_route",
+        val_loss=10.1,
+        train_row={
+            "route_imitation_accuracy": 0.99,
+            "position_norm_mean": 1.0,
+        },
+        fixed_route_stability_report={
+            "overall_status": "pass",
+            "checks": {
+                "forward_completed": True,
+                "logits_shape_matches": True,
+                "logits_finite": True,
+                "sample_losses_finite": True,
+                "fixed_route_matches_targets": True,
+                "route_imitation_accuracy_is_one": True,
+                "position_norm_finite": True,
+                "routing_summary_finite": True,
+            },
+        },
+        default_routing_metrics=False,
+    )
+
+    report_path = make_stage_gate_report([baseline, fixed], output_path=tmp_path / "gate.json")
+    gate = json.loads(report_path.read_text(encoding="utf-8"))["gates"]["stage1_to_2"]
+
+    assert gate["status"] == "warn"
+    assert gate["checks"]["routing_report_present"] is True
+    assert gate["checks"]["routing_report_valid"] is False
+    assert gate["routing_report_status"] == "warn"
+    assert gate["routing_report_checks"]["core_route_metrics_present"] is False
+    assert gate["routing_report_checks"]["route_path_examples_present"] is False
 
 
 def test_stage_gate_report_uses_cost_control_report(tmp_path: Path) -> None:
