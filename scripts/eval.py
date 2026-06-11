@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import argparse
+import math
 import sys
 from pathlib import Path
+from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from brian_sphere_llm.eval.compute_report import make_compute_report
@@ -107,8 +109,8 @@ def main() -> None:
             output_path=args.output or config.get("output_path"),
             sample_output_path=config.get("sample_output_path"),
             split=args.split or str(config.get("split", "val")),
-            batch_size=args.batch_size or config.get("batch_size"),
-            max_batches=args.max_batches or int(config.get("max_batches", 8)),
+            batch_size=_optional_int_arg_or_config(args.batch_size, config, "batch_size"),
+            max_batches=_int_arg_or_config(args.max_batches, config, "max_batches", default=8),
             device_name=str(config.get("device", "auto")),
             baseline_checkpoint=str(config.get("baseline_checkpoint", "checkpoint_best")),
             routed_checkpoint=str(config.get("routed_checkpoint", "checkpoint_best")),
@@ -121,8 +123,8 @@ def main() -> None:
             output_path=args.output or config.get("output_path"),
             sample_output_path=config.get("sample_output_path"),
             split=args.split or str(config.get("split", "val")),
-            batch_size=args.batch_size or config.get("batch_size"),
-            max_batches=args.max_batches or int(config.get("max_batches", 8)),
+            batch_size=_optional_int_arg_or_config(args.batch_size, config, "batch_size"),
+            max_batches=_int_arg_or_config(args.max_batches, config, "max_batches", default=8),
             device_name=str(config.get("device", "auto")),
             checkpoint=str(args.checkpoint or config.get("checkpoint", "checkpoint_best")),
             difficulty_bins=list(config.get("difficulty_bins") or ["easy", "medium", "hard"]),
@@ -134,8 +136,8 @@ def main() -> None:
             args.run,
             output_path=args.output or config.get("output_path"),
             split=args.split or str(config.get("split", "val")),
-            batch_size=args.batch_size or config.get("batch_size"),
-            max_batches=args.max_batches or int(config.get("max_batches", 8)),
+            batch_size=_optional_int_arg_or_config(args.batch_size, config, "batch_size"),
+            max_batches=_int_arg_or_config(args.max_batches, config, "max_batches", default=8),
             checkpoint=str(args.checkpoint or config.get("checkpoint", "checkpoint_best")),
             device_name=str(config.get("device", "auto")),
         )
@@ -147,8 +149,8 @@ def main() -> None:
             runs,
             baseline_run=args.baseline_run or config.get("baseline_run"),
             output_path=args.output or config.get("output_path"),
-            tflops_per_gpu=float(args.tflops_per_gpu or config.get("tflops_per_gpu", 989.0)),
-            utilization=float(args.utilization or config.get("utilization", 0.35)),
+            tflops_per_gpu=_float_arg_or_config(args.tflops_per_gpu, config, "tflops_per_gpu", default=989.0),
+            utilization=_float_arg_or_config(args.utilization, config, "utilization", default=0.35),
         )
     elif eval_name == "cost_control_report":
         runs = args.runs or ([args.run] if args.run else config.get("runs", []))
@@ -157,7 +159,12 @@ def main() -> None:
         report = make_cost_control_report(
             runs,
             output_path=args.output or config.get("output_path"),
-            min_active_compute_range=float(args.min_active_compute_range or config.get("min_active_compute_range", 0.05)),
+            min_active_compute_range=_float_arg_or_config(
+                args.min_active_compute_range,
+                config,
+                "min_active_compute_range",
+                default=0.05,
+            ),
         )
     elif eval_name == "hard_exit_compare":
         baseline_run = args.baseline_run or config.get("baseline_run")
@@ -168,10 +175,10 @@ def main() -> None:
             baseline_run,
             runs,
             output_path=args.output or config.get("output_path"),
-            max_validation_loss_delta=float(config.get("max_validation_loss_delta", 0.0)),
-            max_latency_ratio=float(config.get("max_latency_ratio", 1.0)),
-            max_inference_time_ratio=float(config.get("max_inference_time_ratio", 1.0)),
-            max_route_step_ratio=float(config.get("max_route_step_ratio", 1.0)),
+            max_validation_loss_delta=_float_config(config, "max_validation_loss_delta", default=0.0),
+            max_latency_ratio=_float_config(config, "max_latency_ratio", default=1.0),
+            max_inference_time_ratio=_float_config(config, "max_inference_time_ratio", default=1.0),
+            max_route_step_ratio=_float_config(config, "max_route_step_ratio", default=1.0),
         )
     elif eval_name == "eval_determinism_report":
         if not args.run:
@@ -180,11 +187,11 @@ def main() -> None:
             args.run,
             output_path=args.output or config.get("output_path"),
             split=args.split or str(config.get("split", "val")),
-            batch_size=args.batch_size or config.get("batch_size"),
+            batch_size=_optional_int_arg_or_config(args.batch_size, config, "batch_size"),
             checkpoint=str(args.checkpoint or config.get("checkpoint", "checkpoint_best")),
-            seed=int(config.get("seed", 1)),
+            seed=_int_config(config, "seed", default=1),
             device_name=str(config.get("device", "auto")),
-            tolerance=float(args.tolerance if args.tolerance is not None else config.get("tolerance", 1e-8)),
+            tolerance=_float_arg_or_config(args.tolerance, config, "tolerance", default=1e-8),
         )
     elif eval_name == "reasoning_eval":
         if not args.run:
@@ -192,8 +199,8 @@ def main() -> None:
         report = make_reasoning_report(
             args.run,
             output_path=args.output or config.get("output_path"),
-            sample_count=int(args.sample_count or config.get("sample_count", 24)),
-            seed=int(config.get("seed", 1)),
+            sample_count=_int_arg_or_config(args.sample_count, config, "sample_count", default=24),
+            seed=_int_config(config, "seed", default=1),
             checkpoint=str(args.checkpoint or config.get("checkpoint", "checkpoint_best")),
             device_name=str(config.get("device", "auto")),
             task_families=list(config.get("task_families", ["copy", "reverse", "arithmetic", "rewrite"])),
@@ -205,8 +212,8 @@ def main() -> None:
         report = make_long_context_report(
             args.run,
             output_path=args.output or config.get("output_path"),
-            sample_count=int(args.sample_count or config.get("sample_count", 12)),
-            seed=int(config.get("seed", 1)),
+            sample_count=_int_arg_or_config(args.sample_count, config, "sample_count", default=12),
+            seed=_int_config(config, "seed", default=1),
             checkpoint=str(args.checkpoint or config.get("checkpoint", "checkpoint_best")),
             device_name=str(config.get("device", "auto")),
             task_families=list(config.get("task_families", ["needle_retrieval", "two_hop_tracing"])),
@@ -221,9 +228,9 @@ def main() -> None:
             baseline_report,
             candidate_reports,
             output_path=args.output or config.get("output_path"),
-            min_global_attention_mass=float(config.get("min_global_attention_mass", 1e-6)),
-            min_global_read_gate=float(config.get("min_global_read_gate", 1e-6)),
-            quality_tolerance=float(config.get("quality_tolerance", 0.0)),
+            min_global_attention_mass=_float_config(config, "min_global_attention_mass", default=1e-6),
+            min_global_read_gate=_float_config(config, "min_global_read_gate", default=1e-6),
+            quality_tolerance=_float_config(config, "quality_tolerance", default=0.0),
         )
     elif eval_name == "global_kv_retention_report":
         if not args.run:
@@ -231,10 +238,10 @@ def main() -> None:
         report = make_global_kv_retention_report(
             args.run,
             output_path=args.output or config.get("output_path"),
-            min_global_attention_mass=float(config.get("min_global_attention_mass", 1e-6)),
-            min_global_read_gate=float(config.get("min_global_read_gate", 1e-6)),
-            mass_tolerance=float(config.get("mass_tolerance", 1e-5)),
-            capacity_slack=float(config.get("capacity_slack", 1e-6)),
+            min_global_attention_mass=_float_config(config, "min_global_attention_mass", default=1e-6),
+            min_global_read_gate=_float_config(config, "min_global_read_gate", default=1e-6),
+            mass_tolerance=_float_config(config, "mass_tolerance", default=1e-5),
+            capacity_slack=_float_config(config, "capacity_slack", default=1e-6),
         )
     elif eval_name == "global_kv_ablation_report":
         manifest = args.experiment_manifest or config.get("experiment_manifest")
@@ -256,11 +263,11 @@ def main() -> None:
             baseline_run,
             runs,
             output_path=args.output or config.get("output_path"),
-            max_validation_loss_delta=float(config.get("max_validation_loss_delta", 0.0)),
-            max_active_layer_eval_ratio=float(config.get("max_active_layer_eval_ratio", 2.0)),
-            max_estimated_flops_ratio=float(config.get("max_estimated_flops_ratio", 2.0)),
-            min_throughput_ratio=float(config.get("min_throughput_ratio", 0.0)),
-            min_parallel_branch_count=float(config.get("min_parallel_branch_count", 1.5)),
+            max_validation_loss_delta=_float_config(config, "max_validation_loss_delta", default=0.0),
+            max_active_layer_eval_ratio=_float_config(config, "max_active_layer_eval_ratio", default=2.0),
+            max_estimated_flops_ratio=_float_config(config, "max_estimated_flops_ratio", default=2.0),
+            min_throughput_ratio=_float_config(config, "min_throughput_ratio", default=0.0),
+            min_parallel_branch_count=_float_config(config, "min_parallel_branch_count", default=1.5),
         )
     elif eval_name == "parallel_passing_report":
         if not args.run:
@@ -268,10 +275,10 @@ def main() -> None:
         report = make_parallel_passing_report(
             args.run,
             output_path=args.output or config.get("output_path"),
-            max_beam_size=int(config.get("max_beam_size", 2)),
-            min_parallel_branch_count=float(config.get("min_parallel_branch_count", 1.5)),
-            min_branch_cost=float(config.get("min_branch_cost", 0.0)),
-            tolerance=float(config.get("tolerance", 1e-6)),
+            max_beam_size=_int_config(config, "max_beam_size", default=2),
+            min_parallel_branch_count=_float_config(config, "min_parallel_branch_count", default=1.5),
+            min_branch_cost=_float_config(config, "min_branch_cost", default=0.0),
+            tolerance=_float_config(config, "tolerance", default=1e-6),
         )
     elif eval_name == "position_ablation_report":
         reference_run = args.baseline_run or args.run or config.get("reference_run")
@@ -282,8 +289,8 @@ def main() -> None:
             reference_run,
             runs,
             output_path=args.output or config.get("output_path"),
-            min_validation_loss_delta=float(config.get("min_validation_loss_delta", 0.001)),
-            min_routing_metric_delta=float(config.get("min_routing_metric_delta", 0.001)),
+            min_validation_loss_delta=_float_config(config, "min_validation_loss_delta", default=0.001),
+            min_routing_metric_delta=_float_config(config, "min_routing_metric_delta", default=0.001),
         )
     elif eval_name == "pseudo_route_curriculum_report":
         baseline_report = args.baseline_report or config.get("baseline_difficulty_report_path")
@@ -300,8 +307,8 @@ def main() -> None:
         report = make_scheduled_routing_report(
             args.run,
             output_path=args.output or config.get("output_path"),
-            min_final_router_probability=float(config.get("min_final_router_probability", 1.0)),
-            tolerance=float(config.get("tolerance", 1e-9)),
+            min_final_router_probability=_float_config(config, "min_final_router_probability", default=1.0),
+            tolerance=_float_config(config, "tolerance", default=1e-9),
         )
     elif eval_name == "out_by_difficulty_report":
         reasoning_report = args.reasoning_report or config.get("reasoning_report_path")
@@ -313,8 +320,8 @@ def main() -> None:
             samples_path=samples_path,
             output_path=args.output or config.get("output_path"),
             difficulty_order=list(config.get("difficulty_order", ["easy", "medium", "hard"])),
-            min_step_delta=float(config.get("min_step_delta", 0.0)),
-            min_output_probability_delta=float(config.get("min_output_probability_delta", 0.0)),
+            min_step_delta=_float_config(config, "min_step_delta", default=0.0),
+            min_output_probability_delta=_float_config(config, "min_output_probability_delta", default=0.0),
         )
     elif eval_name == "go_no_go_report":
         stage_gate_report = args.stage_gate_report or config.get("stage_gate_report_path")
@@ -334,13 +341,17 @@ def main() -> None:
             global_kv_ablation_report_path=args.global_kv_ablation_report
             or config.get("global_kv_ablation_report_path"),
             parallel_compare_report_path=args.parallel_compare_report or config.get("parallel_compare_report_path"),
-            min_difficulty_step_correlation=float(config.get("min_difficulty_step_correlation", 0.0)),
-            min_reasoning_delta=float(config.get("min_reasoning_delta", 0.0)),
-            max_compute_adjusted_loss_delta=float(config.get("max_compute_adjusted_loss_delta", 0.0)),
-            min_visible_cot_reduction=float(config.get("min_visible_cot_reduction", 1.0)),
-            max_reasoning_drop_for_cot=float(config.get("max_reasoning_drop_for_cot", 0.0)),
-            max_global_kv_cache_capacity_ratio=float(config.get("max_global_kv_cache_capacity_ratio", 1.0)),
-            max_inference_latency_ratio=float(config.get("max_inference_latency_ratio", 2.0)),
+            min_difficulty_step_correlation=_float_config(config, "min_difficulty_step_correlation", default=0.0),
+            min_reasoning_delta=_float_config(config, "min_reasoning_delta", default=0.0),
+            max_compute_adjusted_loss_delta=_float_config(config, "max_compute_adjusted_loss_delta", default=0.0),
+            min_visible_cot_reduction=_float_config(config, "min_visible_cot_reduction", default=1.0),
+            max_reasoning_drop_for_cot=_float_config(config, "max_reasoning_drop_for_cot", default=0.0),
+            max_global_kv_cache_capacity_ratio=_float_config(
+                config,
+                "max_global_kv_cache_capacity_ratio",
+                default=1.0,
+            ),
+            max_inference_latency_ratio=_float_config(config, "max_inference_latency_ratio", default=2.0),
         )
     elif eval_name == "risk_audit_report":
         report = make_risk_audit_report(
@@ -368,13 +379,70 @@ def main() -> None:
             manifest,
             output_path=args.output or config.get("output_path"),
             profile=str(config.get("profile", "auto")),
-            include_baseline=bool(config.get("include_baseline", False)),
+            include_baseline=_bool_config(config, "include_baseline", default=False),
         )
     else:
         if not args.run:
             raise SystemExit("routing eval requires --run")
         report = make_routing_report(args.run)
     print(report)
+
+
+def _optional_int_arg_or_config(arg_value: int | None, config: dict[str, Any], key: str) -> int | None:
+    if arg_value is not None:
+        return _int_value(arg_value, key)
+    if key not in config or config[key] is None:
+        return None
+    return _int_value(config[key], key)
+
+
+def _int_arg_or_config(arg_value: int | None, config: dict[str, Any], key: str, *, default: int) -> int:
+    if arg_value is not None:
+        return _int_value(arg_value, key)
+    return _int_config(config, key, default=default)
+
+
+def _float_arg_or_config(arg_value: float | None, config: dict[str, Any], key: str, *, default: float) -> float:
+    if arg_value is not None:
+        return _float_value(arg_value, key)
+    return _float_config(config, key, default=default)
+
+
+def _int_config(config: dict[str, Any], key: str, *, default: int) -> int:
+    return _int_value(config.get(key, default), key)
+
+
+def _float_config(config: dict[str, Any], key: str, *, default: float) -> float:
+    return _float_value(config.get(key, default), key)
+
+
+def _bool_config(config: dict[str, Any], key: str, *, default: bool) -> bool:
+    value = config.get(key, default)
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "off"}:
+            return False
+    raise ValueError(f"{key} must be a boolean.")
+
+
+def _int_value(value: Any, name: str) -> int:
+    if isinstance(value, bool):
+        raise ValueError(f"{name} must be an integer, not a boolean.")
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float) and math.isfinite(value) and value.is_integer():
+        return int(value)
+    raise ValueError(f"{name} must be an integer.")
+
+
+def _float_value(value: Any, name: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(float(value)):
+        raise ValueError(f"{name} must be a finite numeric value.")
+    return float(value)
 
 
 if __name__ == "__main__":
