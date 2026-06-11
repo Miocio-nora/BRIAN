@@ -1,0 +1,206 @@
+# BRIAN-Sphere-LLM
+
+**BRIAN-Sphere-LLM** is a long-range research and engineering project for replacing the fixed middle-depth computation path of a Transformer with a learnable latent routing graph.
+
+BRIAN stands for:
+
+> **Block-Routed Inference with Adaptive Navigation over a Latent Operator Sphere**
+
+The short project name is **BRIAN-Sphere** or **BRIAN**. The planned Python package name is `brian_sphere_llm`.
+
+## Current Status
+
+This repository currently contains the project plan and research roadmap. It does **not** yet contain a runnable model implementation, training pipeline, or installable Python package.
+
+The immediate priority is **BRIAN-R125 route-core validation**:
+
+1. Train a fixed decoder-only Transformer baseline.
+2. Implement a fixed route wrapper around the middle blocks.
+3. Train router imitation on sequential and skip/recurrent pseudo routes.
+4. Enable scheduled free routing.
+5. Validate the block-position state.
+6. Validate `OUT` as a terminal routing action.
+
+See [BRIAN-Sphere-LLM_PROJECT_PLAN.md](./BRIAN-Sphere-LLM_PROJECT_PLAN.md) for the full technical plan.
+
+## Core Idea
+
+A standard decoder-only Transformer executes a fixed sequence of blocks:
+
+```text
+input -> B1 -> B2 -> ... -> BL -> output
+```
+
+BRIAN-Sphere-LLM replaces part of the middle stack with a routeable block pool:
+
+```text
+input -> pre-blocks -> router-controlled latent block path -> OUT -> post-blocks / LM head
+```
+
+Instead of forcing every input through the same middle-layer sequence, the model can learn computation paths such as:
+
+```text
+B3 -> B5 -> B5 -> B2 -> B7 -> OUT
+B2 -> B3 -> OUT
+B4 -> B4 -> B6 -> B8 -> OUT
+```
+
+The first research goal is not to beat large public models. The first goal is to prove that the route-core system is trainable, measurable, and controllable at small scale.
+
+## Minimal Route-Core System
+
+The routed model maintains two states:
+
+```text
+S_r = (H_r, P_r)
+```
+
+Where:
+
+- `H_r` is the content hidden state.
+- `P_r` is the block-position / operator-position state.
+
+The router selects an action:
+
+```text
+a_r in {B1, B2, ..., Bm, OUT}
+```
+
+If the action is an internal block, the model applies that block and updates position:
+
+```text
+H_{r+1} = B_{a_r}(H_r, P_r)
+P_{r+1} = E_{a_r}
+```
+
+If the action is `OUT`, the model exits the latent routing loop and produces logits through the output/post-block path.
+
+## First Target Architecture: BRIAN-R125
+
+The recommended first serious model is a LLaMA-like decoder-only Transformer at roughly 110M-150M parameters.
+
+| Item | Suggested value |
+| --- | ---: |
+| Layers | 12 |
+| Hidden size | 768 |
+| Attention heads | 12 |
+| FFN | SwiGLU / gated MLP |
+| Norm | RMSNorm |
+| Token position | RoPE |
+| Vocabulary | 32k tokenizer |
+| Initial context | 2k, optionally 4k |
+| Pre blocks | 2 |
+| Route pool | 8 middle blocks |
+| Post blocks | 2 |
+| Route actions | 8 internal blocks + `OUT` |
+| Max latent route steps | 4-8 |
+| Initial routing | top-1 |
+| Later routing | top-2 weighted fusion |
+| Global KV | off for first route-core stage |
+| Parallel passing | off |
+
+Planned block split:
+
+```text
+pre:   B1, B2
+pool:  B3, B4, B5, B6, B7, B8, B9, B10
+post:  B11, B12
+```
+
+## Training Roadmap
+
+The project deliberately avoids training the full system from scratch in one step. The planned curriculum is:
+
+```text
+fixed path -> pseudo routing -> scheduled free routing -> output action -> global KV -> parallel passing
+```
+
+Main stages:
+
+| Stage | Goal |
+| --- | --- |
+| 0 | Train a fixed Transformer baseline. |
+| 1 | Convert middle blocks into a route pool while forcing the original path. |
+| 2 | Train pseudo skip/recurrent routing with imitation loss. |
+| 3 | Gradually allow router-controlled forward paths. |
+| 4 | Enable `OUT` as a hard terminal action. |
+| 5 | Add optional canonical global KV memory after route-core stability. |
+| 6 | Add optional parallel latent passing only after earlier stages succeed. |
+
+## Required Diagnostics
+
+Routing behavior is a first-class research output. Every routed model should report:
+
+- validation loss and perplexity;
+- route entropy;
+- block load entropy;
+- average route steps;
+- exit step distribution;
+- route path diversity;
+- recurrent and skip ratios;
+- location distance;
+- active block evaluations per token;
+- difficulty-step correlation;
+- `OUT` probability by difficulty.
+
+The most important route-core diagnostic is:
+
+```text
+corr(baseline_cross_entropy, route_steps)
+```
+
+A positive correlation suggests that harder examples receive more internal computation.
+
+## Go / No-Go Criteria
+
+Proceed from BRIAN-R125 route-core experiments to BRIAN-R350 only if:
+
+- the fixed route wrapper stays within 1-3% validation loss of the fixed baseline;
+- router imitation accuracy exceeds 95%;
+- scheduled free routing does not collapse validation loss;
+- average route steps can be controlled by cost loss;
+- block load does not collapse to one internal block;
+- the block-position ablation shows a measurable difference;
+- `OUT` is neither always early nor never used.
+
+If these fail, the plan is to fix route training, position design, and curriculum before scaling.
+
+## Planned Repository Structure
+
+The intended implementation layout is:
+
+```text
+BRIAN-Sphere-LLM/
+  README.md
+  BRIAN-Sphere-LLM_PROJECT_PLAN.md
+  brian_sphere_llm/
+    model/
+    routing/
+    position/
+    memory/
+    losses/
+    data/
+    eval/
+    train/
+    configs/
+  experiments/
+  reports/
+```
+
+## What Is Intentionally Deferred
+
+The early project should not start with:
+
+- 7B+ models;
+- full parallel passing;
+- complex multi-tier KV memory;
+- per-head full-matrix global adapters;
+- RL-style router training;
+- large-scale SFT/RLHF;
+- benchmark chasing before route stability is proven.
+
+Early success is defined by route stability, position usefulness, compute controllability, and preservation of language-modeling quality.
+
+## Project Definition
+
+**BRIAN-Sphere-LLM is a latent routing Transformer framework that learns to navigate a block/operator space with explicit computation-position state, terminal output actions, and optional shared canonical memory, replacing fixed middle-layer depth with adaptive internal computation paths.**
