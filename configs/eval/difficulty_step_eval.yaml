@@ -1,0 +1,6 @@
+eval_name: difficulty_step_eval
+split: val
+max_batches: 8
+device: auto
+baseline_checkpoint: checkpoint_best
+routed_checkpoint: checkpoint_best

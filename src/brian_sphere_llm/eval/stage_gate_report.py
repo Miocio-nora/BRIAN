@@ -72,12 +72,15 @@ def _summarize_run(run_dir: Path) -> dict[str, Any]:
     config = _read_yaml_if_exists(run_dir / "config_resolved.yaml")
     model_stats = _read_json_if_exists(run_dir / "model_stats.json")
     routing_report = _read_json_if_exists(run_dir / "routing_report.json")
+    difficulty_report = _read_json_if_exists(run_dir / "difficulty_step_report.json")
     eval_rows = _read_jsonl(run_dir / "eval_log.jsonl")
     train_rows = _read_jsonl(run_dir / "train_log.jsonl")
     stage = str(config.get("stage", "")) if config else _stage_from_name(run_dir.name)
     final_eval = eval_rows[-1] if eval_rows else {}
     final_train = train_rows[-1] if train_rows else {}
-    difficulty_corr = _difficulty_step_corr(train_rows)
+    difficulty_corr = _num(difficulty_report.get("difficulty_step_correlation"))
+    if difficulty_corr is None:
+        difficulty_corr = _difficulty_step_corr(train_rows)
     summary = {
         "run_dir": str(run_dir),
         "stage": stage,
@@ -92,6 +95,7 @@ def _summarize_run(run_dir: Path) -> dict[str, Any]:
         "routing": routing_report.get("summary", {}),
         "latest_eval": final_eval,
         "difficulty_step_correlation": difficulty_corr,
+        "difficulty_sample_count": _num(difficulty_report.get("sample_count")),
     }
     return summary
 
@@ -136,6 +140,9 @@ def _gate_stage3(stage3: dict[str, Any] | None, stage1: dict[str, Any] | None, t
         "validation_loss_not_collapsed": ratio is None or ratio <= thresholds["stage3_loss_ratio_max"],
         "route_entropy_present": _metric_at_least(stage3, "route_entropy", thresholds["route_entropy_min"]),
         "average_route_steps_present": _finite(_routing_metric(stage3, "average_route_steps")),
+        "difficulty_report_present": _num(stage3.get("difficulty_sample_count") if stage3 else None) is not None
+        and float(stage3["difficulty_sample_count"]) >= 1.0,
+        "difficulty_step_correlation_finite": _finite(stage3.get("difficulty_step_correlation") if stage3 else None),
         "checkpoint_present": bool(stage3 and stage3["has_checkpoint_latest"]),
     }
     return _gate("Stage 3 scheduled free routing remains stable", checks, {"loss_ratio_vs_stage1": ratio})

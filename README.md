@@ -92,6 +92,17 @@ python scripts/make_stage_gate_report.py \
   --runs <stage0_run> <stage1_run> <stage2_run> <stage3_run> <stage4_run> <stage5_run> <stage6_run>
 ```
 
+Generate the required difficulty-step diagnostic for a routed run:
+
+```bash
+python scripts/eval.py \
+  --config configs/eval/difficulty_step_eval.yaml \
+  --baseline-run <stage0_baseline_run> \
+  --routed-run <routed_run>
+```
+
+This writes `difficulty_step_report.json` and per-sample JSONL rows into the routed run directory. The key metric is `difficulty_step_correlation = corr(baseline_cross_entropy, route_steps)`.
+
 Run tests:
 
 ```bash
