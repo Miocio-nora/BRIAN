@@ -330,7 +330,7 @@ python scripts/eval.py \
 ```
 
 This writes `reports/experiment_coverage_report.json`, checking that the manifest covers the required Project Plan package entries, that train configs resolve, and that stages/modes/model flags match the intended ablation roles.
-The same report supports the R350 scaling, Global KV, and parallel-passing manifests with `profile: auto`.
+The same report supports the R350 scaling, cost-control, Global KV, and parallel-passing manifests with `profile: auto`.
 
 Resolve an experiment manifest without training:
 
@@ -360,6 +360,7 @@ python scripts/eval.py \
 ```
 
 The fast smoke manifest is `configs/experiments/tiny_cost_control.yaml`; the BRIAN-R125 sweep manifest is `configs/experiments/route_core_cost_control.yaml`.
+Both manifests are covered by `configs/eval/experiment_coverage.yaml`, which verifies C0-C3 cost-loss weights before training.
 
 Run the Stage 5 Global KV ablation packages:
 
