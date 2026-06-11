@@ -22,6 +22,7 @@ def test_r125_formal_package_coverage_passes(tmp_path: Path) -> None:
     assert report["checks"]["baseline_train_mode_resolves"] is True
     assert report["checks"]["baseline_model_config_valid"] is True
     assert report["checks"]["baseline_data_config_loads"] is True
+    assert report["checks"]["baseline_data_config_consistent"] is True
     assert report["baseline"]["train_mode"] == "baseline"
     assert [row["id"] for row in report["requirements"]] == [
         "A0",
@@ -303,6 +304,35 @@ def test_experiment_coverage_fails_broken_baseline_train_config_path(tmp_path: P
     assert report["checks"]["baseline_train_config_exists"] is False
     assert report["checks"]["baseline_train_config_loads"] is False
     assert report["baseline"]["checks"]["train_config_exists"] is False
+    assert all(requirement["status"] == "pass" for requirement in report["requirements"])
+
+
+def test_experiment_coverage_fails_baseline_data_config_mismatch(tmp_path: Path) -> None:
+    manifest = tmp_path / "mixed_baseline_data.yaml"
+    source = load_config("configs/experiments/route_core_r125_package.yaml")
+    baseline_train = tmp_path / "baseline_mixed_data.yaml"
+    baseline_train.write_text(
+        yaml.safe_dump(
+            {
+                "extends": str(Path("configs/train/stage0_baseline.yaml").resolve()),
+                "data_config": str(Path("configs/data/r125_tiny_debug.yaml").resolve()),
+            }
+        ),
+        encoding="utf-8",
+    )
+    source["baseline_train_config"] = str(baseline_train)
+    manifest.write_text(yaml.safe_dump(source), encoding="utf-8")
+
+    output = make_experiment_coverage_report(
+        manifest,
+        output_path=tmp_path / "coverage.json",
+        profile="package_a",
+    )
+    report = json.loads(output.read_text(encoding="utf-8"))
+
+    assert report["overall_status"] == "fail"
+    assert report["checks"]["baseline_data_config_loads"] is True
+    assert report["checks"]["baseline_data_config_consistent"] is False
     assert all(requirement["status"] == "pass" for requirement in report["requirements"])
 
 

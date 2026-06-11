@@ -71,6 +71,7 @@ def make_experiment_coverage_report(
         "baseline_model_base_config_loads": _baseline_check(baseline, "model_base_config_loads"),
         "baseline_data_config_exists": _baseline_check(baseline, "data_config_exists"),
         "baseline_data_config_loads": _baseline_check(baseline, "data_config_loads"),
+        "baseline_data_config_consistent": _baseline_data_config_consistent(baseline, entries),
         "required_coverage_satisfied": bool(requirements)
         and all(requirement["status"] == "pass" for requirement in requirements),
     }
@@ -703,6 +704,14 @@ def _data_configs_consistent(entries: list[dict[str, Any]]) -> bool:
     return len(paths) == 1
 
 
+def _baseline_data_config_consistent(baseline: dict[str, Any] | None, entries: list[dict[str, Any]]) -> bool:
+    if baseline is None or not baseline.get("data_config"):
+        return False
+    paths = {entry.get("data_config") for entry in entries if entry.get("data_config")}
+    paths.add(baseline["data_config"])
+    return len(paths) == 1
+
+
 def _overall_status(checks: dict[str, bool], requirements: list[dict[str, Any]]) -> str:
     if not checks.get("profile_known", False):
         return "fail"
@@ -731,6 +740,7 @@ def _overall_status(checks: dict[str, bool], requirements: list[dict[str, Any]])
         "baseline_model_base_config_loads",
         "baseline_data_config_exists",
         "baseline_data_config_loads",
+        "baseline_data_config_consistent",
     ]:
         if checks.get(critical_check) is False:
             return "fail"
