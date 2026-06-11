@@ -88,6 +88,7 @@ def _summarize_run(run_dir: Path) -> dict[str, Any]:
     model_stats = _read_json_if_exists(run_dir / "model_stats.json")
     routing_report = _read_json_if_exists(run_dir / "routing_report.json")
     difficulty_report = _read_json_if_exists(run_dir / "difficulty_step_report.json")
+    determinism_report = _read_json_if_exists(run_dir / "eval_determinism_report.json")
     eval_rows = _read_jsonl(run_dir / "eval_log.jsonl")
     train_rows = _read_jsonl(run_dir / "train_log.jsonl")
     stage = str(config.get("stage", "")) if config else _stage_from_name(run_dir.name)
@@ -111,6 +112,8 @@ def _summarize_run(run_dir: Path) -> dict[str, Any]:
         "latest_eval": final_eval,
         "difficulty_step_correlation": difficulty_corr,
         "difficulty_sample_count": _num(difficulty_report.get("sample_count")),
+        "eval_determinism_status": determinism_report.get("overall_status"),
+        "eval_determinism_report_present": bool(determinism_report),
     }
     return summary
 
@@ -120,8 +123,14 @@ def _gate_stage0(stage0: dict[str, Any] | None) -> dict[str, Any]:
         "checkpoint_resume_artifact": bool(stage0 and stage0["has_checkpoint_latest"]),
         "eval_log_present": bool(stage0 and stage0["has_eval_log"]),
         "validation_loss_finite": _finite(stage0.get("validation_loss") if stage0 else None),
+        "eval_determinism_report_present": bool(stage0 and stage0.get("eval_determinism_report_present")),
+        "eval_deterministic": bool(stage0 and stage0.get("eval_determinism_status") == "pass"),
     }
-    return _gate("Stage 0 baseline trains, checkpoints, and evaluates deterministically", checks)
+    return _gate(
+        "Stage 0 baseline trains, checkpoints, and evaluates deterministically",
+        checks,
+        {"eval_determinism_status": stage0.get("eval_determinism_status") if stage0 else None},
+    )
 
 
 def _gate_stage1(stage1: dict[str, Any] | None, stage0: dict[str, Any] | None, thresholds: dict[str, float]) -> dict[str, Any]:

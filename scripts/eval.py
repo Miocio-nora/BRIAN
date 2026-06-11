@@ -8,6 +8,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from brian_sphere_llm.eval.compute_report import make_compute_report
 from brian_sphere_llm.eval.cost_control_report import make_cost_control_report
+from brian_sphere_llm.eval.determinism_report import make_eval_determinism_report
 from brian_sphere_llm.eval.difficulty_report import make_difficulty_report
 from brian_sphere_llm.eval.go_no_go_report import make_go_no_go_report
 from brian_sphere_llm.eval.long_context import make_long_context_report
@@ -47,6 +48,7 @@ def main() -> None:
     parser.add_argument("--sample-count", type=int, default=None, help="Sample count for synthetic evals.")
     parser.add_argument("--baseline-report", default=None, help="Baseline report path for comparison evals.")
     parser.add_argument("--reports", nargs="*", default=None, help="Candidate report paths for comparison evals.")
+    parser.add_argument("--tolerance", type=float, default=None, help="Numeric tolerance for determinism evals.")
     args = parser.parse_args()
     config = load_config(args.config)
     eval_name = config.get("eval_name", "routing_eval")
@@ -99,6 +101,19 @@ def main() -> None:
             runs,
             output_path=args.output or config.get("output_path"),
             min_active_compute_range=float(args.min_active_compute_range or config.get("min_active_compute_range", 0.05)),
+        )
+    elif eval_name == "eval_determinism_report":
+        if not args.run:
+            raise SystemExit("eval_determinism_report requires --run")
+        report = make_eval_determinism_report(
+            args.run,
+            output_path=args.output or config.get("output_path"),
+            split=args.split or str(config.get("split", "val")),
+            batch_size=args.batch_size or config.get("batch_size"),
+            checkpoint=str(args.checkpoint or config.get("checkpoint", "checkpoint_best")),
+            seed=int(config.get("seed", 1)),
+            device_name=str(config.get("device", "auto")),
+            tolerance=float(args.tolerance if args.tolerance is not None else config.get("tolerance", 1e-8)),
         )
     elif eval_name == "reasoning_eval":
         if not args.run:

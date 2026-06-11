@@ -114,6 +114,16 @@ python scripts/eval.py \
 
 This writes `difficulty_step_report.json` and per-sample JSONL rows into the routed run directory. The key metric is `difficulty_step_correlation = corr(baseline_cross_entropy, route_steps)`.
 
+Check repeated eval determinism for a checkpoint:
+
+```bash
+python scripts/eval.py \
+  --config configs/eval/eval_determinism.yaml \
+  --run <run_dir>
+```
+
+This writes `eval_determinism_report.json` by running the same checkpoint twice with the same seed and comparing numeric validation/routing metrics. Stage 0 gates use this as explicit determinism evidence.
+
 Run the lightweight synthetic reasoning eval:
 
 ```bash

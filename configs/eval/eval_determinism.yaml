@@ -1,0 +1,8 @@
+eval_name: eval_determinism_report
+output_path: null
+split: val
+batch_size: null
+checkpoint: checkpoint_best
+seed: 1
+device: auto
+tolerance: 0.00000001

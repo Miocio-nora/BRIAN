@@ -15,6 +15,7 @@ def _write_run(
     stage: str,
     val_loss: float,
     train_row: dict,
+    determinism_status: str | None = None,
 ) -> Path:
     run_dir = root / name
     run_dir.mkdir(parents=True)
@@ -26,6 +27,11 @@ def _write_run(
     (run_dir / "config_resolved.yaml").write_text(yaml.safe_dump({"stage": stage}), encoding="utf-8")
     (run_dir / "eval_log.jsonl").write_text(json.dumps({"validation_loss": val_loss, "perplexity": 1.0}) + "\n", encoding="utf-8")
     (run_dir / "train_log.jsonl").write_text(json.dumps(train_row | {"loss": val_loss}) + "\n", encoding="utf-8")
+    if determinism_status is not None:
+        (run_dir / "eval_determinism_report.json").write_text(
+            json.dumps({"overall_status": determinism_status, "checks": {"numeric_metrics_within_tolerance": True}}),
+            encoding="utf-8",
+        )
     return run_dir
 
 
@@ -42,6 +48,7 @@ def test_stage_gate_report_writes_json(tmp_path: Path) -> None:
         stage="stage0_baseline",
         val_loss=10.0,
         train_row={},
+        determinism_status="pass",
     )
     fixed = _write_run(
         tmp_path,

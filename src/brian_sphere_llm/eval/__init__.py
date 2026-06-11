@@ -2,6 +2,7 @@
 
 from brian_sphere_llm.eval.compute_report import estimate_gpu_hours, make_compute_report
 from brian_sphere_llm.eval.cost_control_report import make_cost_control_report
+from brian_sphere_llm.eval.determinism_report import make_eval_determinism_report
 from brian_sphere_llm.eval.difficulty import difficulty_step_correlation, summarize_difficulty_samples
 from brian_sphere_llm.eval.go_no_go_report import make_go_no_go_report
 from brian_sphere_llm.eval.long_context import make_long_context_report
@@ -16,6 +17,7 @@ __all__ = [
     "estimate_gpu_hours",
     "make_compute_report",
     "make_cost_control_report",
+    "make_eval_determinism_report",
     "make_go_no_go_report",
     "make_long_context_comparison_report",
     "make_long_context_report",
