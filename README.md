@@ -87,6 +87,17 @@ python scripts/eval.py --config configs/eval/routing_eval.yaml --run <run_dir>
 
 Training writes `routing_report.json` at checkpoint saves by default (`write_routing_report_on_checkpoint: true`). Routing reports include `route_entropy`, `block_load_entropy`, `route_path_diversity`, path examples, block histograms, exit distributions, active block evals, cost-quality curve points, and position/global/parallel diagnostics when available.
 
+Generate a standard LM metrics report:
+
+```bash
+python scripts/eval.py \
+  --config configs/eval/lm_eval.yaml \
+  --run <run_dir> \
+  --reports <reasoning_report.json> <long_context_report.json>
+```
+
+This writes `reports/lm_eval_report.json` with validation loss, perplexity, requested throughput/routing metrics, optional downstream task accuracy, and an aggregate benchmark score from supplied downstream reports.
+
 When `resume: true` loads `checkpoint_latest`, training appends `resume_events.jsonl`. Stage 0 gates use this file as explicit checkpoint-resume evidence.
 
 Generate fixed-route stability evidence for a Stage 1 run:

@@ -1,6 +1,8 @@
 eval_name: lm_eval
+output_path: reports/lm_eval_report.json
 metrics:
   - validation_loss
   - perplexity
   - tokens_per_second
   - active_block_evals_per_token
+downstream_report_paths: []

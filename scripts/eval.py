@@ -15,6 +15,7 @@ from brian_sphere_llm.eval.global_kv_ablation import make_global_kv_ablation_rep
 from brian_sphere_llm.eval.global_kv_retention import make_global_kv_retention_report
 from brian_sphere_llm.eval.go_no_go_report import make_go_no_go_report
 from brian_sphere_llm.eval.hard_exit_compare import make_hard_exit_comparison_report
+from brian_sphere_llm.eval.lm_eval import make_lm_eval_report
 from brian_sphere_llm.eval.long_context import make_long_context_report
 from brian_sphere_llm.eval.long_context_compare import make_long_context_comparison_report
 from brian_sphere_llm.eval.out_by_difficulty import make_out_by_difficulty_report
@@ -82,6 +83,15 @@ def main() -> None:
             parallel_passing_report_path=args.parallel_passing_report
             or config.get("parallel_passing_report_path"),
             parallel_compare_report_path=args.parallel_compare_report or config.get("parallel_compare_report_path"),
+        )
+    elif eval_name == "lm_eval":
+        if not args.run:
+            raise SystemExit("lm_eval requires --run")
+        report = make_lm_eval_report(
+            args.run,
+            output_path=args.output or config.get("output_path"),
+            metrics=list(config.get("metrics") or []),
+            downstream_report_paths=args.reports or config.get("downstream_report_paths", []),
         )
     elif eval_name == "difficulty_step_eval":
         baseline_run = args.baseline_run or config.get("baseline_run")
