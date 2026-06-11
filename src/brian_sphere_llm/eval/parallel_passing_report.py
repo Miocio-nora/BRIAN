@@ -33,12 +33,16 @@ def make_parallel_passing_report(
     delta_cache_slots = _series(train_rows, eval_rows, summary, latest_eval, "parallel_delta_cache_slots_max")
     beam_size = int(_num(model_config.get("beam_size")) or 0)
     branch_cost = _num(model_config.get("branch_cost"))
-    global_kv_enabled = _bool(model_config.get("global_kv", False))
+    global_kv_enabled = _bool_value(model_config.get("global_kv", False), "model_config_resolved.global_kv")
+    parallel_passing_enabled = _bool_value(
+        model_config.get("parallel_passing", False),
+        "model_config_resolved.parallel_passing",
+    )
     global_window_slots = int(_num(model_config.get("global_window_slots")) or 0)
     parallel_stage = str(config.get("stage", "")).startswith("stage6") or str(config.get("stage", "")).startswith("stage7")
     checks = {
         "stage6_parallel_stage": parallel_stage,
-        "parallel_passing_enabled": _bool(model_config.get("parallel_passing", False)),
+        "parallel_passing_enabled": parallel_passing_enabled,
         "parallel_route_selected": parallel_stage or _routing_mode(config) == "parallel",
         "shared_base_global_memory_enabled": global_kv_enabled,
         "beam_size_present": beam_size >= 1,
@@ -72,7 +76,7 @@ def make_parallel_passing_report(
         "run_dir": str(run_dir),
         "stage": str(config.get("stage", "")),
         "model": {
-            "parallel_passing_enabled": _bool(model_config.get("parallel_passing", False)),
+            "parallel_passing_enabled": parallel_passing_enabled,
             "beam_size": beam_size,
             "branch_cost": branch_cost,
             "parallel_exit_policy": str(model_config.get("parallel_exit_policy", "branch")),
@@ -154,10 +158,16 @@ def _min(values: list[float]) -> float | None:
     return min(values) if values else None
 
 
-def _bool(value: Any) -> bool:
+def _bool_value(value: Any, name: str) -> bool:
     if isinstance(value, bool):
         return value
-    return str(value).lower() in {"1", "true", "yes", "on", "enabled"}
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "on", "enabled"}:
+            return True
+        if normalized in {"0", "false", "no", "off", "disabled"}:
+            return False
+    raise ValueError(f"{name} must be a boolean.")
 
 
 def _num(value: Any) -> float | None:

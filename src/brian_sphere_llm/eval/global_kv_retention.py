@@ -39,7 +39,7 @@ def make_global_kv_retention_report(
     latest_eval = routing_report.get("latest_eval", {}) if isinstance(routing_report.get("latest_eval"), dict) else {}
     metrics, metric_sources = _global_kv_metrics(summary, latest_eval)
 
-    global_kv_enabled = _bool(model_config.get("global_kv", False))
+    global_kv_enabled = _bool_value(model_config.get("global_kv", False), "model_config_resolved.global_kv")
     sink_slots = int(_num(model_config.get("global_sink_slots")) or 0)
     window_slots = int(_num(model_config.get("global_window_slots")) or 0)
     retention_capacity = sink_slots + window_slots if global_kv_enabled else 0
@@ -208,10 +208,16 @@ def _finite(value: float | None) -> bool:
     return isinstance(value, (int, float)) and math.isfinite(float(value))
 
 
-def _bool(value: Any) -> bool:
+def _bool_value(value: Any, name: str) -> bool:
     if isinstance(value, bool):
         return value
-    return str(value).lower() in {"1", "true", "yes", "on", "enabled"}
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "on", "enabled"}:
+            return True
+        if normalized in {"0", "false", "no", "off", "disabled"}:
+            return False
+    raise ValueError(f"{name} must be a boolean.")
 
 
 def _num(value: Any) -> float | None:

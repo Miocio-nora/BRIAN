@@ -1,6 +1,7 @@
 import json
 from pathlib import Path
 
+import pytest
 import yaml
 
 from brian_sphere_llm.eval.global_kv_ablation import make_global_kv_ablation_report
@@ -217,6 +218,21 @@ def test_global_kv_ablation_report_rejects_boolean_metrics(tmp_path: Path) -> No
     assert global_row["long_context"]["exact_match_accuracy"] is None
     assert report["checks"]["global_metrics_present"] is False
     assert report["checks"]["long_context_quality_metrics_present"] is False
+
+
+def test_global_kv_ablation_report_rejects_invalid_boolean_model_config(tmp_path: Path) -> None:
+    run = _write_run(tmp_path, "local", global_kv=False, sink_slots=0, window_slots=0)
+    config_path = run / "config_resolved.yaml"
+    config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    config["model_config_resolved"]["global_kv"] = "true_after_route_core"
+    config_path.write_text(yaml.safe_dump(config), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="model_config_resolved.global_kv"):
+        make_global_kv_ablation_report(
+            "configs/experiments/tiny_global_kv.yaml",
+            [run],
+            output_path=tmp_path / "global_kv_ablation.json",
+        )
 
 
 def test_global_kv_ablation_eval_config_resolves() -> None:

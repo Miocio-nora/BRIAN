@@ -1,6 +1,7 @@
 import json
 from pathlib import Path
 
+import pytest
 import yaml
 
 from brian_sphere_llm.eval.parallel_passing_report import make_parallel_passing_report
@@ -158,6 +159,30 @@ def test_parallel_passing_report_rejects_boolean_numeric_metrics(tmp_path: Path)
     assert report["checks"]["branch_metrics_present"] is False
     assert report["checks"]["score_margin_measured"] is False
     assert report["checks"]["branch_delta_memory_measured"] is False
+
+
+def test_parallel_passing_report_rejects_invalid_boolean_model_config(tmp_path: Path) -> None:
+    run_dir = _write_run(
+        tmp_path,
+        beam_size=2,
+        branch_cost=0.01,
+        window_slots=3,
+        train_rows=[{"parallel_branch_count_mean": 2.0, "parallel_score_margin_mean": 0.2}],
+    )
+    config_path = run_dir / "config_resolved.yaml"
+    config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    config["model_config_resolved"]["parallel_passing"] = "experimental_only"
+    config_path.write_text(yaml.safe_dump(config), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="model_config_resolved.parallel_passing"):
+        make_parallel_passing_report(run_dir)
+
+    config["model_config_resolved"]["parallel_passing"] = True
+    config["model_config_resolved"]["global_kv"] = 1
+    config_path.write_text(yaml.safe_dump(config), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="model_config_resolved.global_kv"):
+        make_parallel_passing_report(run_dir)
 
 
 def test_parallel_passing_eval_config_resolves() -> None:

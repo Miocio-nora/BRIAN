@@ -81,7 +81,7 @@ def _summarize_run(
     latest_eval = eval_rows[-1] if eval_rows else routing_report.get("latest_eval", {})
     routing_summary = routing_report.get("summary", {}) if isinstance(routing_report.get("summary"), dict) else {}
     long_context = long_context_by_run.get(_normalize_run_dir(run_dir), {})
-    global_kv_enabled = _bool(model_config.get("global_kv", False))
+    global_kv_enabled = _bool_value(model_config.get("global_kv", False), "model_config_resolved.global_kv")
     global_code_dim = int(_num(model_config.get("global_code_dim")) or 0)
     sink_slots = int(_num(model_config.get("global_sink_slots")) or 0)
     window_slots = int(_num(model_config.get("global_window_slots")) or 0)
@@ -480,10 +480,16 @@ def _num(value: Any) -> float | None:
     return None
 
 
-def _bool(value: Any) -> bool:
+def _bool_value(value: Any, name: str) -> bool:
     if isinstance(value, bool):
         return value
-    return str(value).lower() in {"1", "true", "yes", "on", "enabled"}
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "on", "enabled"}:
+            return True
+        if normalized in {"0", "false", "no", "off", "disabled"}:
+            return False
+    raise ValueError(f"{name} must be a boolean.")
 
 
 def _read_jsonl(path: Path) -> list[dict[str, Any]]:
