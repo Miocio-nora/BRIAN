@@ -903,9 +903,17 @@ def _compute_report_has_not_worse_candidate(report: dict[str, Any]) -> bool | No
         if not isinstance(comparison, dict):
             continue
         found = True
+        same_parameter_count = comparison.get("same_parameter_count_view") is True
         same_active = comparison.get("same_active_compute_view") is True
+        similar_flops = comparison.get("similar_training_flops_view") is True
         loss_delta = comparison.get("validation_loss_delta")
-        if same_active and isinstance(loss_delta, (int, float)) and loss_delta <= 0.0:
+        if (
+            same_parameter_count
+            and same_active
+            and similar_flops
+            and isinstance(loss_delta, (int, float))
+            and loss_delta <= 0.0
+        ):
             return True
     return False if found else None
 
