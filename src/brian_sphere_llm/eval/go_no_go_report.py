@@ -160,8 +160,8 @@ def _r125_decision(stage_gate_report: dict[str, Any], *, position_ablation_repor
         ),
         _criterion(
             "block_position_ablation_measurable_difference",
-            _report_passed(position_ablation_report),
-            _report_evidence(position_ablation_report),
+            _position_ablation_passed(position_ablation_report),
+            _position_ablation_evidence(position_ablation_report),
         ),
         _criterion(
             "output_action_not_always_early_or_never_used",
@@ -387,6 +387,26 @@ def _out_by_difficulty_evidence(report: dict[str, Any]) -> dict[str, Any]:
         **_report_evidence(report),
         "deltas": report.get("deltas"),
         "by_difficulty": report.get("by_difficulty"),
+    }
+
+
+def _position_ablation_passed(report: dict[str, Any]) -> bool | None:
+    if not report:
+        return None
+    if report.get("overall_status") != "pass":
+        return False
+    checks = report.get("checks")
+    if not isinstance(checks, dict):
+        return False
+    return checks.get("candidate_present") is True and checks.get("any_measurable_difference") is True
+
+
+def _position_ablation_evidence(report: dict[str, Any]) -> dict[str, Any]:
+    if not report:
+        return {}
+    return {
+        **_report_evidence(report),
+        "comparisons": report.get("comparisons"),
     }
 
 
