@@ -368,7 +368,7 @@ def _global_kv_memory_quality_benefit(
     global_kv_ablation_report: dict[str, Any],
 ) -> bool | None:
     outcomes = [
-        _report_passed(long_context_compare_report),
+        _long_context_compare_has_memory_quality_candidate(long_context_compare_report),
         _global_kv_ablation_has_memory_quality_candidate(global_kv_ablation_report),
     ]
     outcomes = [outcome for outcome in outcomes if outcome is not None]
@@ -382,12 +382,57 @@ def _global_kv_evidence(
     global_kv_ablation_report: dict[str, Any],
 ) -> dict[str, Any]:
     return {
-        "long_context_compare": _report_evidence(long_context_compare_report),
+        "long_context_compare": {
+            **_report_evidence(long_context_compare_report),
+            "benefit_candidates": _long_context_benefit_candidates(long_context_compare_report),
+        },
         "global_kv_ablation": {
             **_report_evidence(global_kv_ablation_report),
             "benefit_candidates": _global_kv_ablation_benefit_candidates(global_kv_ablation_report),
         },
     }
+
+
+def _long_context_compare_has_memory_quality_candidate(report: dict[str, Any]) -> bool | None:
+    if not report:
+        return None
+    if report.get("overall_status") != "pass":
+        return False
+    candidates = _long_context_benefit_candidates(report)
+    if not candidates:
+        return False
+    return any(candidate["passes_memory_quality_proxy"] for candidate in candidates)
+
+
+def _long_context_benefit_candidates(report: dict[str, Any]) -> list[dict[str, Any]]:
+    rows = report.get("comparisons", []) if report else []
+    if not isinstance(rows, list):
+        return []
+    candidates = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        checks = row.get("checks", {}) if isinstance(row.get("checks"), dict) else {}
+        passes = (
+            row.get("status") == "pass"
+            and checks.get("global_kv_active") is True
+            and checks.get("quality_not_worse") is True
+            and checks.get("memory_budget_present") is True
+            and checks.get("global_budget_below_local_context") is True
+        )
+        candidates.append(
+            {
+                "candidate_report": row.get("candidate_report"),
+                "candidate_run_dir": row.get("candidate_run_dir"),
+                "status": row.get("status"),
+                "global_kv_active": checks.get("global_kv_active"),
+                "quality_not_worse": checks.get("quality_not_worse"),
+                "memory_budget_present": checks.get("memory_budget_present"),
+                "global_budget_below_local_context": checks.get("global_budget_below_local_context"),
+                "passes_memory_quality_proxy": passes,
+            }
+        )
+    return candidates
 
 
 def _global_kv_ablation_has_memory_quality_candidate(report: dict[str, Any]) -> bool | None:
