@@ -186,6 +186,20 @@ def test_scaled_train_configs_keep_b200_memory_controls() -> None:
             assert config[key] == value
 
 
+def test_scheduled_train_configs_keep_curriculum_schedule() -> None:
+    errors: list[str] = []
+    scheduled_paths: list[Path] = []
+    for path in _yaml_files(CONFIG_ROOT / "train"):
+        config = load_config(path)
+        routing = config.get("routing", {})
+        if isinstance(routing, dict) and routing.get("mode") == "scheduled":
+            scheduled_paths.append(path)
+            _validate_scheduled_routing_config(routing, path, errors)
+
+    assert scheduled_paths
+    assert errors == []
+
+
 def test_experiment_manifests_reference_train_configs() -> None:
     errors: list[str] = []
     for path in _yaml_files(CONFIG_ROOT / "experiments"):
@@ -309,6 +323,45 @@ def test_train_config_validation_rejects_invalid_precision_value() -> None:
     _validate_train_config({**config, "precision": "float16"}, Path("bad_precision.yaml"), errors)
 
     assert any("precision must be fp32 or bf16" in error for error in errors)
+
+
+def test_train_config_validation_rejects_invalid_scheduled_routing_values() -> None:
+    config = load_config(CONFIG_ROOT / "train" / "stage3_scheduled_free_routing.yaml")
+    errors: list[str] = []
+
+    _validate_train_config(
+        {
+            **config,
+            "routing": {
+                "mode": "scheduled",
+                "schedule": [
+                    {"max_step": 10, "router_probability": 0.5, "lambda_route": 0.2},
+                    {"max_step": 10, "router_probability": 0.4, "lambda_route": 0.3},
+                ],
+            },
+        },
+        Path("bad_schedule.yaml"),
+        errors,
+    )
+    _validate_train_config(
+        {
+            **config,
+            "routing": {
+                "mode": "scheduled",
+                "schedule": [
+                    {"max_step": True, "router_probability": 0.1, "lambda_route": 1.0},
+                    {"max_step": 2, "router_probability": 0.9, "lambda_route": 0.05},
+                ],
+            },
+        },
+        Path("bad_bool_schedule.yaml"),
+        errors,
+    )
+
+    assert any("routing.schedule max_step values must be strictly increasing" in error for error in errors)
+    assert any("routing.schedule router_probability values must be nondecreasing" in error for error in errors)
+    assert any("routing.schedule lambda_route values must be nonincreasing" in error for error in errors)
+    assert any("routing.schedule.0.max_step must be an integer, not a boolean" in error for error in errors)
 
 
 def _yaml_files(root: Path) -> list[Path]:
@@ -473,6 +526,81 @@ def _validate_train_config(config: dict[str, Any], path: Path, errors: list[str]
     for key in ["activation_checkpointing", "ddp_find_unused_parameters", "resume", "write_routing_report_on_checkpoint"]:
         if key in config and not isinstance(config.get(key), bool):
             errors.append(f"{path}: {key} must be a boolean")
+    routing = config.get("routing", {})
+    if routing:
+        if not isinstance(routing, dict):
+            errors.append(f"{path}: routing must be a mapping")
+        else:
+            _validate_routing_config(routing, path, errors)
+
+
+def _validate_routing_config(routing: dict[str, Any], path: Path, errors: list[str]) -> None:
+    mode = routing.get("mode")
+    if mode is not None and mode not in {"fixed", "pseudo", "scheduled", "parallel"}:
+        errors.append(f"{path}: routing.mode must be fixed, pseudo, scheduled, or parallel")
+    if mode == "scheduled":
+        _validate_scheduled_routing_config(routing, path, errors)
+
+
+def _validate_scheduled_routing_config(routing: dict[str, Any], path: Path, errors: list[str]) -> None:
+    schedule = routing.get("schedule")
+    if not isinstance(schedule, list) or not schedule:
+        errors.append(f"{path}: routing.schedule must be a non-empty list for scheduled routing")
+        return
+
+    max_steps: list[int] = []
+    router_probabilities: list[float] = []
+    lambda_routes: list[float] = []
+    for index, item in enumerate(schedule):
+        if not isinstance(item, dict):
+            errors.append(f"{path}: routing.schedule.{index} must be a mapping")
+            continue
+        max_step = _int_config_value(
+            item.get("max_step"),
+            f"routing.schedule.{index}.max_step",
+            path,
+            errors,
+            minimum=1,
+        )
+        router_probability = _float_config_value(
+            item.get("router_probability"),
+            f"routing.schedule.{index}.router_probability",
+            path,
+            errors,
+            minimum=0.0,
+        )
+        lambda_route = _float_config_value(
+            item.get("lambda_route"),
+            f"routing.schedule.{index}.lambda_route",
+            path,
+            errors,
+            minimum=0.0,
+        )
+        if max_step is not None:
+            max_steps.append(max_step)
+        if router_probability is not None:
+            router_probabilities.append(router_probability)
+            if router_probability > 1.0:
+                errors.append(f"{path}: routing.schedule.{index}.router_probability must be <= 1.0")
+        if lambda_route is not None:
+            lambda_routes.append(lambda_route)
+
+    if len(max_steps) != len(schedule) or len(router_probabilities) != len(schedule) or len(lambda_routes) != len(schedule):
+        return
+    if any(next_value <= value for value, next_value in zip(max_steps, max_steps[1:])):
+        errors.append(f"{path}: routing.schedule max_step values must be strictly increasing")
+    if any(next_value < value for value, next_value in zip(router_probabilities, router_probabilities[1:])):
+        errors.append(f"{path}: routing.schedule router_probability values must be nondecreasing")
+    if any(next_value > value for value, next_value in zip(lambda_routes, lambda_routes[1:])):
+        errors.append(f"{path}: routing.schedule lambda_route values must be nonincreasing")
+    if len(router_probabilities) < 2 or router_probabilities[-1] <= router_probabilities[0]:
+        errors.append(f"{path}: routing.schedule router_probability must increase")
+    if not math.isclose(router_probabilities[-1], 1.0, rel_tol=0.0, abs_tol=1e-9):
+        errors.append(f"{path}: routing.schedule final router_probability must be 1.0")
+    if len(lambda_routes) < 2 or lambda_routes[-1] >= lambda_routes[0]:
+        errors.append(f"{path}: routing.schedule lambda_route must decay")
+    if lambda_routes[-1] > 0.05:
+        errors.append(f"{path}: routing.schedule final lambda_route must be <= 0.05")
 
 
 def _int_config_value(value: Any, name: str, path: Path, errors: list[str], *, minimum: int) -> int | None:
