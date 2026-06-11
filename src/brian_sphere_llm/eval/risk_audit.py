@@ -147,8 +147,11 @@ def _router_collapse(reports: dict[str, dict[str, Any]], thresholds: dict[str, f
 
     never_exit_fraction = _hist_fraction(exit_hist, "0")
     p_output = _num(summary.get("p_output_mean"))
+    not_never_exit = _gate_check(stage_gate_report, "stage4_to_5", "not_never_exit")
     if never_exit_fraction is not None:
         never_exits = never_exit_fraction >= thresholds["max_exit_dominance"]
+    elif not_never_exit is not None:
+        never_exits = not not_never_exit
     elif p_output is not None:
         never_exits = p_output <= thresholds["min_output_probability"]
     else:
@@ -191,6 +194,7 @@ def _router_collapse(reports: dict[str, dict[str, Any]], thresholds: dict[str, f
                 "step_0_fraction": never_exit_fraction,
                 "p_output_mean": p_output,
                 "min_output_probability": thresholds["min_output_probability"],
+                "stage4_not_never_exit": not_never_exit,
             },
         ),
     ]

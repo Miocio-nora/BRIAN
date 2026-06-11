@@ -37,7 +37,7 @@ def test_risk_audit_passes_with_clear_evidence(tmp_path: Path) -> None:
                 },
                 "stage4_to_5": {
                     "status": "pass",
-                    "checks": {"not_all_immediate_exit": True},
+                    "checks": {"not_all_immediate_exit": True, "not_never_exit": True},
                     "first_exit_step_histogram": {"2": 8, "3": 2},
                 },
                 "stage5_to_6": {"status": "pass", "checks": {"global_attention_mass_nonzero": True}},
@@ -144,7 +144,7 @@ def test_risk_audit_flags_triggered_symptoms(tmp_path: Path) -> None:
                 },
                 "stage4_to_5": {
                     "status": "fail",
-                    "checks": {"not_all_immediate_exit": False},
+                    "checks": {"not_all_immediate_exit": False, "not_never_exit": True},
                     "first_exit_step_histogram": {"1": 10},
                 },
                 "stage5_to_6": {"status": "fail", "checks": {"global_attention_mass_nonzero": False}},
@@ -228,6 +228,56 @@ def test_risk_audit_flags_triggered_symptoms(tmp_path: Path) -> None:
     ] is True
     assert _symptom(report, "global_kv_noise", "global_cache_worsens_loss")["triggered"] is True
     assert _symptom(report, "parallel_passing_cost_explosion", "branch_count_grows")["triggered"] is True
+
+
+def test_risk_audit_flags_never_exit_from_stage_gate_check(tmp_path: Path) -> None:
+    routing = _write_json(
+        tmp_path / "routing.json",
+        {
+            "summary": {
+                "block_load_entropy_normalized": 0.5,
+                "route_path_diversity": 0.5,
+                "p_output_mean": 0.5,
+            }
+        },
+    )
+    stage_gate = _write_json(
+        tmp_path / "stage_gate.json",
+        {
+            "gates": {
+                "stage4_to_5": {
+                    "status": "fail",
+                    "checks": {"not_all_immediate_exit": True, "not_never_exit": False},
+                }
+            }
+        },
+    )
+    position = _write_json(
+        tmp_path / "position.json",
+        {"overall_status": "pass", "checks": {"candidate_present": True, "any_measurable_difference": True}},
+    )
+    retention = _write_json(tmp_path / "retention.json", {"overall_status": "pass", "checks": {}})
+    long_context = _write_json(tmp_path / "long_context.json", {"overall_status": "pass", "comparisons": []})
+    global_ablation = _write_json(tmp_path / "global_ablation.json", {"comparisons": {"local_vs_global": []}})
+    parallel_passing = _write_json(tmp_path / "parallel_passing.json", {"checks": {}})
+    parallel_compare = _write_json(tmp_path / "parallel_compare.json", {"comparisons": []})
+
+    output = make_risk_audit_report(
+        output_path=tmp_path / "risk.json",
+        stage_gate_report_path=stage_gate,
+        routing_report_path=routing,
+        position_ablation_report_path=position,
+        global_kv_retention_report_path=retention,
+        long_context_compare_report_path=long_context,
+        global_kv_ablation_report_path=global_ablation,
+        parallel_passing_report_path=parallel_passing,
+        parallel_compare_report_path=parallel_compare,
+    )
+    report = json.loads(output.read_text(encoding="utf-8"))
+    never_exits = _symptom(report, "router_collapse", "never_exits")
+
+    assert never_exits["triggered"] is True
+    assert never_exits["evidence"]["stage4_not_never_exit"] is False
 
 
 def test_risk_audit_eval_config_resolves() -> None:
