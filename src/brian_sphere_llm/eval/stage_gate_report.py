@@ -692,6 +692,10 @@ def _data_manifest_ref_checks(ref: Any) -> dict[str, bool]:
         "manifest_row_count_positive": _positive_number(ref.get("manifest_row_count")),
         "manifest_source_text_hashes_verified": ref.get("manifest_source_text_hashes_verified") is True,
         "manifest_token_hashes_verified": ref.get("manifest_token_hashes_verified") is True,
+        "tokenizer_artifact_count_positive": _positive_number(ref.get("tokenizer_artifact_count")),
+        "tokenizer_artifacts_present": ref.get("tokenizer_artifacts_present") is True,
+        "tokenizer_artifact_hashes_present": _positive_string_mapping(ref.get("tokenizer_artifact_hashes")),
+        "tokenizer_artifact_hashes_flag": ref.get("tokenizer_artifact_hashes_present") is True,
         "stats_recipe_name_matches_config": ref.get("stats_recipe_name_matches_config") is True,
         "stats_sequence_length_matches_config": ref.get("stats_sequence_length_matches_config") is True,
         "source_mixture_present": isinstance(ref.get("source_mixture_realized"), dict)
@@ -762,6 +766,10 @@ def _normalized_numeric_mapping(value: Any) -> dict[str, float]:
 
 def _positive_numeric_mapping(value: Any) -> bool:
     return isinstance(value, dict) and bool(value) and all(_positive_number(item) for item in value.values())
+
+
+def _positive_string_mapping(value: Any) -> bool:
+    return isinstance(value, dict) and bool(value) and all(_nonempty_string(item) for item in value.values())
 
 
 def _eval_determinism_checks_passed(checks: Any) -> bool:

@@ -8,7 +8,7 @@ from typing import Any
 
 from brian_sphere_llm.data.download import iter_hf_text_dataset
 from brian_sphere_llm.data.filter import keep_text, normalize_text
-from brian_sphere_llm.data.manifest import ManifestRow, read_manifest, sha256_text, sha256_tokens, write_manifest
+from brian_sphere_llm.data.manifest import ManifestRow, read_manifest, sha256_bytes, sha256_text, sha256_tokens, write_manifest
 from brian_sphere_llm.data.pack import pack_fixed_length, write_index, write_token_bin
 from brian_sphere_llm.data.synthetic_routing import generate_synthetic_samples
 from brian_sphere_llm.data.tokenize import load_tokenizer, tokenizer_metadata
@@ -37,9 +37,13 @@ def prepare_data(config_path: str | Path) -> Path:
         revision=str(tokenizer_cfg.get("revision", "main")),
         license=str(tokenizer_cfg.get("license", "unknown")),
     )
-    write_json(asdict(metadata), output_dir / "tokenizer_metadata.json")
+    tokenizer_metadata_path = output_dir / "tokenizer_metadata.json"
+    write_json(asdict(metadata), tokenizer_metadata_path)
+    saved_tokenizer_paths: tuple[str, ...] = ()
     if hasattr(tokenizer, "save_pretrained"):
-        tokenizer.save_pretrained(output_dir)
+        saved_paths = tokenizer.save_pretrained(output_dir)
+        saved_tokenizer_paths = tuple(str(path) for path in saved_paths) if saved_paths else ()
+    tokenizer_artifact_audit = _audit_tokenizer_artifacts(output_dir, saved_tokenizer_paths)
     pad_token_id = getattr(tokenizer, "pad_token_id", None)
     if pad_token_id is None:
         pad_token_id = getattr(tokenizer, "eos_token_id", None)
@@ -124,6 +128,7 @@ def prepare_data(config_path: str | Path) -> Path:
         "source_mixture_realized_share": source_mixture_realized_share,
         "sha256_manifest": sha256_text(manifest_text),
         **manifest_audit,
+        **tokenizer_artifact_audit,
         "tokenizer": asdict(metadata),
     }
     write_json(stats, output_dir / "stats.json")
@@ -152,6 +157,22 @@ def _audit_prepared_manifest(manifest_path: Path, tokenizer: Any) -> dict[str, A
         "manifest_token_hashes_verified": bool(rows) and token_failures == 0,
         "manifest_source_text_hash_failure_count": source_text_failures,
         "manifest_token_hash_failure_count": token_failures,
+    }
+
+
+def _audit_tokenizer_artifacts(output_dir: Path, saved_paths: tuple[str, ...]) -> dict[str, Any]:
+    paths = {Path(path) for path in saved_paths}
+    paths.add(output_dir / "tokenizer_metadata.json")
+    existing = sorted((path for path in paths if path.exists() and path.is_file()), key=lambda path: path.name)
+    artifact_hashes = {
+        path.name: sha256_bytes(path.read_bytes())
+        for path in existing
+    }
+    return {
+        "tokenizer_artifact_count": len(existing),
+        "tokenizer_artifacts_present": bool(existing),
+        "tokenizer_artifact_hashes": artifact_hashes,
+        "tokenizer_artifact_hashes_present": bool(artifact_hashes),
     }
 
 

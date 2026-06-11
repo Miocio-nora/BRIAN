@@ -16,7 +16,7 @@ Implemented v0.1 pieces:
 
 - reproducible data manifest and fixed-length token packing;
 - prepared-manifest audits for source-text and token hash reproducibility;
-- offline tokenizer artifacts (`tokenizer.json`, `tokenizer_config.json`, and metadata) for smoke data;
+- offline tokenizer artifacts (`tokenizer.json`, `tokenizer_config.json`, and metadata) with artifact hashes for smoke data;
 - synthetic routing smoke data with manifest-retained pseudo-route metadata covering copy, reverse, transform, arithmetic, rewrite, parentheses, and repeated transforms;
 - LLaMA-like decoder-only baseline;
 - BRIAN route-core wrapper with pre / route-pool / post blocks;
@@ -141,7 +141,7 @@ python scripts/make_stage_gate_report.py \
   --runs <stage0_run> <stage1_run> <stage2_run> <stage3_run> <stage4_run> <stage5_run> <stage6_run>
 ```
 
-Every stage gate also verifies that each run carries `config_resolved.yaml`, `train_log.jsonl`, `model_stats.json` with a positive integer parameter count, a valid `data_manifest_ref.json` with verified tokenized-data paths, sequence length, train/validation token counts, manifest hash, manifest row source/token hash audit evidence, expected and realized source mixture evidence, and a passing `lm_eval_report.json` with validation loss, perplexity, and throughput. Routed stages also require `checkpoint_best/state.pt` and active block evals/token in the validation report. Stage 3 requires a positive difficulty-step correlation.
+Every stage gate also verifies that each run carries `config_resolved.yaml`, `train_log.jsonl`, `model_stats.json` with a positive integer parameter count, a valid `data_manifest_ref.json` with verified tokenized-data paths, sequence length, train/validation token counts, manifest hash, tokenizer artifact hashes, manifest row source/token hash audit evidence, expected and realized source mixture evidence, and a passing `lm_eval_report.json` with validation loss, perplexity, and throughput. Routed stages also require `checkpoint_best/state.pt` and active block evals/token in the validation report. Stage 3 requires a positive difficulty-step correlation.
 
 Include Stage 4 cost-control and OUT-by-difficulty evidence in the stage gate:
 

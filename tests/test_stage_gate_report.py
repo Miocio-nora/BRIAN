@@ -152,6 +152,10 @@ def _data_manifest_ref() -> dict:
         "manifest_token_hashes_verified": True,
         "manifest_source_text_hash_failure_count": 0,
         "manifest_token_hash_failure_count": 0,
+        "tokenizer_artifact_count": 2,
+        "tokenizer_artifacts_present": True,
+        "tokenizer_artifact_hashes": {"tokenizer.json": "abc", "tokenizer_config.json": "def"},
+        "tokenizer_artifact_hashes_present": True,
         "stats_recipe_name_matches_config": True,
         "stats_sequence_length_matches_config": True,
         "source_mixture_expected": {"unit": 1.0},
@@ -525,6 +529,10 @@ def test_stage0_gate_requires_valid_data_manifest_ref(tmp_path: Path) -> None:
     assert gate["data_manifest_ref_checks"]["manifest_row_count_positive"] is False
     assert gate["data_manifest_ref_checks"]["manifest_source_text_hashes_verified"] is False
     assert gate["data_manifest_ref_checks"]["manifest_token_hashes_verified"] is False
+    assert gate["data_manifest_ref_checks"]["tokenizer_artifact_count_positive"] is False
+    assert gate["data_manifest_ref_checks"]["tokenizer_artifacts_present"] is False
+    assert gate["data_manifest_ref_checks"]["tokenizer_artifact_hashes_present"] is False
+    assert gate["data_manifest_ref_checks"]["tokenizer_artifact_hashes_flag"] is False
     assert gate["data_manifest_ref_checks"]["stats_recipe_name_matches_config"] is False
     assert gate["data_manifest_ref_checks"]["stats_sequence_length_matches_config"] is False
     assert gate["data_manifest_ref_checks"]["source_mixture_present"] is False

@@ -407,6 +407,13 @@ def test_train_from_config_writes_routing_report_on_checkpoint(tmp_path: Path) -
                 "manifest_token_hashes_verified": True,
                 "manifest_source_text_hash_failure_count": 0,
                 "manifest_token_hash_failure_count": 0,
+                "tokenizer_artifact_count": 2,
+                "tokenizer_artifacts_present": True,
+                "tokenizer_artifact_hashes": {
+                    "tokenizer.json": "hash-tokenizer",
+                    "tokenizer_config.json": "hash-config",
+                },
+                "tokenizer_artifact_hashes_present": True,
                 "tokenizer": {
                     "name": "unit-tokenizer",
                     "revision": "local",
@@ -492,6 +499,10 @@ def test_train_from_config_writes_routing_report_on_checkpoint(tmp_path: Path) -
     assert manifest_ref["manifest_token_hashes_verified"] is True
     assert manifest_ref["manifest_source_text_hash_failure_count"] == 0
     assert manifest_ref["manifest_token_hash_failure_count"] == 0
+    assert manifest_ref["tokenizer_artifact_count"] == 2
+    assert manifest_ref["tokenizer_artifacts_present"] is True
+    assert manifest_ref["tokenizer_artifact_hashes"]["tokenizer.json"] == "hash-tokenizer"
+    assert manifest_ref["tokenizer_artifact_hashes_present"] is True
     assert manifest_ref["stats_recipe_name_matches_config"] is True
     assert manifest_ref["stats_sequence_length_matches_config"] is True
     assert manifest_ref["source_mixture_expected"] == {"unit": 1.0}

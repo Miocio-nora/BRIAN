@@ -57,6 +57,10 @@ def test_prepare_tiny_synthetic_data(tmp_path: Path) -> None:
         "manifest_token_hashes_verified",
         "manifest_source_text_hash_failure_count",
         "manifest_token_hash_failure_count",
+        "tokenizer_artifact_count",
+        "tokenizer_artifacts_present",
+        "tokenizer_artifact_hashes",
+        "tokenizer_artifact_hashes_present",
     ]:
         assert key in stats
     assert stats["sha256_manifest"]
@@ -66,6 +70,15 @@ def test_prepare_tiny_synthetic_data(tmp_path: Path) -> None:
     assert stats["manifest_token_hashes_verified"] is True
     assert stats["manifest_source_text_hash_failure_count"] == 0
     assert stats["manifest_token_hash_failure_count"] == 0
+    assert stats["tokenizer_artifact_count"] >= 4
+    assert stats["tokenizer_artifacts_present"] is True
+    assert stats["tokenizer_artifact_hashes_present"] is True
+    assert set(stats["tokenizer_artifact_hashes"]) >= {
+        "special_tokens_map.json",
+        "tokenizer.json",
+        "tokenizer_config.json",
+        "tokenizer_metadata.json",
+    }
     assert stats["source_mixture_realized"]
     assert stats["source_mixture_expected"] == stats["source_mixture_realized_share"]
     assert math.isclose(sum(stats["source_mixture_expected"].values()), 1.0)

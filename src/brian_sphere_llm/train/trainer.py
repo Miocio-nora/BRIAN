@@ -764,6 +764,10 @@ def _data_manifest_ref(data_config: dict[str, Any], tokenized_dir: Path) -> dict
         "manifest_token_hashes_verified",
         "manifest_source_text_hash_failure_count",
         "manifest_token_hash_failure_count",
+        "tokenizer_artifact_count",
+        "tokenizer_artifacts_present",
+        "tokenizer_artifact_hashes",
+        "tokenizer_artifact_hashes_present",
     ]:
         if key in stats:
             ref[key] = stats[key]
