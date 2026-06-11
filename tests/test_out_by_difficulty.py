@@ -88,6 +88,26 @@ def test_out_by_difficulty_warns_when_routing_metrics_are_missing(tmp_path: Path
     assert report["checks"]["route_steps_non_decreasing_with_difficulty"] is None
 
 
+def test_out_by_difficulty_rejects_boolean_routing_metrics(tmp_path: Path) -> None:
+    samples = _write_jsonl(
+        tmp_path / "samples.jsonl",
+        [
+            _sample("easy", route_steps=True, active=True, p_output=True),
+            _sample("hard", route_steps=True, active=True, p_output=True),
+        ],
+    )
+    output = make_out_by_difficulty_report(samples_path=samples, output_path=tmp_path / "out.json")
+    report = json.loads(output.read_text(encoding="utf-8"))
+
+    assert report["overall_status"] == "warn"
+    assert report["by_difficulty"]["easy"]["mean_route_steps"] is None
+    assert report["by_difficulty"]["hard"]["mean_p_output"] is None
+    assert report["checks"]["easy_and_hard_present"] is True
+    assert report["checks"]["route_steps_non_decreasing_with_difficulty"] is None
+    assert report["checks"]["active_compute_non_decreasing_with_difficulty"] is None
+    assert report["checks"]["easy_output_probability_at_least_hard"] is None
+
+
 def _sample(difficulty: str, *, route_steps: float, active: float, p_output: float) -> dict:
     return {
         "difficulty": difficulty,
