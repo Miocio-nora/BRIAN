@@ -1,0 +1,23 @@
+eval_name: risk_audit_report
+output_path: reports/risk_audit_report.json
+stage_gate_report_path: null
+routing_report_path: null
+position_ablation_report_path: null
+compute_report_path: null
+long_context_compare_report_path: null
+global_kv_retention_report_path: null
+global_kv_ablation_report_path: null
+parallel_compare_report_path: null
+parallel_passing_report_path: null
+thresholds:
+  min_block_load_entropy_normalized: 0.05
+  min_route_path_diversity: 0.05
+  max_exit_dominance: 0.95
+  min_output_probability: 0.01
+  max_free_route_loss_ratio: 1.2
+  min_position_trajectory_range: 0.000001
+  min_location_distance_range: 0.000001
+  min_location_distance_mean: 0.000001
+  min_global_attention_mass: 0.000001
+  min_global_kv_quality_delta: 0.000000001
+  max_global_kv_loss_delta: 0.0

@@ -24,6 +24,7 @@ from brian_sphere_llm.eval.parallel_passing_report import make_parallel_passing_
 from brian_sphere_llm.eval.position_ablation import make_position_ablation_report
 from brian_sphere_llm.eval.pseudo_route_curriculum import make_pseudo_route_curriculum_report
 from brian_sphere_llm.eval.reasoning import make_reasoning_report
+from brian_sphere_llm.eval.risk_audit import make_risk_audit_report
 from brian_sphere_llm.eval.routing_report import make_routing_report
 from brian_sphere_llm.eval.scheduled_routing import make_scheduled_routing_report
 from brian_sphere_llm.eval.stage_gate_report import make_stage_gate_report
@@ -47,6 +48,7 @@ def main() -> None:
     parser.add_argument("--min-active-compute-range", type=float, default=None, help="Minimum active compute range for cost reports.")
     parser.add_argument("--cost-control-report", default=None, help="Cost-control report path for stage gate eval.")
     parser.add_argument("--stage-gate-report", default=None, help="Stage-gate report path for decision reports.")
+    parser.add_argument("--routing-report", default=None, help="Routing report path for decision and audit reports.")
     parser.add_argument("--compute-report", default=None, help="Compute report path for decision reports.")
     parser.add_argument("--long-context-compare-report", default=None, help="Long-context comparison report path for stage gate eval.")
     parser.add_argument("--global-kv-retention-report", default=None, help="Global KV retention report path for stage gate eval.")
@@ -338,6 +340,24 @@ def main() -> None:
             max_reasoning_drop_for_cot=float(config.get("max_reasoning_drop_for_cot", 0.0)),
             max_global_kv_cache_capacity_ratio=float(config.get("max_global_kv_cache_capacity_ratio", 1.0)),
             max_inference_latency_ratio=float(config.get("max_inference_latency_ratio", 2.0)),
+        )
+    elif eval_name == "risk_audit_report":
+        report = make_risk_audit_report(
+            output_path=args.output or config.get("output_path"),
+            stage_gate_report_path=args.stage_gate_report or config.get("stage_gate_report_path"),
+            routing_report_path=args.routing_report or config.get("routing_report_path"),
+            position_ablation_report_path=args.position_ablation_report or config.get("position_ablation_report_path"),
+            compute_report_path=args.compute_report or config.get("compute_report_path"),
+            long_context_compare_report_path=args.long_context_compare_report
+            or config.get("long_context_compare_report_path"),
+            global_kv_retention_report_path=args.global_kv_retention_report
+            or config.get("global_kv_retention_report_path"),
+            global_kv_ablation_report_path=args.global_kv_ablation_report
+            or config.get("global_kv_ablation_report_path"),
+            parallel_compare_report_path=args.parallel_compare_report or config.get("parallel_compare_report_path"),
+            parallel_passing_report_path=args.parallel_passing_report
+            or config.get("parallel_passing_report_path"),
+            thresholds=config.get("thresholds", {}),
         )
     else:
         if not args.run:

@@ -409,6 +409,23 @@ python scripts/eval.py \
 
 The `r1b_success` phase requires non-collapsed routing, compute-adjusted evaluation evidence, controlled Global KV memory, acceptable inference latency, and at least one stable core advantage: compute-adjusted validation loss, reasoning accuracy, long-context memory efficiency, or lower visible-CoT token use at similar reasoning accuracy.
 
+Audit the project plan's Risk Register against collected evidence:
+
+```bash
+python scripts/eval.py \
+  --config configs/eval/risk_audit.yaml \
+  --stage-gate-report reports/stage_gate_report.json \
+  --routing-report <run_dir>/routing_report.json \
+  --position-ablation-report reports/position_ablation_report.json \
+  --global-kv-retention-report <stage5_global_kv_run>/global_kv_retention_report.json \
+  --global-kv-ablation-report reports/global_kv_ablation_report.json \
+  --long-context-compare-report reports/long_context_compare.json \
+  --parallel-passing-report <stage6_parallel_run>/parallel_passing_report.json \
+  --parallel-compare-report reports/parallel_compare.json
+```
+
+This writes `reports/risk_audit_report.json`, mapping Section 20 risk symptoms to explicit `pass`, `warn`, or `fail` evidence. Missing reports remain `warn`; triggered symptoms retain the plan mitigation text next to the failing risk.
+
 Run the Stage 6 parallel-passing packages:
 
 ```bash
