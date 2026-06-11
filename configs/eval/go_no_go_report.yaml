@@ -1,0 +1,13 @@
+eval_name: go_no_go_report
+output_path: reports/go_no_go_report.json
+phase: all
+stage_gate_report_path: null
+compute_report_path: null
+position_ablation_report_path: null
+out_by_difficulty_report_path: null
+reasoning_baseline_report_path: null
+reasoning_candidate_reports: []
+long_context_compare_report_path: null
+parallel_compare_report_path: null
+min_difficulty_step_correlation: 0.0
+min_reasoning_delta: 0.0

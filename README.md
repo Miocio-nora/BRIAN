@@ -253,6 +253,19 @@ python scripts/eval.py \
   --parallel-compare-report reports/parallel_compare.json
 ```
 
+Generate a conservative Go/No-Go decision report:
+
+```bash
+python scripts/eval.py \
+  --config configs/eval/go_no_go_report.yaml \
+  --stage-gate-report reports/stage_gate_report.json \
+  --compute-report reports/compute_report.json \
+  --long-context-compare-report reports/long_context_compare.json \
+  --parallel-compare-report reports/parallel_compare.json
+```
+
+This maps the project plan's R125/R350 Go/No-Go criteria to existing evidence. Missing evidence stays explicit as `missing`, and failed criteria produce a `stop` recommendation.
+
 Run the Stage 6 parallel-passing packages:
 
 ```bash

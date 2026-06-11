@@ -9,6 +9,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from brian_sphere_llm.eval.compute_report import make_compute_report
 from brian_sphere_llm.eval.cost_control_report import make_cost_control_report
 from brian_sphere_llm.eval.difficulty_report import make_difficulty_report
+from brian_sphere_llm.eval.go_no_go_report import make_go_no_go_report
 from brian_sphere_llm.eval.long_context import make_long_context_report
 from brian_sphere_llm.eval.long_context_compare import make_long_context_comparison_report
 from brian_sphere_llm.eval.parallel_compare import make_parallel_comparison_report
@@ -33,8 +34,12 @@ def main() -> None:
     parser.add_argument("--utilization", type=float, default=None, help="Reference utilization for compute reports.")
     parser.add_argument("--min-active-compute-range", type=float, default=None, help="Minimum active compute range for cost reports.")
     parser.add_argument("--cost-control-report", default=None, help="Cost-control report path for stage gate eval.")
+    parser.add_argument("--stage-gate-report", default=None, help="Stage-gate report path for decision reports.")
+    parser.add_argument("--compute-report", default=None, help="Compute report path for decision reports.")
     parser.add_argument("--long-context-compare-report", default=None, help="Long-context comparison report path for stage gate eval.")
     parser.add_argument("--parallel-compare-report", default=None, help="Parallel comparison report path for stage gate eval.")
+    parser.add_argument("--position-ablation-report", default=None, help="Position ablation report path for go/no-go eval.")
+    parser.add_argument("--out-by-difficulty-report", default=None, help="OUT-by-difficulty report path for go/no-go eval.")
     parser.add_argument("--checkpoint", default=None, help="Checkpoint name for model-based evals.")
     parser.add_argument("--sample-count", type=int, default=None, help="Sample count for synthetic evals.")
     parser.add_argument("--baseline-report", default=None, help="Baseline report path for comparison evals.")
@@ -145,6 +150,25 @@ def main() -> None:
             max_estimated_flops_ratio=float(config.get("max_estimated_flops_ratio", 2.0)),
             min_throughput_ratio=float(config.get("min_throughput_ratio", 0.0)),
             min_parallel_branch_count=float(config.get("min_parallel_branch_count", 1.5)),
+        )
+    elif eval_name == "go_no_go_report":
+        stage_gate_report = args.stage_gate_report or config.get("stage_gate_report_path")
+        if not stage_gate_report:
+            raise SystemExit("go_no_go_report requires --stage-gate-report")
+        report = make_go_no_go_report(
+            stage_gate_report_path=stage_gate_report,
+            output_path=args.output or config.get("output_path"),
+            phase=str(config.get("phase", "all")),
+            compute_report_path=args.compute_report or config.get("compute_report_path"),
+            position_ablation_report_path=args.position_ablation_report or config.get("position_ablation_report_path"),
+            out_by_difficulty_report_path=args.out_by_difficulty_report or config.get("out_by_difficulty_report_path"),
+            reasoning_baseline_report_path=args.baseline_report or config.get("reasoning_baseline_report_path"),
+            reasoning_candidate_report_paths=args.reports or config.get("reasoning_candidate_reports", []),
+            long_context_compare_report_path=args.long_context_compare_report
+            or config.get("long_context_compare_report_path"),
+            parallel_compare_report_path=args.parallel_compare_report or config.get("parallel_compare_report_path"),
+            min_difficulty_step_correlation=float(config.get("min_difficulty_step_correlation", 0.0)),
+            min_reasoning_delta=float(config.get("min_reasoning_delta", 0.0)),
         )
     else:
         if not args.run:
