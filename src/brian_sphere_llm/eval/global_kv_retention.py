@@ -40,8 +40,8 @@ def make_global_kv_retention_report(
     metrics, metric_sources = _global_kv_metrics(summary, latest_eval)
 
     global_kv_enabled = _bool_value(model_config.get("global_kv", False), "model_config_resolved.global_kv")
-    sink_slots = int(_num(model_config.get("global_sink_slots")) or 0)
-    window_slots = int(_num(model_config.get("global_window_slots")) or 0)
+    sink_slots = _slot_count(model_config.get("global_sink_slots", 0), "model_config_resolved.global_sink_slots")
+    window_slots = _slot_count(model_config.get("global_window_slots", 0), "model_config_resolved.global_window_slots")
     retention_capacity = sink_slots + window_slots if global_kv_enabled else 0
     attention_mass = metrics["global_attention_mass"]
     sink_mass = metrics["global_sink_attention_mass"]
@@ -226,6 +226,20 @@ def _num(value: Any) -> float | None:
     if isinstance(value, (int, float)):
         return float(value)
     return None
+
+
+def _slot_count(value: Any, name: str) -> int:
+    if isinstance(value, bool):
+        raise ValueError(f"{name} must be an integer, not a boolean.")
+    if isinstance(value, int):
+        number = value
+    elif isinstance(value, float) and math.isfinite(value) and value.is_integer():
+        number = int(value)
+    else:
+        raise ValueError(f"{name} must be an integer.")
+    if number < 0:
+        raise ValueError(f"{name} must be >= 0.")
+    return number
 
 
 def _read_json(path: Path) -> dict[str, Any]:

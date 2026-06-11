@@ -158,3 +158,17 @@ def test_global_kv_retention_report_rejects_invalid_boolean_model_config(tmp_pat
 
     with pytest.raises(ValueError, match="model_config_resolved.global_kv"):
         make_global_kv_retention_report(run_dir)
+
+    config["model_config_resolved"]["global_kv"] = True
+    config["model_config_resolved"]["global_sink_slots"] = True
+    config_path.write_text(yaml.safe_dump(config), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="model_config_resolved.global_sink_slots"):
+        make_global_kv_retention_report(run_dir)
+
+    config["model_config_resolved"]["global_sink_slots"] = 1
+    config["model_config_resolved"]["global_window_slots"] = False
+    config_path.write_text(yaml.safe_dump(config), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="model_config_resolved.global_window_slots"):
+        make_global_kv_retention_report(run_dir)
