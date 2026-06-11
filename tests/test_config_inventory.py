@@ -200,6 +200,34 @@ def test_scheduled_train_configs_keep_curriculum_schedule() -> None:
     assert errors == []
 
 
+def test_output_action_and_later_train_configs_keep_hard_exit_enabled() -> None:
+    hard_exit_stages = {
+        "stage4_output_action",
+        "stage5_output_action",
+        "stage5_global_kv",
+        "stage6_parallel_passing",
+        "stage7_parallel_passing",
+    }
+    no_hard_exit_stages = {"stage4_scheduled_free_routing"}
+    checked_hard_exit: list[Path] = []
+    checked_no_hard_exit: list[Path] = []
+
+    for path in _yaml_files(CONFIG_ROOT / "train"):
+        config = load_config(path)
+        stage = config.get("stage")
+        routing = config.get("routing", {})
+        assert isinstance(routing, dict), path
+        if stage in hard_exit_stages:
+            checked_hard_exit.append(path)
+            assert routing.get("hard_exit") is True, path
+        if stage in no_hard_exit_stages:
+            checked_no_hard_exit.append(path)
+            assert routing.get("hard_exit", False) is not True, path
+
+    assert checked_hard_exit
+    assert checked_no_hard_exit
+
+
 def test_experiment_manifests_reference_train_configs() -> None:
     errors: list[str] = []
     for path in _yaml_files(CONFIG_ROOT / "experiments"):
@@ -323,6 +351,33 @@ def test_train_config_validation_rejects_invalid_precision_value() -> None:
     _validate_train_config({**config, "precision": "float16"}, Path("bad_precision.yaml"), errors)
 
     assert any("precision must be fp32 or bf16" in error for error in errors)
+
+
+def test_train_config_validation_rejects_invalid_loss_weights() -> None:
+    config = load_config(CONFIG_ROOT / "train" / "stage4_output_action.yaml")
+    errors: list[str] = []
+
+    _validate_train_config({**config, "loss_weights": [("route", 1.0)]}, Path("bad_loss_mapping.yaml"), errors)
+    _validate_train_config(
+        {**config, "loss_weights": {"route": True, "balance": 0.01, "cost": 0.01, "location": 0.02}},
+        Path("bad_loss_bool.yaml"),
+        errors,
+    )
+    _validate_train_config(
+        {**config, "loss_weights": {"route": 0.05, "balance": 0.01, "cost": -0.01, "location": 0.02}},
+        Path("bad_loss_negative.yaml"),
+        errors,
+    )
+    _validate_train_config(
+        {**config, "loss_weights": {"route": 0.05, "extra": 0.0}},
+        Path("bad_loss_extra.yaml"),
+        errors,
+    )
+
+    assert any("loss_weights must be a mapping" in error for error in errors)
+    assert any("loss_weights.route must be a finite numeric value" in error for error in errors)
+    assert any("loss_weights.cost must be >= 0.0" in error for error in errors)
+    assert any("unknown loss weight" in error for error in errors)
 
 
 def test_train_config_validation_rejects_invalid_scheduled_routing_values() -> None:
@@ -526,12 +581,26 @@ def _validate_train_config(config: dict[str, Any], path: Path, errors: list[str]
     for key in ["activation_checkpointing", "ddp_find_unused_parameters", "resume", "write_routing_report_on_checkpoint"]:
         if key in config and not isinstance(config.get(key), bool):
             errors.append(f"{path}: {key} must be a boolean")
+    if "loss_weights" in config:
+        _validate_loss_weights_config(config.get("loss_weights"), path, errors)
     routing = config.get("routing", {})
     if routing:
         if not isinstance(routing, dict):
             errors.append(f"{path}: routing must be a mapping")
         else:
             _validate_routing_config(routing, path, errors)
+
+
+def _validate_loss_weights_config(loss_weights: Any, path: Path, errors: list[str]) -> None:
+    if not isinstance(loss_weights, dict):
+        errors.append(f"{path}: loss_weights must be a mapping")
+        return
+    allowed = {"route", "balance", "cost", "location"}
+    for key, value in loss_weights.items():
+        if key not in allowed:
+            errors.append(f"{path}: unknown loss weight {key!r}")
+            continue
+        _float_config_value(value, f"loss_weights.{key}", path, errors, minimum=0.0)
 
 
 def _validate_routing_config(routing: dict[str, Any], path: Path, errors: list[str]) -> None:
