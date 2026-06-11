@@ -9,7 +9,7 @@ from brian_sphere_llm.losses.cost_loss import route_cost_loss
 from brian_sphere_llm.losses.location_loss import location_loss
 from brian_sphere_llm.losses.route_loss import route_imitation_loss
 from brian_sphere_llm.memory import CanonicalGlobalCache, GlobalReadAdapter, GlobalWriteAdapter
-from brian_sphere_llm.model.baseline import BaselineConfig
+from brian_sphere_llm.model.baseline import BaselineConfig, _float_value, _int_value
 from brian_sphere_llm.model.exit_block import ExitBlock
 from brian_sphere_llm.model.llama_backbone import (
     RMSNorm,
@@ -83,30 +83,38 @@ class BrianRouteConfig:
         parallel_passing = parallel_value is True or str(parallel_value).lower() in {"true", "on", "enabled"}
         return cls(
             base=BaselineConfig.from_dict(base_data),
-            pre_blocks=int(data["pre_blocks"]),
-            route_pool_blocks=int(data["route_pool_blocks"]),
-            post_blocks=int(data["post_blocks"]),
-            block_position_dim=int(data["block_position_dim"]),
-            max_route_steps=int(data["max_route_steps"]),
+            pre_blocks=_int_value(data["pre_blocks"], "pre_blocks", minimum=0),
+            route_pool_blocks=_int_value(data["route_pool_blocks"], "route_pool_blocks", minimum=1),
+            post_blocks=_int_value(data["post_blocks"], "post_blocks", minimum=0),
+            block_position_dim=_int_value(data["block_position_dim"], "block_position_dim", minimum=1),
+            max_route_steps=_int_value(data["max_route_steps"], "max_route_steps", minimum=1),
             model_name=str(data.get("model_name", "brian_route_core")),
-            top_k=int(data.get("top_k", 1)),
-            later_top_k=int(data.get("later_top_k", 2)),
-            hard_exit=bool(data.get("hard_exit", False)),
+            top_k=_int_value(data.get("top_k", 1), "top_k", minimum=1),
+            later_top_k=_int_value(data.get("later_top_k", 2), "later_top_k", minimum=1),
+            hard_exit=_as_bool(data.get("hard_exit", False)),
             global_kv=global_kv,
-            global_code_dim=int(data.get("global_code_dim", data.get("block_position_dim", 64))),
-            global_sink_slots=int(data.get("global_sink_slots", 4)),
-            global_window_slots=int(data.get("global_window_slots", 32)),
+            global_code_dim=_int_value(
+                data.get("global_code_dim", data.get("block_position_dim", 64)),
+                "global_code_dim",
+                minimum=1,
+            ),
+            global_sink_slots=_int_value(data.get("global_sink_slots", 4), "global_sink_slots", minimum=0),
+            global_window_slots=_int_value(data.get("global_window_slots", 32), "global_window_slots", minimum=0),
             global_adapter_scope=str(data.get("global_adapter_scope", "shared")),
-            global_head_delta_rank=int(data.get("global_head_delta_rank", 0)),
+            global_head_delta_rank=_int_value(
+                data.get("global_head_delta_rank", 0),
+                "global_head_delta_rank",
+                minimum=0,
+            ),
             parallel_passing=parallel_passing,
-            beam_size=int(data.get("beam_size", 2)),
-            branch_cost=float(data.get("branch_cost", 0.01)),
+            beam_size=_int_value(data.get("beam_size", 2), "beam_size", minimum=1),
+            branch_cost=_float_value(data.get("branch_cost", 0.01), "branch_cost", minimum=0.0),
             parallel_exit_policy=str(data.get("parallel_exit_policy", "branch")),
             block_position_mode=str(data.get("block_position_mode", "open_arc")),
             block_position_injection=str(data.get("block_position_injection", "adapter")),
             position_to_router=_as_bool(data.get("position_to_router", True)),
             position_to_blocks=_as_bool(data.get("position_to_blocks", True)),
-            location_bias_weight=float(data.get("location_bias_weight", 0.0)),
+            location_bias_weight=_float_value(data.get("location_bias_weight", 0.0), "location_bias_weight", minimum=0.0),
         )
 
 

@@ -27,3 +27,32 @@ def test_baseline_model_stats_preserve_config_name() -> None:
     model = BaselineLM(config)
 
     assert model.model_stats()["model_name"] == "baseline_unit"
+
+
+def test_baseline_config_rejects_boolean_numeric_fields() -> None:
+    data = {
+        "model_name": "baseline_unit",
+        "vocab_size": 64,
+        "context_length": 8,
+        "layers": True,
+        "d_model": 32,
+        "n_heads": 4,
+    }
+
+    with pytest.raises(ValueError, match="layers"):
+        BaselineConfig.from_dict(data)
+
+
+def test_baseline_config_rejects_boolean_dropout() -> None:
+    data = {
+        "model_name": "baseline_unit",
+        "vocab_size": 64,
+        "context_length": 8,
+        "layers": 2,
+        "d_model": 32,
+        "n_heads": 4,
+        "dropout": False,
+    }
+
+    with pytest.raises(ValueError, match="dropout"):
+        BaselineConfig.from_dict(data)

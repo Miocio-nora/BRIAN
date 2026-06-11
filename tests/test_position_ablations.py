@@ -28,6 +28,21 @@ def _config(**overrides) -> BrianRouteConfig:
     return BrianRouteConfig.from_dict(data)
 
 
+def test_brian_route_config_rejects_boolean_numeric_fields() -> None:
+    with pytest.raises(ValueError, match="top_k"):
+        _config(top_k=True)
+    with pytest.raises(ValueError, match="branch_cost"):
+        _config(branch_cost=False)
+    with pytest.raises(ValueError, match="global_window_slots"):
+        _config(global_window_slots=True)
+
+
+def test_brian_route_config_parses_string_false_hard_exit() -> None:
+    cfg = _config(hard_exit="false")
+
+    assert cfg.hard_exit is False
+
+
 def test_no_position_ablation_forward_uses_zero_position_state() -> None:
     model = BrianRouteCore(
         _config(

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 from typing import Any
 
 from brian_sphere_llm.model.llama_backbone import (
@@ -35,12 +36,12 @@ class BaselineConfig:
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "BaselineConfig":
         return cls(
-            vocab_size=int(data["vocab_size"]),
-            context_length=int(data["context_length"]),
-            layers=int(data["layers"]),
-            d_model=int(data["d_model"]),
-            n_heads=int(data["n_heads"]),
-            dropout=float(data.get("dropout", 0.0)),
+            vocab_size=_int_value(data["vocab_size"], "vocab_size", minimum=1),
+            context_length=_int_value(data["context_length"], "context_length", minimum=1),
+            layers=_int_value(data["layers"], "layers", minimum=1),
+            d_model=_int_value(data["d_model"], "d_model", minimum=1),
+            n_heads=_int_value(data["n_heads"], "n_heads", minimum=1),
+            dropout=_float_value(data.get("dropout", 0.0), "dropout", minimum=0.0, maximum=1.0),
             model_name=str(data.get("model_name", "baseline")),
         )
 
@@ -85,3 +86,34 @@ class BaselineLM(ModuleBase):
             "d_model": self.config.d_model,
             "n_heads": self.config.n_heads,
         }
+
+
+def _int_value(value: Any, name: str, *, minimum: int | None = None) -> int:
+    if isinstance(value, bool):
+        raise ValueError(f"{name} must be an integer, not a boolean.")
+    if isinstance(value, int):
+        number = value
+    elif isinstance(value, float) and math.isfinite(value) and value.is_integer():
+        number = int(value)
+    else:
+        raise ValueError(f"{name} must be an integer.")
+    if minimum is not None and number < minimum:
+        raise ValueError(f"{name} must be >= {minimum}.")
+    return number
+
+
+def _float_value(
+    value: Any,
+    name: str,
+    *,
+    minimum: float | None = None,
+    maximum: float | None = None,
+) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(float(value)):
+        raise ValueError(f"{name} must be a finite numeric value.")
+    number = float(value)
+    if minimum is not None and number < minimum:
+        raise ValueError(f"{name} must be >= {minimum}.")
+    if maximum is not None and number > maximum:
+        raise ValueError(f"{name} must be <= {maximum}.")
+    return number
