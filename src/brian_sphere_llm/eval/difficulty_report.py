@@ -291,7 +291,7 @@ def _forward_routed_for_eval(
     if route_mode == "scheduled":
         schedule = routing_cfg.get("schedule", [])
         router_probability = scheduled_value(schedule, global_step, "router_probability", 0.0)
-        loss_weights["route"] = scheduled_value(schedule, global_step, "lambda_route", float(loss_weights.get("route", 0.0)))
+        loss_weights["route"] = scheduled_value(schedule, global_step, "lambda_route", loss_weights.get("route", 0.0))
     return model(
         batch,
         targets=None,

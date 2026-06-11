@@ -7,7 +7,7 @@ torch = pytest.importorskip("torch")
 
 from brian_sphere_llm.data.pack import write_index, write_token_bin
 from brian_sphere_llm.model.baseline import BaselineConfig, BaselineLM
-from brian_sphere_llm.train.trainer import _model_stats, evaluate, run_name, train_from_config
+from brian_sphere_llm.train.trainer import _model_stats, _schedule_values, evaluate, run_name, train_from_config
 from brian_sphere_llm.utils.config import save_yaml
 
 
@@ -21,6 +21,16 @@ def test_auto_run_name_includes_context_length() -> None:
 
     assert name.endswith("_brian_r125_stage3_scheduled_free_routing_r125main2b_ctx2048_seed7")
     assert run_name({"stage": "stage0_baseline", "run_name": "manual"}, "model", "data", context_length=8) == "manual"
+
+
+def test_schedule_values_rejects_boolean_default_lambda_route() -> None:
+    config = {
+        "loss_weights": {"route": True},
+        "routing": {"schedule": [{"max_step": 1, "router_probability": 0.5}]},
+    }
+
+    with pytest.raises(ValueError, match="lambda_route"):
+        _schedule_values(config, route_mode="scheduled", global_step=1)
 
 
 def test_evaluate_reports_inference_timing_metrics() -> None:

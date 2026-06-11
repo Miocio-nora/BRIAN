@@ -205,7 +205,7 @@ def _schedule_values(config: dict[str, Any], *, route_mode: str, global_step: in
     routing_cfg = config.get("routing", {})
     schedule = routing_cfg.get("schedule", []) if isinstance(routing_cfg, dict) else []
     loss_weights = config.get("loss_weights", {})
-    default_lambda_route = float(loss_weights.get("route", 0.0)) if isinstance(loss_weights, dict) else 0.0
+    default_lambda_route = loss_weights.get("route", 0.0) if isinstance(loss_weights, dict) else 0.0
     return {
         "scheduled_router_probability": scheduled_value(schedule, global_step, "router_probability", 0.0),
         "scheduled_lambda_route": scheduled_value(schedule, global_step, "lambda_route", default_lambda_route),
