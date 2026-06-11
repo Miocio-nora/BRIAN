@@ -86,13 +86,19 @@ def test_global_kv_package_coverage_passes_window_and_sink_requirements(tmp_path
     assert _requirement(report, "C0")["status"] == "pass"
     assert _requirement(report, "C1")["status"] == "pass"
     assert _requirement(report, "C2")["status"] == "pass"
+    assert _requirement(report, "C2")["matched_entry_ids"] == ["C2"]
     assert _requirement(report, "C3")["status"] == "pass"
     assert _requirement(report, "C4")["status"] == "pass"
+    assert _requirement(report, "C4")["matched_entry_ids"] == ["C4"]
     window = _requirement(report, "C5")
     assert window["status"] == "pass"
+    assert window["matched_entry_ids"] == ["C5a", "C5b"]
+    assert window["plan_aliases"] == ["K5"]
     assert len(window["checks"]["distinct_global_window_slots"]) >= 2
     assert _requirement(report, "C6")["status"] == "pass"
     assert _requirement(report, "C7")["status"] == "pass"
+    assert _requirement(report, "C7")["matched_entry_ids"] == ["C7"]
+    assert _requirement(report, "C7")["plan_aliases"] == ["K8"]
 
 
 def test_parallel_package_coverage_passes_weighted_and_beam2_requirements(tmp_path: Path) -> None:
@@ -129,6 +135,26 @@ def test_experiment_coverage_fails_missing_required_entry(tmp_path: Path) -> Non
 
     assert report["overall_status"] == "fail"
     assert _requirement(report, "A7")["checks"]["entry_present"] is False
+
+
+def test_global_kv_coverage_requires_dedicated_window_sweep_entries(tmp_path: Path) -> None:
+    manifest = tmp_path / "missing_c5.yaml"
+    source = load_config("configs/experiments/route_core_global_kv.yaml")
+    source["ablations"] = [row for row in source["ablations"] if not str(row["id"]).startswith("C5")]
+    manifest.write_text(yaml.safe_dump(source), encoding="utf-8")
+
+    output = make_experiment_coverage_report(
+        manifest,
+        output_path=tmp_path / "coverage.json",
+        profile="global_kv_ablation",
+    )
+    report = json.loads(output.read_text(encoding="utf-8"))
+
+    window = _requirement(report, "C5")
+    assert report["overall_status"] == "fail"
+    assert window["status"] == "fail"
+    assert window["matched_entry_ids"] == []
+    assert window["checks"]["global_window_entry_ids"]
 
 
 def test_experiment_coverage_fails_unknown_profile(tmp_path: Path) -> None:

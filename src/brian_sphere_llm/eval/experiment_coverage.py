@@ -156,7 +156,14 @@ def _exact_id_requirements(entries: list[dict[str, Any]], specs: list[dict[str, 
 
 def _global_kv_requirements(plan: ExperimentPlan, entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
     global_entries = [entry for entry in entries if entry["model"].get("global_kv") is True]
-    window_entries = [
+    window_sweep_entries = [
+        entry
+        for entry in global_entries
+        if str(entry["id"]).lower().startswith("c5")
+        and _num(entry["model"].get("global_window_slots")) is not None
+        and _num(entry["model"].get("global_window_slots")) > 0
+    ]
+    all_window_entries = [
         entry
         for entry in global_entries
         if _num(entry["model"].get("global_window_slots")) is not None
@@ -165,7 +172,7 @@ def _global_kv_requirements(plan: ExperimentPlan, entries: list[dict[str, Any]])
     distinct_windows = sorted(
         {
             int(_num(entry["model"].get("global_window_slots")) or 0)
-            for entry in window_entries
+            for entry in window_sweep_entries
             if _num(entry["model"].get("global_window_slots")) is not None
         }
     )
@@ -174,66 +181,81 @@ def _global_kv_requirements(plan: ExperimentPlan, entries: list[dict[str, Any]])
             "C0",
             "local KV only baseline",
             entries,
-            lambda entry: entry["model"].get("global_kv") is not True,
+            lambda entry: entry["id"] == "C0" and entry["model"].get("global_kv") is not True,
+            plan_aliases=["K0"],
         ),
         _group_requirement(
             "C1",
             "local plus global uncompressed",
             entries,
-            lambda entry: entry["model"].get("global_kv") is True
+            lambda entry: entry["id"] == "C1"
+            and entry["model"].get("global_kv") is True
             and _num(entry["model"].get("global_code_dim")) is not None
             and _num(entry["model"].get("base_d_model")) is not None
             and _num(entry["model"].get("global_code_dim")) == _num(entry["model"].get("base_d_model")),
+            plan_aliases=["K1"],
         ),
         _group_requirement(
             "C2",
             "local plus global compressed",
             entries,
-            lambda entry: entry["model"].get("global_kv") is True
+            lambda entry: entry["id"] == "C2"
+            and entry["model"].get("global_kv") is True
             and _num(entry["model"].get("global_code_dim")) is not None
             and _num(entry["model"].get("base_d_model")) is not None
             and _num(entry["model"].get("global_code_dim")) < _num(entry["model"].get("base_d_model")),
+            plan_aliases=["K2"],
         ),
         _group_requirement(
             "C3",
             "global KV without sink",
             entries,
-            lambda entry: entry["model"].get("global_kv") is True
+            lambda entry: entry["id"] == "C3"
+            and entry["model"].get("global_kv") is True
             and _num(entry["model"].get("global_sink_slots")) == 0,
+            plan_aliases=["K3"],
         ),
         _group_requirement(
             "C4",
             "global KV with sink and window",
             entries,
-            lambda entry: entry["model"].get("global_kv") is True
+            lambda entry: entry["id"] == "C4"
+            and entry["model"].get("global_kv") is True
             and (_num(entry["model"].get("global_sink_slots")) or 0) > 0
             and (_num(entry["model"].get("global_window_slots")) or 0) > 0,
+            plan_aliases=["K4"],
         ),
         {
             "id": "C5",
             "description": "global KV window size sweep",
             "status": "pass" if len(distinct_windows) >= 2 else "fail",
-            "matched_entry_ids": [entry["id"] for entry in window_entries],
+            "matched_entry_ids": [entry["id"] for entry in window_sweep_entries],
+            "plan_aliases": ["K5"],
             "checks": {
                 "at_least_two_window_sizes": len(distinct_windows) >= 2,
                 "distinct_global_window_slots": distinct_windows,
+                "global_window_entry_ids": [entry["id"] for entry in all_window_entries],
             },
         },
         _group_requirement(
             "C6",
             "global KV per-block adapter",
             entries,
-            lambda entry: entry["model"].get("global_kv") is True
+            lambda entry: entry["id"] == "C6"
+            and entry["model"].get("global_kv") is True
             and entry["model"].get("global_adapter_scope") == "per_block"
             and (_num(entry["model"].get("global_head_delta_rank")) or 0) == 0,
+            plan_aliases=["K6"],
         ),
         _group_requirement(
             "C7",
             "global KV per-block plus per-head low-rank delta",
             entries,
-            lambda entry: entry["model"].get("global_kv") is True
+            lambda entry: entry["id"] == "C7"
+            and entry["model"].get("global_kv") is True
             and entry["model"].get("global_adapter_scope") == "per_block"
             and (_num(entry["model"].get("global_head_delta_rank")) or 0) > 0,
+            plan_aliases=["K8"],
         ),
         {
             "id": "baseline_train_config",
@@ -374,6 +396,8 @@ def _group_requirement(
     description: str,
     entries: list[dict[str, Any]],
     predicate: Callable[[dict[str, Any]], bool],
+    *,
+    plan_aliases: list[str] | None = None,
 ) -> dict[str, Any]:
     matched = [entry for entry in entries if predicate(entry)]
     return {
@@ -381,6 +405,7 @@ def _group_requirement(
         "description": description,
         "status": "pass" if matched else "fail",
         "matched_entry_ids": [entry["id"] for entry in matched],
+        "plan_aliases": plan_aliases or [],
         "checks": {"matched": bool(matched)},
     }
 
