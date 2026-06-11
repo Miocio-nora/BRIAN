@@ -5,6 +5,7 @@ torch = pytest.importorskip("torch")
 from brian_sphere_llm.data.tokenize import SimpleByteTokenizer
 from brian_sphere_llm.eval.reasoning import (
     ReasoningSample,
+    _routing_summary,
     _visible_cot_token_count,
     evaluate_reasoning_sample,
     generate_reasoning_samples,
@@ -66,6 +67,27 @@ def test_normalize_answer_and_summary() -> None:
     assert summary["exact_match_accuracy"] == 0.5
     assert summary["teacher_forced_token_accuracy"] == 0.75
     assert summary["visible_cot_tokens_mean"] == 2.0
+
+
+def test_reasoning_summary_rejects_boolean_numeric_metrics() -> None:
+    summary = summarize_reasoning_rows(
+        [
+            {"exact_match": True, "teacher_forced_token_accuracy": True, "generated_token_count": True},
+            {"exact_match": False, "teacher_forced_token_accuracy": False, "generated_token_count": False},
+        ]
+    )
+    routing = _routing_summary(
+        [
+            {"routing_average_route_steps": True, "routing_route_entropy": 0.5},
+            {"routing_average_route_steps": False, "routing_route_entropy": 0.25},
+        ]
+    )
+
+    assert summary["exact_match_accuracy"] == 0.5
+    assert summary["teacher_forced_token_accuracy"] is None
+    assert summary["generated_tokens_mean"] is None
+    assert routing["average_route_steps"] is None
+    assert routing["route_entropy"] == 0.375
 
 
 def test_visible_cot_token_count_uses_answer_suffix() -> None:

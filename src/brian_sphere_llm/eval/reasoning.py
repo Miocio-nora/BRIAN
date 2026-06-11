@@ -158,8 +158,9 @@ def evaluate_reasoning_sample(
         "visible_cot_tokens": _visible_cot_token_count(generated_ids, answer_ids),
     }
     for key, value in outputs.get("routing_summary", {}).items():
-        if isinstance(value, (int, float)):
-            row[f"routing_{key}"] = float(value)
+        number = _num(value)
+        if number is not None:
+            row[f"routing_{key}"] = number
     return row
 
 
@@ -299,10 +300,19 @@ def _routing_summary(rows: list[dict[str, Any]]) -> dict[str, float | None]:
 
 
 def _mean(values: list[Any]) -> float | None:
-    numeric = [float(value) for value in values if isinstance(value, (int, float))]
+    numeric = [_num(value) for value in values]
+    numeric = [value for value in numeric if value is not None]
     if not numeric:
         return None
     return sum(numeric) / len(numeric)
+
+
+def _num(value: Any) -> float | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    return None
 
 
 def _device(name: str) -> "torch.device":

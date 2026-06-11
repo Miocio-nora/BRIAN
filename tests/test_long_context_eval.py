@@ -100,6 +100,51 @@ def test_summarize_long_context_rows() -> None:
     assert summary["truncation_rate"] == 0.5
 
 
+def test_long_context_summary_rejects_boolean_numeric_metrics() -> None:
+    summary = summarize_long_context_rows(
+        [
+            {"exact_match": True, "teacher_forced_token_accuracy": True, "truncated": False},
+            {"exact_match": False, "teacher_forced_token_accuracy": False, "truncated": True},
+        ]
+    )
+    global_kv = _global_kv_summary(
+        [
+            {
+                "routing_global_read_gate_mean": True,
+                "routing_global_attention_mass": True,
+                "routing_global_cache_slots_mean": True,
+            },
+            {
+                "routing_global_read_gate_mean": False,
+                "routing_global_attention_mass": False,
+                "routing_global_cache_slots_mean": False,
+            },
+        ]
+    )
+    memory = _memory_budget_summary(
+        {
+            "model_config_resolved": {
+                "base": {"layers": True, "d_model": True},
+                "global_kv": True,
+                "global_code_dim": True,
+                "global_sink_slots": True,
+                "global_window_slots": True,
+            },
+            "data_config_resolved": {"sequence_length": 8},
+        },
+        [{"routing_global_cache_slots_mean": True}],
+    )
+
+    assert summary["exact_match_accuracy"] == 0.5
+    assert summary["teacher_forced_token_accuracy"] is None
+    assert global_kv["global_read_gate_mean"] is None
+    assert global_kv["global_attention_mass"] is None
+    assert global_kv["global_cache_slots_mean"] is None
+    assert memory["base_layer_count"] is None
+    assert memory["global_code_dim"] is None
+    assert memory["estimated_global_cache_capacity_bytes_fp16"] is None
+
+
 def test_long_context_coverage_summary_reports_missing_families_and_difficulties() -> None:
     rows = [
         {"task_family": "needle_retrieval", "difficulty": "near"},

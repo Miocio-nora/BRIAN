@@ -183,13 +183,16 @@ def _resolve_samples_path(report_path: Path, report: dict[str, Any]) -> Path:
 
 
 def _mean(values: list[float | None]) -> float | None:
-    finite = [float(value) for value in values if value is not None]
+    finite = [_num(value) for value in values]
+    finite = [value for value in finite if value is not None]
     if not finite:
         return None
     return sum(finite) / len(finite)
 
 
 def _num(value: Any) -> float | None:
+    if isinstance(value, bool):
+        return None
     if isinstance(value, (int, float)):
         return float(value)
     return None

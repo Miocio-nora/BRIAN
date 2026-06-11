@@ -179,8 +179,9 @@ def evaluate_long_context_sample(
         "prompt_token_count": len(prompt_ids),
     }
     for key, value in outputs.get("routing_summary", {}).items():
-        if isinstance(value, (int, float)):
-            row[f"routing_{key}"] = float(value)
+        number = _num(value)
+        if number is not None:
+            row[f"routing_{key}"] = number
     return row
 
 
@@ -457,6 +458,8 @@ def _as_bool(value: Any) -> bool:
 
 
 def _num(value: Any) -> float | None:
+    if isinstance(value, bool):
+        return None
     if isinstance(value, (int, float)):
         return float(value)
     return None

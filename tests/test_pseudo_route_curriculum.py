@@ -71,6 +71,48 @@ def test_pseudo_route_curriculum_report_uses_baseline_difficulty_bins(tmp_path: 
     assert report["by_difficulty"]["hard"]["recur_transition_count"] == 1
 
 
+def test_pseudo_route_curriculum_report_rejects_boolean_baseline_ce(tmp_path: Path) -> None:
+    run_dir = tmp_path / "stage2"
+    run_dir.mkdir()
+    (run_dir / "config_resolved.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "stage": "stage2_router_imitation",
+                "routing": {"pseudo_policy": "mixed_skip_recur"},
+                "model_config_resolved": {
+                    "architecture": "brian_route_core",
+                    "route_pool_blocks": 5,
+                    "max_route_steps": 4,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    samples = tmp_path / "baseline_samples.jsonl"
+    _write_jsonl(
+        samples,
+        [
+            {"sample_id": 0, "baseline_cross_entropy": True, "difficulty_bin": "easy"},
+            {"sample_id": 1, "baseline_cross_entropy": False, "difficulty_bin": "medium"},
+            {"sample_id": 2, "baseline_cross_entropy": True, "difficulty_bin": "hard"},
+        ],
+    )
+    baseline_report = tmp_path / "baseline_difficulty_report.json"
+    baseline_report.write_text(json.dumps({"samples_path": str(samples), "sample_count": 3}), encoding="utf-8")
+
+    output = make_pseudo_route_curriculum_report(
+        run_dir,
+        baseline_difficulty_report_path=baseline_report,
+        output_path=tmp_path / "curriculum.json",
+    )
+    report = json.loads(output.read_text(encoding="utf-8"))
+
+    assert report["overall_status"] == "pass"
+    assert report["by_difficulty"]["easy"]["mean_baseline_cross_entropy"] is None
+    assert report["by_difficulty"]["medium"]["mean_baseline_cross_entropy"] is None
+    assert report["by_difficulty"]["hard"]["mean_baseline_cross_entropy"] is None
+
+
 def test_pseudo_route_curriculum_eval_config_resolves() -> None:
     cfg = load_config("configs/eval/pseudo_route_curriculum.yaml")
     assert cfg["eval_name"] == "pseudo_route_curriculum_report"
