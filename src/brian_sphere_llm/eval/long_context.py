@@ -28,6 +28,14 @@ class LongContextSample:
     key: str
 
 
+TASK_FAMILY_ALIASES = {
+    "synthetic_multihop_tracing": "two_hop_tracing",
+    "ruler_subset": "ruler_needle",
+    "longbench_subset": "longbench_qa",
+    "long_program_trace": "program_trace",
+}
+
+
 def make_long_context_report(
     run_dir: str | Path,
     *,
@@ -207,26 +215,61 @@ def summarize_long_context_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def _make_sample(rng: random.Random, task_family: str, difficulty: str, *, context_length: int) -> LongContextSample:
+    canonical_family = TASK_FAMILY_ALIASES.get(task_family, task_family)
     key = f"K{rng.randint(10, 99)}"
     value = str(rng.randint(100, 999))
     filler_count = max(2, min(10, context_length // 10))
     filler = [f"n{index}." for index in range(filler_count)]
-    insert_at = {
-        "far": max(0, filler_count // 5),
-        "middle": filler_count // 2,
-        "near": max(0, filler_count - 1),
-    }[difficulty]
-    if task_family == "needle_retrieval":
+    insert_at = _insert_index(difficulty, filler_count)
+    if canonical_family == "needle_retrieval":
         parts = [*filler]
         parts.insert(insert_at, f"{key}={value}.")
         return LongContextSample(task_family, difficulty, "ctx " + " ".join(parts) + f" Q {key}? A:", " " + value, key)
-    if task_family == "two_hop_tracing":
+    if canonical_family == "two_hop_tracing":
         link_key = f"L{rng.randint(10, 99)}"
         parts = [*filler]
         parts.insert(insert_at, f"{key}->{link_key}.")
         parts.insert(min(len(parts), insert_at + 2), f"{link_key}={value}.")
         return LongContextSample(task_family, difficulty, "ctx " + " ".join(parts) + f" Q {key}? A:", " " + value, key)
+    if canonical_family == "ruler_needle":
+        parts = [*filler]
+        for index in range(3):
+            parts.insert(min(len(parts), insert_at + index), f"D{index}={rng.randint(100, 999)}.")
+        parts.insert(insert_at, f"{key}={value}.")
+        prompt = "ruler " + " ".join(parts) + f" Query value for {key}. Answer:"
+        return LongContextSample(task_family, difficulty, prompt, " " + value, key)
+    if canonical_family == "longbench_qa":
+        subject = f"agent{rng.randint(10, 99)}"
+        parts = [*filler]
+        parts.insert(insert_at, f"The dossier says {subject} carried token {value}.")
+        prompt = "document " + " ".join(parts) + f" Question: Which token did {subject} carry? Answer:"
+        return LongContextSample(task_family, difficulty, prompt, " " + value, subject)
+    if canonical_family == "long_arithmetic_trace":
+        values = [rng.randint(1, 9) for _ in range(3)]
+        total = sum(values)
+        parts = [*filler]
+        parts.insert(insert_at, f"trace A={values[0]}; B={values[1]}; C={values[2]}.")
+        prompt = "arith " + " ".join(parts) + " Q sum A B C? A:"
+        return LongContextSample(task_family, difficulty, prompt, " " + str(total), "A+B+C")
+    if canonical_family == "program_trace":
+        start = rng.randint(1, 9)
+        increment = rng.randint(1, 9)
+        total = start + increment
+        parts = [*filler]
+        parts.insert(insert_at, f"program x={start}; x=x+{increment}; return x.")
+        prompt = "code " + " ".join(parts) + " Q final x? A:"
+        return LongContextSample(task_family, difficulty, prompt, " " + str(total), "x")
     raise ValueError(f"Unsupported long-context task family: {task_family}")
+
+
+def _insert_index(difficulty: str, filler_count: int) -> int:
+    if difficulty == "far":
+        return max(0, filler_count // 5)
+    if difficulty == "middle":
+        return filler_count // 2
+    if difficulty == "near":
+        return max(0, filler_count - 1)
+    raise ValueError(f"Unsupported long-context difficulty: {difficulty}")
 
 
 def _prompt_ids(tokenizer: Any, prompt: str) -> list[int]:

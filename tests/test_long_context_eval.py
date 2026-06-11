@@ -53,6 +53,39 @@ def test_generate_long_context_samples_includes_needle_and_two_hop() -> None:
     assert all(sample.answer.startswith(" ") for sample in samples)
 
 
+def test_generate_long_context_samples_covers_package_c_eval_families() -> None:
+    families = [
+        "needle_retrieval",
+        "synthetic_multihop_tracing",
+        "ruler_subset",
+        "longbench_subset",
+        "long_arithmetic_trace",
+        "program_trace",
+    ]
+    samples = generate_long_context_samples(
+        len(families),
+        seed=2,
+        context_length=64,
+        task_families=families,
+        difficulties=["near"],
+    )
+
+    assert [sample.task_family for sample in samples] == families
+    assert all(sample.answer.startswith(" ") for sample in samples)
+    assert samples[1].key.startswith("K")
+    assert samples[2].prompt.startswith("ruler ")
+    assert "Question:" in samples[3].prompt
+    assert "sum A B C" in samples[4].prompt
+    assert "final x" in samples[5].prompt
+
+
+def test_generate_long_context_samples_rejects_unknown_family_or_difficulty() -> None:
+    with pytest.raises(ValueError, match="Unsupported long-context task family"):
+        generate_long_context_samples(1, task_families=["missing"], difficulties=["near"])
+    with pytest.raises(ValueError, match="Unsupported long-context difficulty"):
+        generate_long_context_samples(1, task_families=["needle_retrieval"], difficulties=["extreme"])
+
+
 def test_summarize_long_context_rows() -> None:
     summary = summarize_long_context_rows(
         [

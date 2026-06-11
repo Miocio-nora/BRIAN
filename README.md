@@ -209,7 +209,10 @@ python scripts/eval.py \
   --sample-count 12
 ```
 
-This writes a needle-retrieval / two-hop tracing report with exact-match accuracy, teacher-forced target token accuracy, truncation rate, estimated fp16 KV/global-code memory budgets, and Global KV routing diagnostics including sink/window attention mass.
+This writes a Package C long-context report covering needle retrieval, synthetic multi-hop tracing,
+RULER-style retrieval, LongBench-style QA, long arithmetic traces, and program traces, with exact-match
+accuracy, teacher-forced target token accuracy, truncation rate, estimated fp16 KV/global-code memory
+budgets, and Global KV routing diagnostics including sink/window attention mass.
 
 Summarize the Stage 5 Global KV sink + sliding-window retention evidence:
 
