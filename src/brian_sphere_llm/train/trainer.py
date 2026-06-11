@@ -229,19 +229,27 @@ def train_from_config(config_path: str | Path) -> Path:
         optimizer.step()
         _synchronize_if_cuda(device)
         elapsed = max(1e-9, time.time() - started)
+        distributed_world_size = dist_utils.world_size() if distributed else 1
+        local_token_count = token_count
+        global_token_count = _global_train_token_count(local_token_count, distributed=distributed)
         row = {
             "step": step,
             "loss": _mean(losses),
             "learning_rate": current_learning_rate,
             "micro_batch_size": batch_size,
             "gradient_accumulation_steps": gradient_accumulation_steps,
-            "effective_batch_size": batch_size * gradient_accumulation_steps,
-            "tokens_per_optimizer_step": token_count,
+            "local_effective_batch_size": batch_size * gradient_accumulation_steps,
+            "effective_batch_size": batch_size * gradient_accumulation_steps * distributed_world_size,
+            "local_tokens_per_optimizer_step": local_token_count,
+            "tokens_per_optimizer_step": global_token_count,
+            "distributed_world_size": distributed_world_size,
             "ddp_find_unused_parameters": ddp_find_unused_parameters,
             "ddp_no_sync_microbatches": ddp_no_sync_microbatches,
-            "tokens_per_second": int(token_count / elapsed),
+            "local_tokens_per_second": int(local_token_count / elapsed),
+            "tokens_per_second": int(global_token_count / elapsed),
             "train_step_time_seconds": elapsed,
-            "train_latency_ms_per_token": _latency_ms_per_token(elapsed, token_count),
+            "local_train_latency_ms_per_token": _latency_ms_per_token(elapsed, local_token_count),
+            "train_latency_ms_per_token": _latency_ms_per_token(elapsed, global_token_count),
         }
         row.update(_cuda_memory_metrics(device))
         if loss_components:
@@ -346,6 +354,12 @@ def _ddp_no_sync_microbatch_count(model: Any, *, distributed: bool, gradient_acc
     if distributed and gradient_accumulation_steps > 1 and hasattr(model, "no_sync"):
         return gradient_accumulation_steps - 1
     return 0
+
+
+def _global_train_token_count(local_token_count: int, *, distributed: bool) -> int:
+    if distributed:
+        return local_token_count * dist_utils.world_size()
+    return local_token_count
 
 
 def _set_sampler_epoch(loader: Any, epoch: int) -> None:

@@ -14,6 +14,7 @@ from brian_sphere_llm.train.trainer import (
     _float_config,
     _forward_for_stage,
     _gradient_sync_context,
+    _global_train_token_count,
     _int_config,
     _learning_rate_for_step,
     _lr_schedule_config,
@@ -145,6 +146,13 @@ def test_distributed_cuda_device_uses_local_rank(monkeypatch: pytest.MonkeyPatch
 
     assert device.type == "cuda"
     assert device.index == 1
+
+
+def test_global_train_token_count_uses_world_size_for_distributed(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("WORLD_SIZE", "8")
+
+    assert _global_train_token_count(128, distributed=True) == 1024
+    assert _global_train_token_count(128, distributed=False) == 128
 
 
 def test_evaluate_reports_inference_timing_metrics() -> None:
@@ -386,10 +394,14 @@ def test_train_from_config_writes_routing_report_on_checkpoint(tmp_path: Path) -
     assert train_row["learning_rate"] == pytest.approx(0.001)
     assert train_row["micro_batch_size"] == 2
     assert train_row["gradient_accumulation_steps"] == 2
+    assert train_row["local_effective_batch_size"] == 4
     assert train_row["effective_batch_size"] == 4
+    assert train_row["local_tokens_per_optimizer_step"] == 16
     assert train_row["tokens_per_optimizer_step"] == 16
+    assert train_row["distributed_world_size"] == 1
     assert train_row["ddp_find_unused_parameters"] is False
     assert train_row["ddp_no_sync_microbatches"] == 0
+    assert train_row["local_tokens_per_second"] > 0
 
 
 def test_train_from_config_writes_final_routing_report_when_checkpoint_report_disabled(tmp_path: Path) -> None:

@@ -4,7 +4,13 @@ from pathlib import Path
 import pytest
 import yaml
 
-from brian_sphere_llm.eval.compute_report import _sequence_length, estimate_gpu_hours, make_compute_report, summarize_run
+from brian_sphere_llm.eval.compute_report import (
+    _sequence_length,
+    _world_size,
+    estimate_gpu_hours,
+    make_compute_report,
+    summarize_run,
+)
 
 
 def _write_json(path: Path, data: dict) -> None:
@@ -155,8 +161,54 @@ def test_summarize_run_accounts_for_gradient_accumulation_tokens(tmp_path: Path)
 
     assert summary["micro_batch_size"] == 2
     assert summary["gradient_accumulation_steps"] == 3
+    assert summary["distributed_world_size"] == 1
+    assert summary["local_effective_batch_size"] == 6
     assert summary["effective_batch_size"] == 6
     assert summary["trained_tokens_estimate"] == 96
+
+
+def test_summarize_run_accounts_for_distributed_global_tokens(tmp_path: Path) -> None:
+    run = _write_run(
+        tmp_path,
+        "distributed",
+        config={
+            "stage": "stage0_baseline",
+            "batch_size": 1,
+            "gradient_accumulation_steps": 4,
+            "data_config_resolved": {"sequence_length": 8},
+            "distributed": {"enabled": True, "world_size": 8},
+        },
+        model_stats={"model_name": "baseline", "parameter_count": 100, "layers": 4},
+    )
+
+    summary = summarize_run(run)
+
+    assert summary["distributed_world_size"] == 8
+    assert summary["local_effective_batch_size"] == 4
+    assert summary["effective_batch_size"] == 32
+    assert summary["trained_tokens_estimate"] == 512
+
+
+def test_summarize_run_prefers_logged_tokens_per_optimizer_step(tmp_path: Path) -> None:
+    run = _write_run(
+        tmp_path,
+        "logged_tokens",
+        config={
+            "stage": "stage0_baseline",
+            "batch_size": 1,
+            "gradient_accumulation_steps": 4,
+            "data_config_resolved": {"sequence_length": 8},
+            "distributed": {"enabled": True, "world_size": 8},
+        },
+        model_stats={"model_name": "baseline", "parameter_count": 100, "layers": 4},
+    )
+    train_row = json.loads((run / "train_log.jsonl").read_text(encoding="utf-8"))
+    train_row["tokens_per_optimizer_step"] = 123
+    (run / "train_log.jsonl").write_text(json.dumps(train_row) + "\n", encoding="utf-8")
+
+    summary = summarize_run(run)
+
+    assert summary["trained_tokens_estimate"] == 246
 
 
 def test_summarize_run_marks_stage4_output_action_as_hard_exit_by_default(tmp_path: Path) -> None:
@@ -198,6 +250,11 @@ def test_summarize_run_honors_explicit_string_false_hard_exit(tmp_path: Path) ->
 def test_compute_report_rejects_boolean_sequence_length() -> None:
     with pytest.raises(ValueError, match="sequence_length"):
         _sequence_length({"data_config_resolved": {"sequence_length": True}})
+
+
+def test_compute_report_rejects_boolean_distributed_world_size() -> None:
+    with pytest.raises(ValueError, match="distributed.world_size"):
+        _world_size({"distributed": {"enabled": True, "world_size": True}})
 
 
 def test_summarize_run_rejects_boolean_numeric_metrics(tmp_path: Path) -> None:

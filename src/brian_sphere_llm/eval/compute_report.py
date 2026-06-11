@@ -94,9 +94,11 @@ def summarize_run(
         "model_name": model_stats.get("model_name", ""),
         "route_mode": routing_config.get("mode"),
         "hard_exit_enabled": _hard_exit_enabled(config),
+        "distributed_world_size": _world_size(config),
         "micro_batch_size": _batch_size(config),
         "gradient_accumulation_steps": _gradient_accumulation_steps(config),
-        "effective_batch_size": _batch_size(config) * _gradient_accumulation_steps(config),
+        "local_effective_batch_size": _batch_size(config) * _gradient_accumulation_steps(config),
+        "effective_batch_size": _batch_size(config) * _gradient_accumulation_steps(config) * _world_size(config),
         "parameter_count": parameter_count,
         "physical_layer_count": physical_layers,
         "active_layer_evals_per_token": active_layer_evals,
@@ -206,10 +208,13 @@ def _active_layer_evals(model_stats: dict[str, Any], config: dict[str, Any], rou
 
 def _trained_tokens(config: dict[str, Any], final_train: dict[str, Any], final_eval: dict[str, Any]) -> int:
     step = int(_num(final_train.get("step")) or _num(final_eval.get("step")) or _num(config.get("max_steps")) or 0)
+    logged_tokens_per_step = _num(final_train.get("tokens_per_optimizer_step"))
+    if logged_tokens_per_step is not None:
+        return int(step * logged_tokens_per_step)
     batch_size = _batch_size(config)
     gradient_accumulation_steps = _gradient_accumulation_steps(config)
     sequence_length = _sequence_length(config)
-    return int(step * batch_size * gradient_accumulation_steps * sequence_length)
+    return int(step * batch_size * gradient_accumulation_steps * sequence_length * _world_size(config))
 
 
 def _batch_size(config: dict[str, Any]) -> int:
@@ -222,6 +227,17 @@ def _batch_size(config: dict[str, Any]) -> int:
 def _gradient_accumulation_steps(config: dict[str, Any]) -> int:
     value = config.get("gradient_accumulation_steps", 1)
     return _int_value(value, "gradient_accumulation_steps", minimum=1)
+
+
+def _world_size(config: dict[str, Any]) -> int:
+    distributed = config.get("distributed", {})
+    if not isinstance(distributed, dict):
+        return 1
+    enabled = distributed.get("enabled", False)
+    if enabled is not True:
+        return 1
+    value = distributed.get("world_size", 1)
+    return _int_value(value, "distributed.world_size", minimum=1)
 
 
 def _hard_exit_enabled(config: dict[str, Any]) -> bool | None:
