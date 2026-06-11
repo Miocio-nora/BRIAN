@@ -6,7 +6,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Iterable
 
-from brian_sphere_llm.utils.logging import utc_now_iso
+from brian_sphere_llm.utils.logging import utc_now_iso, write_jsonl
 
 
 REQUIRED_MANIFEST_FIELDS = {
@@ -91,12 +91,11 @@ class ManifestRow:
 
 
 def write_manifest(rows: Iterable[ManifestRow], path: str | Path) -> None:
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as handle:
-        for row in rows:
-            row.validate()
-            handle.write(json.dumps(asdict(row), sort_keys=True) + "\n")
+    payloads = []
+    for row in rows:
+        row.validate()
+        payloads.append(asdict(row))
+    write_jsonl(payloads, path)
 
 
 def read_manifest(path: str | Path) -> list[dict]:

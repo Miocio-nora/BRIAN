@@ -68,3 +68,27 @@ def test_read_manifest_rejects_invalid_counts_and_split(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="Manifest row must be a JSON object"):
         read_manifest(path)
+
+
+def test_write_manifest_rejects_nonfinite_metadata_before_writing_file(tmp_path: Path) -> None:
+    row = ManifestRow(
+        sample_id="sample-1",
+        source_dataset="unit",
+        source_url_or_id="unit-1",
+        split="train",
+        token_count=1,
+        byte_count=1,
+        sha256_text="text-hash",
+        sha256_tokens="token-hash",
+        license="test",
+        path="memory",
+        mixture_tag="synthetic",
+        created_at="1970-01-01T00:00:00+00:00",
+        route_metadata={"pseudo_route_length": float("nan")},
+    )
+    path = tmp_path / "manifest.jsonl"
+
+    with pytest.raises(ValueError, match="Out of range float values"):
+        write_manifest([row], path)
+
+    assert not path.exists()
