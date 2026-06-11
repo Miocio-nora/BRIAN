@@ -228,16 +228,44 @@ def _parallel_requirements(entries: list[dict[str, Any]]) -> list[dict[str, Any]
             "PP0",
             "top-k weighted fusion single-state baseline",
             entries,
-            lambda entry: entry["model"].get("parallel_passing") is not True
+            lambda entry: entry["id"] == "PP0"
+            and entry["model"].get("parallel_passing") is not True
             and (_num(entry["model"].get("top_k")) or 0) >= 2,
         ),
         _group_requirement(
             "PP1",
             "beam-2 independent parallel passing",
             entries,
-            lambda entry: entry["model"].get("parallel_passing") is True
+            lambda entry: entry["id"] == "PP1"
+            and entry["model"].get("parallel_passing") is True
             and int(_num(entry["model"].get("beam_size")) or 0) == 2
             and (_num(entry["model"].get("branch_cost")) or 0.0) > 0.0,
+        ),
+        _group_requirement(
+            "PP2",
+            "beam-4 parallel capacity test",
+            entries,
+            lambda entry: entry["id"] == "PP2"
+            and entry["model"].get("parallel_passing") is True
+            and int(_num(entry["model"].get("beam_size")) or 0) == 4,
+        ),
+        _group_requirement(
+            "PP3",
+            "branch cost off ablation",
+            entries,
+            lambda entry: entry["id"] == "PP3"
+            and entry["model"].get("parallel_passing") is True
+            and _num(entry["model"].get("branch_cost")) == 0.0
+            and _num(entry.get("loss_weights", {}).get("cost")) == 0.0,
+        ),
+        _group_requirement(
+            "PP4",
+            "branch cost on proposal",
+            entries,
+            lambda entry: entry["id"] == "PP4"
+            and entry["model"].get("parallel_passing") is True
+            and (_num(entry["model"].get("branch_cost")) or 0.0) > 0.0
+            and (_num(entry.get("loss_weights", {}).get("cost")) or 0.0) > 0.0,
         ),
     ]
 

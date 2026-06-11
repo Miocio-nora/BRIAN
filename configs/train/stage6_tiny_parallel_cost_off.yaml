@@ -1,0 +1,10 @@
+extends: stage6_tiny_debug.yaml
+model_config: ../model/brian_tiny_parallel_no_branch_cost.yaml
+loss_weights:
+  route: 0.0
+  balance: 0.01
+  cost: 0.0
+  location: 0.02
+max_steps: 3
+eval_interval: 1
+save_interval: 3

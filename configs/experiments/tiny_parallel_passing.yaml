@@ -10,3 +10,15 @@ ablations:
     name: beam2_parallel_passing
     train_config: configs/train/stage6_tiny_debug.yaml
     purpose: First independent branch latent beam-search path.
+  - id: PP2
+    name: beam4_parallel_capacity
+    train_config: configs/train/stage6_tiny_parallel_beam4.yaml
+    purpose: Tiny beam-4 capacity test after beam-2 safety evidence.
+  - id: PP3
+    name: branch_cost_off
+    train_config: configs/train/stage6_tiny_parallel_cost_off.yaml
+    purpose: Tiny ablation with branch cost disabled.
+  - id: PP4
+    name: branch_cost_on
+    train_config: configs/train/stage6_tiny_parallel_cost_on.yaml
+    purpose: Tiny branch-cost-enabled parallel passing proposal.

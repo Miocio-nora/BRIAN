@@ -1,0 +1,3 @@
+extends: brian_r125_parallel.yaml
+model_name: brian_r125_parallel_no_branch_cost
+branch_cost: 0.0

@@ -10,3 +10,15 @@ ablations:
     name: beam2_parallel_passing
     train_config: configs/train/stage6_parallel_passing.yaml
     purpose: First independent branch latent beam-search path.
+  - id: PP2
+    name: beam4_parallel_capacity
+    train_config: configs/train/ablation_pp2_parallel_beam4.yaml
+    purpose: Beam-4 capacity test after beam-2 safety evidence.
+  - id: PP3
+    name: branch_cost_off
+    train_config: configs/train/ablation_pp3_parallel_cost_off.yaml
+    purpose: Verify branch cost is needed to bound parallel compute.
+  - id: PP4
+    name: branch_cost_on
+    train_config: configs/train/ablation_pp4_parallel_cost_on.yaml
+    purpose: Main branch-cost-enabled parallel passing proposal.

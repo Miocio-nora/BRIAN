@@ -1,0 +1,4 @@
+extends: brian_r125_parallel.yaml
+model_name: brian_r125_parallel_beam4
+beam_size: 4
+branch_cost: 0.01

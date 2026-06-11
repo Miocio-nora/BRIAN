@@ -43,3 +43,14 @@ def test_stage6_config_builds_parallel_model() -> None:
     assert model.config.parallel_passing is True
     assert model.config.beam_size == 2
     assert train_mode_for_stage("stage6_parallel_passing") == "parallel"
+
+
+def test_parallel_ablation_configs_build_models() -> None:
+    beam4 = build_model_from_config("configs/model/brian_tiny_parallel_beam4.yaml")
+    no_cost = build_model_from_config("configs/model/brian_tiny_parallel_no_branch_cost.yaml")
+    assert beam4.config.parallel_passing is True
+    assert beam4.config.beam_size == 4
+    assert beam4.config.branch_cost == 0.01
+    assert no_cost.config.parallel_passing is True
+    assert no_cost.config.beam_size == 2
+    assert no_cost.config.branch_cost == 0.0

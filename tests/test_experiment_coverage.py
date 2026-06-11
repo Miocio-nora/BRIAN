@@ -64,6 +64,9 @@ def test_parallel_package_coverage_passes_weighted_and_beam2_requirements(tmp_pa
     assert report["profile"] == "parallel_passing_beta"
     assert _requirement(report, "PP0")["status"] == "pass"
     assert _requirement(report, "PP1")["status"] == "pass"
+    assert _requirement(report, "PP2")["status"] == "pass"
+    assert _requirement(report, "PP3")["status"] == "pass"
+    assert _requirement(report, "PP4")["status"] == "pass"
 
 
 def test_experiment_coverage_fails_missing_required_entry(tmp_path: Path) -> None:

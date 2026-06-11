@@ -54,8 +54,11 @@ def test_parallel_experiment_manifest_resolves_repo_paths() -> None:
     assert plan.experiment_name == "tiny_parallel_passing"
     assert plan.entries[0].role == "baseline"
     assert plan.entries[0].train_config.name == "stage5_tiny_debug.yaml"
-    assert [entry.id for entry in plan.entries[1:]] == ["PP0", "PP1"]
+    assert [entry.id for entry in plan.entries[1:]] == ["PP0", "PP1", "PP2", "PP3", "PP4"]
     assert plan.entries[2].train_config.name == "stage6_tiny_debug.yaml"
+    assert plan.entries[3].train_config.name == "stage6_tiny_parallel_beam4.yaml"
+    assert plan.entries[4].train_config.name == "stage6_tiny_parallel_cost_off.yaml"
+    assert plan.entries[5].train_config.name == "stage6_tiny_parallel_cost_on.yaml"
 
 
 def test_r350_scaling_experiment_manifest_resolves_repo_paths() -> None:
