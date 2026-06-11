@@ -10,6 +10,10 @@ from brian_sphere_llm.utils.logging import write_json
 
 ROUTING_KEYS = {
     "route_entropy",
+    "block_load_entropy",
+    "block_load_entropy_normalized",
+    "route_path_count",
+    "route_path_diversity",
     "p_output_mean",
     "active_block_evals_per_token",
     "average_route_steps",

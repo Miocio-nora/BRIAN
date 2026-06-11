@@ -51,6 +51,7 @@ def test_stage_gate_report_writes_json(tmp_path: Path) -> None:
         train_row={
             "route_imitation_accuracy": 0.99,
             "position_norm_mean": 1.0,
+            "block_load_entropy": 0.5,
             "top1_block_histogram": {"0": 2, "1": 2, "2": 1},
         },
     )

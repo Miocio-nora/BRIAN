@@ -7,5 +7,7 @@ thresholds:
   route_imitation_fixed_min: 0.98
   route_imitation_mixed_min: 0.90
   route_entropy_min: 0.05
+  block_load_entropy_min: 0.05
+  route_path_diversity_min: 0.05
   global_attention_mass_min: 0.000001
   global_read_gate_min: 0.000001

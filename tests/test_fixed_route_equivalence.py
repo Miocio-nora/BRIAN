@@ -20,4 +20,6 @@ def test_brian_fixed_route_outputs_route_summary() -> None:
     output = model(input_ids, targets=input_ids, route_mode="fixed", pseudo_policy="sequential")
     assert output["logits"].shape == (2, 8, 64)
     assert "route_entropy" in output["routing_summary"]
+    assert "block_load_entropy" in output["routing_summary"]
+    assert "route_path_diversity" in output["routing_summary"]
     assert output["routing_summary"]["route_imitation_accuracy"] == 1.0

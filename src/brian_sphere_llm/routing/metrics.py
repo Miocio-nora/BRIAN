@@ -13,6 +13,21 @@ def entropy(probs: "torch.Tensor", dim: int = -1) -> "torch.Tensor":
     return -(probs.clamp_min(1e-9) * probs.clamp_min(1e-9).log()).sum(dim=dim)
 
 
+def block_load_entropy_from_counts(counts: dict[int, int], num_internal_blocks: int) -> tuple[float, float]:
+    if torch is None:
+        raise ModuleNotFoundError("PyTorch is required for routing metrics.")
+    internal_counts = torch.tensor([counts.get(index, 0) for index in range(num_internal_blocks)], dtype=torch.float32)
+    total = internal_counts.sum()
+    if total <= 0:
+        return 0.0, 0.0
+    probs = internal_counts / total
+    nonzero = probs[probs > 0]
+    value = max(0.0, float((-(nonzero * nonzero.log()).sum()).cpu()))
+    max_entropy = float(torch.log(torch.tensor(float(num_internal_blocks))).cpu()) if num_internal_blocks > 1 else 1.0
+    normalized = max(0.0, value / max_entropy) if max_entropy > 0 else 0.0
+    return value, normalized
+
+
 def summarize_routes(route_info: dict[str, Any], num_internal_blocks: int) -> dict[str, Any]:
     if torch is None:
         raise ModuleNotFoundError("PyTorch is required for routing metrics.")
@@ -31,10 +46,16 @@ def summarize_routes(route_info: dict[str, Any], num_internal_blocks: int) -> di
         flat = stacked.flatten().tolist()
         counts = Counter(int(value) for value in flat)
         summary["top1_block_histogram"] = {str(key): counts.get(key, 0) for key in range(num_internal_blocks + 1)}
+        load_entropy, normalized_load_entropy = block_load_entropy_from_counts(counts, num_internal_blocks)
+        summary["block_load_entropy"] = load_entropy
+        summary["block_load_entropy_normalized"] = normalized_load_entropy
         internal = sum(counts.get(key, 0) for key in range(num_internal_blocks))
         total = max(1, len(flat))
         summary["active_block_evals_per_token"] = internal / total
         summary["average_route_steps"] = len(actions)
+        paths = [tuple(int(value) for value in stacked[:, sample_index].tolist()) for sample_index in range(stacked.size(1))]
+        summary["route_path_count"] = len(set(paths))
+        summary["route_path_diversity"] = len(set(paths)) / max(1, len(paths))
         advances = 0
         skips = 0
         recurs = 0

@@ -15,6 +15,8 @@ DEFAULT_THRESHOLDS = {
     "route_imitation_fixed_min": 0.98,
     "route_imitation_mixed_min": 0.90,
     "route_entropy_min": 0.05,
+    "block_load_entropy_min": 0.05,
+    "route_path_diversity_min": 0.05,
     "global_attention_mass_min": 1e-6,
     "global_read_gate_min": 1e-6,
 }
@@ -132,6 +134,7 @@ def _gate_stage2(stage2: dict[str, Any] | None, thresholds: dict[str, float]) ->
         "route_imitation_accuracy": _metric_at_least(stage2, "route_imitation_accuracy", thresholds["route_imitation_mixed_min"]),
         "lm_loss_finite": _finite(stage2.get("validation_loss") if stage2 else None),
         "block_usage_non_degenerate": _block_usage_non_degenerate(stage2),
+        "block_load_entropy_present": _metric_at_least(stage2, "block_load_entropy", thresholds["block_load_entropy_min"]),
         "checkpoint_present": bool(stage2 and stage2["has_checkpoint_latest"]),
     }
     return _gate("Stage 2 mixed pseudo routing is stable and non-degenerate", checks)
@@ -144,6 +147,8 @@ def _gate_stage3(stage3: dict[str, Any] | None, stage1: dict[str, Any] | None, t
     checks = {
         "validation_loss_not_collapsed": ratio is None or ratio <= thresholds["stage3_loss_ratio_max"],
         "route_entropy_present": _metric_at_least(stage3, "route_entropy", thresholds["route_entropy_min"]),
+        "block_load_entropy_present": _metric_at_least(stage3, "block_load_entropy", thresholds["block_load_entropy_min"]),
+        "route_path_diversity_present": _metric_at_least(stage3, "route_path_diversity", thresholds["route_path_diversity_min"]),
         "average_route_steps_present": _finite(_routing_metric(stage3, "average_route_steps")),
         "difficulty_report_present": _num(stage3.get("difficulty_sample_count") if stage3 else None) is not None
         and float(stage3["difficulty_sample_count"]) >= 1.0,
