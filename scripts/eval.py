@@ -14,6 +14,7 @@ from brian_sphere_llm.eval.fixed_route_stability import make_fixed_route_stabili
 from brian_sphere_llm.eval.global_kv_ablation import make_global_kv_ablation_report
 from brian_sphere_llm.eval.global_kv_retention import make_global_kv_retention_report
 from brian_sphere_llm.eval.go_no_go_report import make_go_no_go_report
+from brian_sphere_llm.eval.hard_exit_compare import make_hard_exit_comparison_report
 from brian_sphere_llm.eval.long_context import make_long_context_report
 from brian_sphere_llm.eval.long_context_compare import make_long_context_comparison_report
 from brian_sphere_llm.eval.out_by_difficulty import make_out_by_difficulty_report
@@ -144,6 +145,20 @@ def main() -> None:
             runs,
             output_path=args.output or config.get("output_path"),
             min_active_compute_range=float(args.min_active_compute_range or config.get("min_active_compute_range", 0.05)),
+        )
+    elif eval_name == "hard_exit_compare":
+        baseline_run = args.baseline_run or config.get("baseline_run")
+        runs = args.runs or ([args.run] if args.run else config.get("runs", []))
+        if not baseline_run or not runs:
+            raise SystemExit("hard_exit_compare requires --baseline-run and --runs/--run")
+        report = make_hard_exit_comparison_report(
+            baseline_run,
+            runs,
+            output_path=args.output or config.get("output_path"),
+            max_validation_loss_delta=float(config.get("max_validation_loss_delta", 0.0)),
+            max_latency_ratio=float(config.get("max_latency_ratio", 1.0)),
+            max_inference_time_ratio=float(config.get("max_inference_time_ratio", 1.0)),
+            max_route_step_ratio=float(config.get("max_route_step_ratio", 1.0)),
         )
     elif eval_name == "eval_determinism_report":
         if not args.run:

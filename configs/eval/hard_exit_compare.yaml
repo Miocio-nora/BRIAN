@@ -1,0 +1,8 @@
+eval_name: hard_exit_compare
+output_path: reports/hard_exit_compare.json
+baseline_run: null
+runs: []
+max_validation_loss_delta: 0.0
+max_latency_ratio: 1.0
+max_inference_time_ratio: 1.0
+max_route_step_ratio: 1.0

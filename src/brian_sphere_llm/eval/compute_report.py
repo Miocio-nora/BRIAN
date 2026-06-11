@@ -74,6 +74,7 @@ def summarize_run(
     routing_summary = routing_report.get("summary", {}) if isinstance(routing_report.get("summary"), dict) else {}
     final_train = train_rows[-1] if train_rows else {}
     final_eval = eval_rows[-1] if eval_rows else {}
+    routing_config = config.get("routing", {}) if isinstance(config.get("routing"), dict) else {}
 
     parameter_count = int(_num(model_stats.get("parameter_count")) or 0)
     physical_layers = _physical_layer_count(model_stats, config)
@@ -91,6 +92,8 @@ def summarize_run(
         "run_dir": str(run_dir),
         "stage": str(config.get("stage", _stage_from_name(run_dir.name))),
         "model_name": model_stats.get("model_name", ""),
+        "route_mode": routing_config.get("mode"),
+        "hard_exit_enabled": _hard_exit_enabled(config),
         "parameter_count": parameter_count,
         "physical_layer_count": physical_layers,
         "active_layer_evals_per_token": active_layer_evals,
@@ -200,6 +203,19 @@ def _trained_tokens(config: dict[str, Any], final_train: dict[str, Any], final_e
     batch_size = int(_num(config.get("batch_size")) or 0)
     sequence_length = _sequence_length(config)
     return int(step * batch_size * sequence_length)
+
+
+def _hard_exit_enabled(config: dict[str, Any]) -> bool | None:
+    routing_config = config.get("routing", {})
+    if isinstance(routing_config, dict) and isinstance(routing_config.get("hard_exit"), bool):
+        return bool(routing_config["hard_exit"])
+    stage = config.get("stage")
+    if isinstance(stage, str) and stage == "stage4_output_action":
+        return True
+    model_config = config.get("model_config_resolved", {})
+    if isinstance(model_config, dict) and isinstance(model_config.get("hard_exit"), bool):
+        return bool(model_config["hard_exit"])
+    return None
 
 
 def _sequence_length(config: dict[str, Any]) -> int:

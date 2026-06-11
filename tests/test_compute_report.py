@@ -77,6 +77,7 @@ def test_summarize_run_estimates_active_route_compute(tmp_path: Path) -> None:
             "stage": "stage3_scheduled_free_routing",
             "batch_size": 2,
             "data_config_resolved": {"sequence_length": 8},
+            "routing": {"mode": "scheduled", "hard_exit": False},
             "model_config_resolved": {"top_k": 2},
         },
         model_stats={
@@ -96,6 +97,8 @@ def test_summarize_run_estimates_active_route_compute(tmp_path: Path) -> None:
     )
     summary = summarize_run(run, tflops_per_gpu=1.0, utilization=1.0)
     assert summary["physical_layer_count"] == 4
+    assert summary["route_mode"] == "scheduled"
+    assert summary["hard_exit_enabled"] is False
     assert summary["active_layer_evals_per_token"] == pytest.approx(5.0)
     assert summary["active_layer_ratio"] == pytest.approx(1.25)
     assert summary["trained_tokens_estimate"] == 32
@@ -105,6 +108,23 @@ def test_summarize_run_estimates_active_route_compute(tmp_path: Path) -> None:
     assert summary["train_latency_ms_per_token_mean"] == 0.5
     assert summary["inference_latency_ms_per_token_latest"] == 0.25
     assert summary["train_cuda_max_memory_allocated_mb_latest"] == 16.0
+
+
+def test_summarize_run_marks_stage4_output_action_as_hard_exit_by_default(tmp_path: Path) -> None:
+    run = _write_run(
+        tmp_path,
+        "stage4",
+        config={
+            "stage": "stage4_output_action",
+            "batch_size": 2,
+            "data_config_resolved": {"sequence_length": 8},
+            "routing": {"mode": "scheduled"},
+            "model_config_resolved": {"hard_exit": False},
+        },
+        model_stats={"model_name": "stage4", "parameter_count": 100, "layers": 4},
+    )
+    summary = summarize_run(run)
+    assert summary["hard_exit_enabled"] is True
 
 
 def test_make_compute_report_compares_to_baseline(tmp_path: Path) -> None:

@@ -251,6 +251,17 @@ python scripts/eval.py \
 
 This writes `reports/compute_report.json` with parameter ratios, active layer eval ratios, estimated FLOPs/token, estimated GPU-hours, validation loss deltas, throughput ratios, latency/token, train step time, inference timing, and CUDA memory snapshots when available.
 
+Compare inference timing with and without hard `OUT` exits:
+
+```bash
+python scripts/eval.py \
+  --config configs/eval/hard_exit_compare.yaml \
+  --baseline-run <stage4_no_hard_exit_run> \
+  --run <stage4_hard_exit_run>
+```
+
+This writes `reports/hard_exit_compare.json` with hard-exit configuration checks, inference time and latency ratios, route-step ratios, and validation-loss deltas.
+
 Run the Stage 3 block-position smoke ablations:
 
 ```bash
