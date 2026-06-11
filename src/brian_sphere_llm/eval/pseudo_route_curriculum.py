@@ -144,11 +144,22 @@ def _checks(
     hard = by_difficulty["hard"]
     easy_exit = _num(easy.get("mean_first_exit_step"))
     hard_exit = _num(hard.get("mean_first_exit_step"))
+    easy_ce = _num(easy.get("mean_baseline_cross_entropy"))
+    medium_ce = _num(medium.get("mean_baseline_cross_entropy"))
+    hard_ce = _num(hard.get("mean_baseline_cross_entropy"))
     easy_steps = _num(easy.get("mean_internal_route_steps"))
     medium_steps = _num(medium.get("mean_internal_route_steps"))
     hard_steps = _num(hard.get("mean_internal_route_steps"))
     return {
         "baseline_samples_present": bool(rows),
+        "baseline_cross_entropy_numeric": bool(rows) and all(row["baseline_cross_entropy"] is not None for row in rows),
+        "baseline_cross_entropy_ordered_by_difficulty": (
+            easy_ce is not None
+            and medium_ce is not None
+            and hard_ce is not None
+            and easy_ce <= medium_ce
+            and medium_ce <= hard_ce
+        ),
         "difficulty_bins_present": all(by_difficulty[label]["sample_count"] > 0 for label in DIFFICULTY_TO_ID),
         "mixed_skip_recur_policy": pseudo_policy == "mixed_skip_recur",
         "easy_has_skip_or_small_pool": route_pool_blocks <= 2 or int(easy.get("skip_transition_count") or 0) > 0,
