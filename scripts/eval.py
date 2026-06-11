@@ -28,6 +28,7 @@ def main() -> None:
     parser.add_argument("--tflops-per-gpu", type=float, default=None, help="Reference TFLOPs/GPU for compute reports.")
     parser.add_argument("--utilization", type=float, default=None, help="Reference utilization for compute reports.")
     parser.add_argument("--min-active-compute-range", type=float, default=None, help="Minimum active compute range for cost reports.")
+    parser.add_argument("--cost-control-report", default=None, help="Cost-control report path for stage gate eval.")
     args = parser.parse_args()
     config = load_config(args.config)
     eval_name = config.get("eval_name", "routing_eval")
@@ -39,6 +40,7 @@ def main() -> None:
             runs,
             output_path=args.output or config.get("output_path"),
             thresholds=config.get("thresholds", {}),
+            cost_control_report_path=args.cost_control_report or config.get("cost_control_report_path"),
         )
     elif eval_name == "difficulty_step_eval":
         baseline_run = args.baseline_run or config.get("baseline_run")

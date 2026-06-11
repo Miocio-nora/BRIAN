@@ -15,10 +15,16 @@ def main() -> None:
     parser.add_argument("--config", default="configs/eval/stage_gate_eval.yaml")
     parser.add_argument("--runs", nargs="+", required=True, help="Run directories in any order.")
     parser.add_argument("--output", default=None, help="Optional output path override.")
+    parser.add_argument("--cost-control-report", default=None, help="Optional cost-control report path.")
     args = parser.parse_args()
     config = load_config(args.config)
     output_path = args.output or config.get("output_path")
-    report = make_stage_gate_report(args.runs, output_path=output_path, thresholds=config.get("thresholds", {}))
+    report = make_stage_gate_report(
+        args.runs,
+        output_path=output_path,
+        thresholds=config.get("thresholds", {}),
+        cost_control_report_path=args.cost_control_report or config.get("cost_control_report_path"),
+    )
     print(report)
 
 

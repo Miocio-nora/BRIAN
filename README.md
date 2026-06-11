@@ -92,6 +92,15 @@ python scripts/make_stage_gate_report.py \
   --runs <stage0_run> <stage1_run> <stage2_run> <stage3_run> <stage4_run> <stage5_run> <stage6_run>
 ```
 
+Include Stage 4 cost-control evidence in the stage gate:
+
+```bash
+python scripts/eval.py \
+  --config configs/eval/stage_gate_eval.yaml \
+  --runs <stage0_run> <stage1_run> <stage2_run> <stage3_run> <stage4_run> \
+  --cost-control-report <cost_control_report.json>
+```
+
 Generate the required difficulty-step diagnostic for a routed run:
 
 ```bash

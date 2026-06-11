@@ -73,3 +73,42 @@ def test_stage_gate_report_writes_json(tmp_path: Path) -> None:
     assert report["gates"]["stage0_to_1"]["status"] == "pass"
     assert report["gates"]["stage1_to_2"]["status"] == "pass"
     assert report["gates"]["stage5_to_6"]["status"] == "pass"
+
+
+def test_stage_gate_report_uses_cost_control_report(tmp_path: Path) -> None:
+    stage4 = _write_run(
+        tmp_path,
+        "stage4",
+        stage="stage4_output_action",
+        val_loss=10.0,
+        train_row={
+            "average_route_steps": 2.0,
+            "first_exit_step_histogram": {"1": 1, "2": 2},
+            "top1_block_histogram": {"0": 1, "1": 1, "2": 1},
+        },
+    )
+    cost_report = tmp_path / "cost.json"
+    cost_report.write_text(
+        json.dumps(
+            {
+                "run_count": 4,
+                "analysis": {
+                    "status": "pass",
+                    "active_block_evals_range": 0.4,
+                    "checks": {
+                        "active_compute_range_present": True,
+                        "active_compute_not_increasing_with_cost": True,
+                        "output_probability_not_decreasing_with_cost": True,
+                    },
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    report_path = make_stage_gate_report([stage4], output_path=tmp_path / "gate.json", cost_control_report_path=cost_report)
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    gate = report["gates"]["stage4_to_5"]
+    assert gate["checks"]["cost_control_report_present"] is True
+    assert gate["checks"]["cost_control_active_range_present"] is True
+    assert gate["cost_control_status"] == "pass"
+    assert report["supplemental_reports"]["cost_control_report"] == str(cost_report)
