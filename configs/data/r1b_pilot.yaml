@@ -1,10 +1,15 @@
-extends: r125_smoke.yaml
 recipe_name: r1b_pilot_10b
 target_tokens: 10000000000
 validation_tokens: 100000000
 sequence_length: 4096
 output_dir: data/tokenized/r1b_pilot_10b
 manifest_path: data/manifests/r1b_pilot_10b.jsonl
+tokenizer:
+  name: mistralai/Mistral-7B-v0.1
+  revision: main
+  license: apache-2.0
+  local_files_only: false
+  fallback_to_byte: false
 mixture:
   fineweb_edu:
     weight: 0.88
@@ -22,3 +27,7 @@ mixture:
     weight: 0.05
     source_dataset: synthetic_code_structured
     split: train
+synthetic_only:
+  enabled: false
+  sample_count: 1000
+seed: 1

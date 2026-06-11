@@ -1,3 +1,4 @@
+import math
 from pathlib import Path
 from typing import Any
 
@@ -125,6 +126,20 @@ def test_planned_data_recipe_ladder_is_declared() -> None:
         assert config["manifest_path"].endswith(f"{recipe_name}.jsonl")
 
 
+def test_data_config_validation_rejects_invalid_numeric_and_mixture_values() -> None:
+    config = load_config(CONFIG_ROOT / "data" / "r125_smoke.yaml")
+    errors: list[str] = []
+    _validate_data_config({**config, "target_tokens": True}, Path("bad_bool.yaml"), errors)
+    _validate_data_config({**config, "sequence_length": 1}, Path("bad_sequence.yaml"), errors)
+    _validate_data_config({**config, "validation_tokens": 0}, Path("bad_validation.yaml"), errors)
+    _validate_data_config({**config, "mixture": {"fineweb_edu": {"weight": 0.5}}}, Path("bad_mixture.yaml"), errors)
+
+    assert any("target_tokens must be an integer" in error for error in errors)
+    assert any("sequence_length must be >= 2" in error for error in errors)
+    assert any("validation_tokens must be >= 1" in error for error in errors)
+    assert any("mixture weights must sum to 1.0" in error for error in errors)
+
+
 def _yaml_files(root: Path) -> list[Path]:
     return sorted(root.rglob("*.yaml"))
 
@@ -203,6 +218,80 @@ def _validate_data_config(config: dict[str, Any], path: Path, errors: list[str])
         errors,
         ["recipe_name", "target_tokens", "sequence_length", "validation_tokens", "output_dir", "manifest_path"],
     )
+    if not isinstance(config.get("recipe_name"), str) or not config.get("recipe_name"):
+        errors.append(f"{path}: recipe_name must be a non-empty string")
+    for key, minimum in [
+        ("target_tokens", 1),
+        ("sequence_length", 2),
+        ("validation_tokens", 1),
+    ]:
+        _int_config_value(config.get(key), key, path, errors, minimum=minimum)
+    for key in ["output_dir", "manifest_path"]:
+        if not isinstance(config.get(key), str) or not config.get(key):
+            errors.append(f"{path}: {key} must be a non-empty string")
+    synthetic_only = config.get("synthetic_only", {})
+    synthetic_enabled = False
+    if synthetic_only:
+        if not isinstance(synthetic_only, dict):
+            errors.append(f"{path}: synthetic_only must be a mapping")
+        else:
+            enabled = synthetic_only.get("enabled", False)
+            if not isinstance(enabled, bool):
+                errors.append(f"{path}: synthetic_only.enabled must be a boolean")
+            synthetic_enabled = enabled is True
+    mixture = config.get("mixture", {})
+    if synthetic_enabled:
+        return
+    if not isinstance(mixture, dict) or not mixture:
+        errors.append(f"{path}: mixture must be a non-empty mapping when synthetic_only is disabled")
+        return
+    weights: list[float] = []
+    for tag, item in mixture.items():
+        if not isinstance(item, dict):
+            errors.append(f"{path}: mixture.{tag} must be a mapping")
+            continue
+        weight = _float_config_value(item.get("weight"), f"mixture.{tag}.weight", path, errors, minimum=0.0)
+        if weight is not None:
+            weights.append(weight)
+        if not isinstance(item.get("source_dataset"), str) or not item.get("source_dataset"):
+            errors.append(f"{path}: mixture.{tag}.source_dataset must be a non-empty string")
+    if weights and not math.isclose(sum(weights), 1.0, rel_tol=0.0, abs_tol=1e-9):
+        errors.append(f"{path}: mixture weights must sum to 1.0")
+
+
+def _int_config_value(value: Any, name: str, path: Path, errors: list[str], *, minimum: int) -> int | None:
+    if isinstance(value, bool):
+        errors.append(f"{path}: {name} must be an integer, not a boolean")
+        return None
+    if isinstance(value, int):
+        number = value
+    elif isinstance(value, float) and math.isfinite(value) and value.is_integer():
+        number = int(value)
+    else:
+        errors.append(f"{path}: {name} must be an integer")
+        return None
+    if number < minimum:
+        errors.append(f"{path}: {name} must be >= {minimum}")
+        return None
+    return number
+
+
+def _float_config_value(
+    value: Any,
+    name: str,
+    path: Path,
+    errors: list[str],
+    *,
+    minimum: float,
+) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(float(value)):
+        errors.append(f"{path}: {name} must be a finite numeric value")
+        return None
+    number = float(value)
+    if number < minimum:
+        errors.append(f"{path}: {name} must be >= {minimum}")
+        return None
+    return number
 
 
 def _require_keys(config: dict[str, Any], path: Path, errors: list[str], keys: list[str]) -> None:
