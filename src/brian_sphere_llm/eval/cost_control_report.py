@@ -72,9 +72,9 @@ def _analyze_cost_sweep(rows: list[dict[str, Any]], *, min_active_compute_range:
     checks = {
         "has_multiple_cost_weights": len(set(cost_values)) >= 2,
         "active_compute_range_present": active_range is not None and active_range >= min_active_compute_range,
-        "active_compute_not_increasing_with_cost": active_corr is None or active_corr <= 0.0,
-        "average_steps_not_increasing_with_cost": step_corr is None or step_corr <= 0.0,
-        "output_probability_not_decreasing_with_cost": output_corr is None or output_corr >= 0.0,
+        "active_compute_not_increasing_with_cost": active_corr is not None and active_corr <= 0.0,
+        "average_steps_not_increasing_with_cost": step_corr is not None and step_corr <= 0.0,
+        "output_probability_not_decreasing_with_cost": output_corr is not None and output_corr >= 0.0,
     }
     return {
         "cost_values": cost_values,

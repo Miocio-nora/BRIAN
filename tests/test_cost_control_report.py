@@ -14,7 +14,7 @@ def _write_run(
     cost: float,
     active: float,
     steps: float,
-    p_output: float,
+    p_output: float | None,
 ) -> Path:
     run_dir = root / name
     run_dir.mkdir(parents=True)
@@ -30,19 +30,14 @@ def _write_run(
         json.dumps({"first_exit_step_histogram": {"1": 1, "2": 1}}) + "\n",
         encoding="utf-8",
     )
-    (run_dir / "routing_report.json").write_text(
-        json.dumps(
-            {
-                "summary": {
-                    "average_route_steps": steps,
-                    "active_block_evals_per_token": active,
-                    "p_output_mean": p_output,
-                    "route_entropy": 1.0,
-                }
-            }
-        ),
-        encoding="utf-8",
-    )
+    summary = {
+        "average_route_steps": steps,
+        "active_block_evals_per_token": active,
+        "route_entropy": 1.0,
+    }
+    if p_output is not None:
+        summary["p_output_mean"] = p_output
+    (run_dir / "routing_report.json").write_text(json.dumps({"summary": summary}), encoding="utf-8")
     return run_dir
 
 
@@ -58,6 +53,18 @@ def test_make_cost_control_report_orders_and_scores_sweep(tmp_path: Path) -> Non
     assert report["analysis"]["active_block_evals_range"] == 0.6000000000000001
     assert report["analysis"]["cost_vs_active_block_evals_correlation"] < 0.0
     assert report["analysis"]["cost_vs_p_output_correlation"] > 0.0
+
+
+def test_cost_control_report_requires_output_probability_trend(tmp_path: Path) -> None:
+    low = _write_run(tmp_path, "low", cost=0.0, active=0.8, steps=3.0, p_output=None)
+    high = _write_run(tmp_path, "high", cost=0.05, active=0.2, steps=1.0, p_output=None)
+    report_path = make_cost_control_report([high, low], output_path=tmp_path / "cost.json")
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+
+    assert report["analysis"]["status"] == "warn"
+    assert report["analysis"]["cost_vs_p_output_correlation"] is None
+    assert report["analysis"]["checks"]["active_compute_not_increasing_with_cost"] is True
+    assert report["analysis"]["checks"]["output_probability_not_decreasing_with_cost"] is False
 
 
 def test_cost_control_configs_resolve() -> None:
