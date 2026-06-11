@@ -10,6 +10,7 @@ batch_size: 4
 max_steps: 1000
 eval_interval: 100
 save_interval: 500
+write_routing_report_on_checkpoint: true
 learning_rate: 0.0003
 weight_decay: 0.1
 grad_clip: 1.0

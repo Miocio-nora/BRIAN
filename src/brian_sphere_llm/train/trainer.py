@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from brian_sphere_llm.data.dataloader import build_dataloader
+from brian_sphere_llm.eval.routing_report import make_routing_report
 from brian_sphere_llm.train.checkpoint import load_checkpoint, save_checkpoint
 from brian_sphere_llm.train.stage_runner import build_model_from_config, train_mode_for_stage
 from brian_sphere_llm.routing.schedule import scheduled_value
@@ -98,6 +99,7 @@ def train_from_config(config_path: str | Path) -> Path:
     max_steps = int(config["max_steps"])
     eval_interval = int(config.get("eval_interval", max_steps))
     save_interval = int(config.get("save_interval", max_steps))
+    write_routing_report = bool(config.get("write_routing_report_on_checkpoint", True))
     stage_mode = train_mode_for_stage(config["stage"])
     iterator = iter(train_loader)
     model.train()
@@ -147,6 +149,8 @@ def train_from_config(config_path: str | Path) -> Path:
                 save_checkpoint(run_dir / "checkpoint_best", model=model, optimizer=optimizer, step=step, best_eval_loss=best_eval_loss)
         if step % save_interval == 0 or step == max_steps:
             save_checkpoint(latest, model=model, optimizer=optimizer, step=step, best_eval_loss=best_eval_loss)
+            if write_routing_report:
+                make_routing_report(run_dir)
     return run_dir
 
 

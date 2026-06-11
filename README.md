@@ -85,7 +85,7 @@ Generate a routing report:
 python scripts/eval.py --config configs/eval/routing_eval.yaml --run <run_dir>
 ```
 
-Routing reports include `route_entropy`, `block_load_entropy`, `route_path_diversity`, path examples, block histograms, exit distributions, active block evals, cost-quality curve points, and position/global/parallel diagnostics when available.
+Training writes `routing_report.json` at checkpoint saves by default (`write_routing_report_on_checkpoint: true`). Routing reports include `route_entropy`, `block_load_entropy`, `route_path_diversity`, path examples, block histograms, exit distributions, active block evals, cost-quality curve points, and position/global/parallel diagnostics when available.
 
 Generate a stage gate report across multiple runs:
 
