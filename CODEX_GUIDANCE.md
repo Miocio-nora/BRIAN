@@ -146,7 +146,8 @@ BRIAN-Sphere-LLM/
       stage3_pseudo_skip_recur.yaml
       stage4_scheduled_free_routing.yaml
       stage5_output_action.yaml
-      stage6_global_kv.yaml
+      stage5_global_kv.yaml
+      stage6_parallel_passing.yaml
       stage7_parallel_passing.yaml
     eval/
       lm_eval.yaml
