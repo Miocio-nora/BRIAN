@@ -7,8 +7,20 @@ torch = pytest.importorskip("torch")
 
 from brian_sphere_llm.data.pack import write_index, write_token_bin
 from brian_sphere_llm.model.baseline import BaselineConfig, BaselineLM
-from brian_sphere_llm.train.trainer import evaluate, train_from_config
+from brian_sphere_llm.train.trainer import evaluate, run_name, train_from_config
 from brian_sphere_llm.utils.config import save_yaml
+
+
+def test_auto_run_name_includes_context_length() -> None:
+    name = run_name(
+        {"stage": "stage3_scheduled_free_routing", "seed": 7},
+        "brian_r125",
+        "r125main2b",
+        context_length=2048,
+    )
+
+    assert name.endswith("_brian_r125_stage3_scheduled_free_routing_r125main2b_ctx2048_seed7")
+    assert run_name({"stage": "stage0_baseline", "run_name": "manual"}, "model", "data", context_length=8) == "manual"
 
 
 def test_evaluate_reports_inference_timing_metrics() -> None:

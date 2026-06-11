@@ -36,13 +36,15 @@ def _autocast_context(device: "torch.device", precision: str):
     return torch.autocast(device_type=device.type, enabled=False)
 
 
-def run_name(config: dict[str, Any], model_name: str, data_name: str) -> str:
+def run_name(config: dict[str, Any], model_name: str, data_name: str, context_length: int | None = None) -> str:
     if config.get("run_name") and config["run_name"] != "auto":
         return str(config["run_name"])
     date = datetime.utcnow().strftime("%Y%m%d")
     stage = config["stage"]
     seed = config.get("seed", 1)
-    return f"{date}_{model_name}_{stage}_{data_name}_seed{seed}"
+    context = context_length or config.get("context_length") or config.get("sequence_length")
+    context_part = f"ctx{context}" if context else "ctxunknown"
+    return f"{date}_{model_name}_{stage}_{data_name}_{context_part}_seed{seed}"
 
 
 def train_from_config(config_path: str | Path) -> Path:
@@ -62,7 +64,12 @@ def train_from_config(config_path: str | Path) -> Path:
     device = _device(str(config.get("device", "auto")))
     model.to(device)
 
-    run_dir = Path(config.get("output_root", "runs")) / run_name(config, model_config["model_name"], data_config["recipe_name"])
+    run_dir = Path(config.get("output_root", "runs")) / run_name(
+        config,
+        model_config["model_name"],
+        data_config["recipe_name"],
+        context_length=int(data_config.get("sequence_length", 0) or 0),
+    )
     run_dir.mkdir(parents=True, exist_ok=True)
     save_yaml({**config, "model_config_resolved": model_config, "data_config_resolved": data_config}, run_dir / "config_resolved.yaml")
     if hasattr(model, "model_stats"):
