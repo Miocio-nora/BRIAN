@@ -359,6 +359,7 @@ python scripts/eval.py \
   --stage-gate-report reports/stage_gate_report.json \
   --compute-report reports/compute_report.json \
   --out-by-difficulty-report reports/out_by_difficulty_report.json \
+  --global-kv-ablation-report reports/global_kv_ablation_report.json \
   --long-context-compare-report reports/long_context_compare.json \
   --parallel-compare-report reports/parallel_compare.json
 ```

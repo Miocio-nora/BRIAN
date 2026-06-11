@@ -46,6 +46,7 @@ def main() -> None:
     parser.add_argument("--compute-report", default=None, help="Compute report path for decision reports.")
     parser.add_argument("--long-context-compare-report", default=None, help="Long-context comparison report path for stage gate eval.")
     parser.add_argument("--global-kv-retention-report", default=None, help="Global KV retention report path for stage gate eval.")
+    parser.add_argument("--global-kv-ablation-report", default=None, help="Global KV ablation report path for decision reports.")
     parser.add_argument("--parallel-compare-report", default=None, help="Parallel comparison report path for stage gate eval.")
     parser.add_argument("--position-ablation-report", default=None, help="Position ablation report path for go/no-go eval.")
     parser.add_argument("--out-by-difficulty-report", default=None, help="OUT-by-difficulty report path for go/no-go eval.")
@@ -286,6 +287,8 @@ def main() -> None:
             reasoning_candidate_report_paths=args.reports or config.get("reasoning_candidate_reports", []),
             long_context_compare_report_path=args.long_context_compare_report
             or config.get("long_context_compare_report_path"),
+            global_kv_ablation_report_path=args.global_kv_ablation_report
+            or config.get("global_kv_ablation_report_path"),
             parallel_compare_report_path=args.parallel_compare_report or config.get("parallel_compare_report_path"),
             min_difficulty_step_correlation=float(config.get("min_difficulty_step_correlation", 0.0)),
             min_reasoning_delta=float(config.get("min_reasoning_delta", 0.0)),

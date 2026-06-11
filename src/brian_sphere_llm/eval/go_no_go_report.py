@@ -18,6 +18,7 @@ def make_go_no_go_report(
     reasoning_baseline_report_path: str | Path | None = None,
     reasoning_candidate_report_paths: list[str | Path] | None = None,
     long_context_compare_report_path: str | Path | None = None,
+    global_kv_ablation_report_path: str | Path | None = None,
     parallel_compare_report_path: str | Path | None = None,
     min_difficulty_step_correlation: float = 0.0,
     min_reasoning_delta: float = 0.0,
@@ -27,6 +28,7 @@ def make_go_no_go_report(
     position_ablation_report = _read_json_if_present(position_ablation_report_path)
     out_by_difficulty_report = _read_json_if_present(out_by_difficulty_report_path)
     long_context_compare_report = _read_json_if_present(long_context_compare_report_path)
+    global_kv_ablation_report = _read_json_if_present(global_kv_ablation_report_path)
     parallel_compare_report = _read_json_if_present(parallel_compare_report_path)
     reasoning_baseline_report = _read_json_if_present(reasoning_baseline_report_path)
     reasoning_candidates = [_read_json(Path(path)) for path in (reasoning_candidate_report_paths or [])]
@@ -45,6 +47,7 @@ def make_go_no_go_report(
             reasoning_candidates=reasoning_candidates,
             out_by_difficulty_report=out_by_difficulty_report,
             long_context_compare_report=long_context_compare_report,
+            global_kv_ablation_report=global_kv_ablation_report,
             min_difficulty_step_correlation=min_difficulty_step_correlation,
             min_reasoning_delta=min_reasoning_delta,
         )
@@ -64,6 +67,7 @@ def make_go_no_go_report(
             "reasoning_baseline_report": str(reasoning_baseline_report_path) if reasoning_baseline_report_path else None,
             "reasoning_candidate_reports": [str(path) for path in (reasoning_candidate_report_paths or [])],
             "long_context_compare_report": str(long_context_compare_report_path) if long_context_compare_report_path else None,
+            "global_kv_ablation_report": str(global_kv_ablation_report_path) if global_kv_ablation_report_path else None,
             "parallel_compare_report": str(parallel_compare_report_path) if parallel_compare_report_path else None,
         },
         "thresholds": {
@@ -148,6 +152,7 @@ def _r350_decision(
     reasoning_candidates: list[dict[str, Any]],
     out_by_difficulty_report: dict[str, Any],
     long_context_compare_report: dict[str, Any],
+    global_kv_ablation_report: dict[str, Any],
     min_difficulty_step_correlation: float,
     min_reasoning_delta: float,
 ) -> dict[str, Any]:
@@ -174,8 +179,8 @@ def _r350_decision(
         ),
         _criterion(
             "global_kv_long_context_benefit_if_tested",
-            _report_passed(long_context_compare_report),
-            _report_evidence(long_context_compare_report),
+            _global_kv_memory_quality_benefit(long_context_compare_report, global_kv_ablation_report),
+            _global_kv_evidence(long_context_compare_report, global_kv_ablation_report),
         ),
     ]
     return _phase("Proceed from BRIAN-R350 to 1B/global serious validation", criteria)
@@ -266,6 +271,78 @@ def _report_evidence(report: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _global_kv_memory_quality_benefit(
+    long_context_compare_report: dict[str, Any],
+    global_kv_ablation_report: dict[str, Any],
+) -> bool | None:
+    outcomes = [
+        _report_passed(long_context_compare_report),
+        _global_kv_ablation_has_memory_quality_candidate(global_kv_ablation_report),
+    ]
+    outcomes = [outcome for outcome in outcomes if outcome is not None]
+    if not outcomes:
+        return None
+    return any(outcomes)
+
+
+def _global_kv_evidence(
+    long_context_compare_report: dict[str, Any],
+    global_kv_ablation_report: dict[str, Any],
+) -> dict[str, Any]:
+    return {
+        "long_context_compare": _report_evidence(long_context_compare_report),
+        "global_kv_ablation": {
+            **_report_evidence(global_kv_ablation_report),
+            "benefit_candidates": _global_kv_ablation_benefit_candidates(global_kv_ablation_report),
+        },
+    }
+
+
+def _global_kv_ablation_has_memory_quality_candidate(report: dict[str, Any]) -> bool | None:
+    if not report:
+        return None
+    if report.get("overall_status") != "pass":
+        return False
+    candidates = _global_kv_ablation_benefit_candidates(report)
+    if not candidates:
+        return False
+    return any(candidate["passes_memory_quality_proxy"] for candidate in candidates)
+
+
+def _global_kv_ablation_benefit_candidates(report: dict[str, Any]) -> list[dict[str, Any]]:
+    comparisons = report.get("comparisons", {}) if report else {}
+    rows = comparisons.get("local_vs_global", []) if isinstance(comparisons, dict) else []
+    if not isinstance(rows, list):
+        return []
+    candidates = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        capacity_ratio = _num(row.get("global_cache_capacity_ratio"))
+        exact_delta = _num(row.get("exact_match_delta_vs_local"))
+        teacher_delta = _num(row.get("teacher_forced_token_accuracy_delta_vs_local"))
+        passes = (
+            capacity_ratio is not None
+            and capacity_ratio < 1.0
+            and exact_delta is not None
+            and exact_delta >= 0.0
+            and teacher_delta is not None
+            and teacher_delta >= 0.0
+        )
+        candidates.append(
+            {
+                "entry_id": row.get("entry_id"),
+                "entry_name": row.get("entry_name"),
+                "run_dir": row.get("run_dir"),
+                "global_cache_capacity_ratio": capacity_ratio,
+                "exact_match_delta_vs_local": exact_delta,
+                "teacher_forced_token_accuracy_delta_vs_local": teacher_delta,
+                "passes_memory_quality_proxy": passes,
+            }
+        )
+    return candidates
+
+
 def _compute_report_has_not_worse_candidate(report: dict[str, Any]) -> bool | None:
     runs = report.get("runs") if report else None
     if not isinstance(runs, list):
@@ -325,6 +402,12 @@ def _reasoning_score(report: dict[str, Any]) -> float | None:
         return float(exact)
     if isinstance(teacher, (int, float)):
         return float(teacher)
+    return None
+
+
+def _num(value: Any) -> float | None:
+    if isinstance(value, (int, float)):
+        return float(value)
     return None
 
 

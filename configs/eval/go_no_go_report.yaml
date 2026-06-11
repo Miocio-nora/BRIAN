@@ -8,6 +8,7 @@ out_by_difficulty_report_path: null
 reasoning_baseline_report_path: null
 reasoning_candidate_reports: []
 long_context_compare_report_path: null
+global_kv_ablation_report_path: null
 parallel_compare_report_path: null
 min_difficulty_step_correlation: 0.0
 min_reasoning_delta: 0.0

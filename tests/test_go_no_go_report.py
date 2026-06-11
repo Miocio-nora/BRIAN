@@ -126,3 +126,68 @@ def test_go_no_go_r350_passes_with_compute_reasoning_and_memory_evidence(tmp_pat
     assert report["overall_status"] == "pass"
     assert phase["recommendation"] == "proceed"
     assert all(item["status"] == "pass" for item in phase["criteria"])
+
+
+def test_go_no_go_r350_accepts_global_kv_ablation_memory_quality_evidence(tmp_path: Path) -> None:
+    stage_gate = _write_json(tmp_path / "stage_gate.json", _passing_stage_gate())
+    compute = _write_json(
+        tmp_path / "compute.json",
+        {
+            "run_count": 2,
+            "baseline_run": "baseline",
+            "runs": [
+                {"run_dir": "baseline"},
+                {
+                    "run_dir": "routed",
+                    "stage": "stage4_output_action",
+                    "validation_loss": 9.9,
+                    "baseline_comparison": {
+                        "same_active_compute_view": True,
+                        "validation_loss_delta": -0.1,
+                    },
+                },
+            ],
+        },
+    )
+    reasoning_baseline = _write_json(tmp_path / "reasoning_base.json", {"overall": {"exact_match_accuracy": 0.2}})
+    reasoning_candidate = _write_json(tmp_path / "reasoning_candidate.json", {"overall": {"exact_match_accuracy": 0.3}})
+    out = _write_json(tmp_path / "out.json", {"overall_status": "pass"})
+    global_kv_ablation = _write_json(
+        tmp_path / "global_kv_ablation.json",
+        {
+            "overall_status": "pass",
+            "checks": {
+                "long_context_quality_metrics_present": True,
+                "memory_budget_metrics_present": True,
+            },
+            "comparisons": {
+                "local_vs_global": [
+                    {
+                        "entry_id": "K4",
+                        "entry_name": "global_kv_with_sink",
+                        "run_dir": "global",
+                        "global_cache_capacity_ratio": 0.25,
+                        "exact_match_delta_vs_local": 0.0,
+                        "teacher_forced_token_accuracy_delta_vs_local": 0.02,
+                    }
+                ]
+            },
+        },
+    )
+    output = make_go_no_go_report(
+        stage_gate_report_path=stage_gate,
+        compute_report_path=compute,
+        reasoning_baseline_report_path=reasoning_baseline,
+        reasoning_candidate_report_paths=[reasoning_candidate],
+        out_by_difficulty_report_path=out,
+        global_kv_ablation_report_path=global_kv_ablation,
+        phase="r350_to_1b",
+        output_path=tmp_path / "go.json",
+    )
+    report = json.loads(output.read_text(encoding="utf-8"))
+    criteria = {item["name"]: item for item in report["phases"]["r350_to_1b"]["criteria"]}
+    assert report["overall_status"] == "pass"
+    assert criteria["global_kv_long_context_benefit_if_tested"]["status"] == "pass"
+    assert criteria["global_kv_long_context_benefit_if_tested"]["evidence"]["global_kv_ablation"][
+        "benefit_candidates"
+    ][0]["passes_memory_quality_proxy"] is True
