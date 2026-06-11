@@ -67,6 +67,26 @@ def test_cost_control_report_requires_output_probability_trend(tmp_path: Path) -
     assert report["analysis"]["checks"]["output_probability_not_decreasing_with_cost"] is False
 
 
+def test_cost_control_report_rejects_boolean_metrics(tmp_path: Path) -> None:
+    low = _write_run(tmp_path, "low", cost=False, active=True, steps=True, p_output=True)
+    high = _write_run(tmp_path, "high", cost=True, active=False, steps=False, p_output=False)
+    for run in [low, high]:
+        (run / "train_log.jsonl").write_text(
+            json.dumps({"first_exit_step_histogram": {"1": True, "2": False}}) + "\n",
+            encoding="utf-8",
+        )
+    report_path = make_cost_control_report([high, low], output_path=tmp_path / "cost.json")
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+
+    assert [row["cost_weight"] for row in report["runs"]] == [None, None]
+    assert report["runs"][0]["active_block_evals_per_token"] is None
+    assert report["runs"][0]["p_output_mean"] is None
+    assert report["runs"][0]["first_exit_step_histogram"] == {}
+    assert report["analysis"]["status"] == "fail"
+    assert report["analysis"]["checks"]["has_multiple_cost_weights"] is False
+    assert report["analysis"]["checks"]["active_compute_range_present"] is False
+
+
 def test_cost_control_configs_resolve() -> None:
     for path in [
         "configs/train/stage4_cost0_tiny_debug.yaml",

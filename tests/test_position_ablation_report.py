@@ -59,6 +59,30 @@ def test_position_ablation_report_fails_without_difference(tmp_path: Path) -> No
     assert report["comparisons"][0]["status"] == "fail"
 
 
+def test_position_ablation_report_rejects_boolean_metrics(tmp_path: Path) -> None:
+    reference = _write_run(
+        tmp_path,
+        "main_position",
+        validation_loss=False,
+        routing={"average_route_steps": False, "route_entropy": False, "position_norm_mean": False},
+    )
+    candidate = _write_run(
+        tmp_path,
+        "no_position",
+        validation_loss=True,
+        routing={"average_route_steps": True, "route_entropy": True, "position_norm_mean": True},
+    )
+
+    output = make_position_ablation_report(reference, [candidate], output_path=tmp_path / "position.json")
+    report = json.loads(output.read_text(encoding="utf-8"))
+    comparison = report["comparisons"][0]
+
+    assert report["overall_status"] == "fail"
+    assert comparison["validation_loss_delta"] is None
+    assert comparison["routing_metric_deltas"]["average_route_steps"] is None
+    assert comparison["checks"]["measurable_difference"] is False
+
+
 def test_position_ablation_eval_config_resolves() -> None:
     cfg = load_config("configs/eval/position_ablation.yaml")
     assert cfg["eval_name"] == "position_ablation_report"

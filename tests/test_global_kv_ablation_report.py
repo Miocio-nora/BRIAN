@@ -167,6 +167,58 @@ def test_global_kv_ablation_report_fails_without_window_sweep(tmp_path: Path) ->
     assert report["checks"]["window_sweep_present"] is False
 
 
+def test_global_kv_ablation_report_rejects_boolean_metrics(tmp_path: Path) -> None:
+    runs = [
+        _write_run(tmp_path, "local", global_kv=False, sink_slots=0, window_slots=0, validation_loss=False),
+        _write_run(
+            tmp_path,
+            "uncompressed",
+            global_kv=True,
+            global_code_dim=True,
+            sink_slots=True,
+            window_slots=True,
+            validation_loss=True,
+            sink_mass=True,
+            window_mass=True,
+        ),
+    ]
+    (runs[1] / "routing_report.json").write_text(
+        json.dumps(
+            {
+                "summary": {
+                    "global_attention_mass": True,
+                    "global_sink_attention_mass": True,
+                    "global_window_attention_mass": True,
+                    "global_read_gate_mean": True,
+                    "global_cache_slots_mean": True,
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    long_context_reports = [
+        _write_long_context(tmp_path, runs[0], 0, exact=False, teacher=False),
+        _write_long_context(tmp_path, runs[1], 1, exact=True, teacher=True),
+    ]
+
+    output = make_global_kv_ablation_report(
+        "configs/experiments/tiny_global_kv.yaml",
+        runs,
+        output_path=tmp_path / "global_kv_ablation.json",
+        long_context_report_paths=long_context_reports,
+    )
+    report = json.loads(output.read_text(encoding="utf-8"))
+    global_row = report["entries"][1]
+
+    assert report["overall_status"] == "fail"
+    assert global_row["validation_loss"] is None
+    assert global_row["global_code_dim"] == 0
+    assert global_row["global_metrics"]["global_attention_mass"] is None
+    assert global_row["long_context"]["exact_match_accuracy"] is None
+    assert report["checks"]["global_metrics_present"] is False
+    assert report["checks"]["long_context_quality_metrics_present"] is False
+
+
 def test_global_kv_ablation_eval_config_resolves() -> None:
     config = load_config("configs/eval/global_kv_ablation.yaml")
     assert config["eval_name"] == "global_kv_ablation_report"

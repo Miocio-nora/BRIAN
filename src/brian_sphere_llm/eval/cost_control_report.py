@@ -140,11 +140,18 @@ def _latest_exit_hist(run_dir: Path) -> dict[str, int]:
     for row in reversed(rows):
         hist = row.get("first_exit_step_histogram")
         if isinstance(hist, dict):
-            return {str(key): int(value) for key, value in hist.items()}
+            counts = {}
+            for key, value in hist.items():
+                count = _num(value)
+                if count is not None:
+                    counts[str(key)] = int(count)
+            return counts
     return {}
 
 
 def _num(value: Any) -> float | None:
+    if isinstance(value, bool):
+        return None
     if isinstance(value, (int, float)):
         return float(value)
     return None

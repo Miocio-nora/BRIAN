@@ -469,6 +469,8 @@ def _delta(value: Any, baseline: Any) -> float | None:
 
 
 def _finite(value: Any) -> bool:
+    if isinstance(value, bool):
+        return False
     return isinstance(value, (int, float)) and math.isfinite(float(value))
 
 
