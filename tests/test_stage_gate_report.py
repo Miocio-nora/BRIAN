@@ -235,7 +235,18 @@ def test_stage_gate_report_writes_json(tmp_path: Path) -> None:
             {
                 "overall_status": "pass",
                 "candidate_count": 1,
-                "comparisons": [{"status": "pass", "checks": {"global_kv_active": True, "quality_not_worse": True}}],
+                "comparisons": [
+                    {
+                        "status": "pass",
+                        "checks": {
+                            "global_kv_active": True,
+                            "quality_metrics_present": True,
+                            "quality_not_worse": True,
+                            "memory_budget_present": True,
+                            "global_budget_below_local_context": True,
+                        },
+                    }
+                ],
             }
         ),
         encoding="utf-8",
@@ -391,6 +402,73 @@ def test_stage5_gate_warns_without_long_context_compare_report(tmp_path: Path) -
     assert gate["checks"]["long_context_global_kv_benefit_proxy"] is False
 
 
+def test_stage5_gate_requires_long_context_compare_key_checks(tmp_path: Path) -> None:
+    stage5 = _write_run(
+        tmp_path,
+        "global",
+        stage="stage5_global_kv",
+        val_loss=10.0,
+        train_row={
+            "global_attention_mass": 1.0,
+            "global_read_gate_mean": 0.01,
+            "global_cache_slots_mean": 2.0,
+            "top1_block_histogram": {"0": 1, "1": 1, "2": 1},
+        },
+        global_kv_retention_report={
+            "overall_status": "pass",
+            "model": {
+                "global_kv_enabled": True,
+                "global_sink_slots": 1,
+                "global_window_slots": 3,
+                "retention_capacity_slots": 4,
+            },
+            "metrics": {
+                "global_attention_mass": 1.0,
+                "global_sink_attention_mass": 0.25,
+                "global_window_attention_mass": 0.75,
+                "global_read_gate_mean": 0.01,
+                "global_cache_slots_mean": 2.0,
+            },
+            "checks": {
+                "stage5_global_kv_stage": True,
+                "global_kv_enabled": True,
+                "sink_slots_configured": True,
+                "window_slots_configured": True,
+                "retention_capacity_present": True,
+                "global_attention_mass_nonzero": True,
+                "global_read_gate_nonzero": True,
+                "global_cache_slots_present": True,
+                "sink_attention_mass_measured": True,
+                "window_attention_mass_measured": True,
+                "sink_window_mass_conserved": True,
+                "cache_slots_within_retention_capacity": True,
+            },
+        },
+    )
+    compare_report = tmp_path / "long_context_compare.json"
+    compare_report.write_text(
+        json.dumps(
+            {
+                "overall_status": "pass",
+                "candidate_count": 1,
+                "comparisons": [{"status": "pass", "checks": {"global_kv_active": True}}],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    report_path = make_stage_gate_report(
+        [stage5],
+        output_path=tmp_path / "gate.json",
+        long_context_compare_report_path=compare_report,
+    )
+    gate = json.loads(report_path.read_text(encoding="utf-8"))["gates"]["stage5_to_6"]
+
+    assert gate["status"] == "warn"
+    assert gate["checks"]["long_context_compare_passed"] is True
+    assert gate["checks"]["long_context_global_kv_benefit_proxy"] is False
+
+
 def test_stage6_gate_uses_parallel_compare_report(tmp_path: Path) -> None:
     stage6 = _write_run(
         tmp_path,
@@ -429,7 +507,20 @@ def test_stage6_gate_uses_parallel_compare_report(tmp_path: Path) -> None:
             {
                 "overall_status": "pass",
                 "candidate_count": 1,
-                "comparisons": [{"status": "pass", "checks": {"parallel_branch_benefit_proxy": True}}],
+                "comparisons": [
+                    {
+                        "status": "pass",
+                        "checks": {
+                            "parallel_branch_active": True,
+                            "parallel_score_margin_present": True,
+                            "quality_not_worse": True,
+                            "active_compute_bounded": True,
+                            "estimated_flops_bounded": True,
+                            "throughput_not_collapsed": True,
+                            "parallel_branch_benefit_proxy": True,
+                        },
+                    }
+                ],
             }
         ),
         encoding="utf-8",
@@ -487,7 +578,20 @@ def test_stage6_gate_accepts_stage7_parallel_alias(tmp_path: Path) -> None:
             {
                 "overall_status": "pass",
                 "candidate_count": 1,
-                "comparisons": [{"status": "pass", "checks": {"parallel_branch_benefit_proxy": True}}],
+                "comparisons": [
+                    {
+                        "status": "pass",
+                        "checks": {
+                            "parallel_branch_active": True,
+                            "parallel_score_margin_present": True,
+                            "quality_not_worse": True,
+                            "active_compute_bounded": True,
+                            "estimated_flops_bounded": True,
+                            "throughput_not_collapsed": True,
+                            "parallel_branch_benefit_proxy": True,
+                        },
+                    }
+                ],
             }
         ),
         encoding="utf-8",
@@ -524,4 +628,58 @@ def test_stage6_gate_warns_without_parallel_compare_report(tmp_path: Path) -> No
     assert gate["status"] == "warn"
     assert gate["checks"]["parallel_passing_report_present"] is False
     assert gate["checks"]["parallel_compare_report_present"] is False
+    assert gate["checks"]["parallel_branch_benefit_proxy"] is False
+
+
+def test_stage6_gate_requires_parallel_compare_key_checks(tmp_path: Path) -> None:
+    stage6 = _write_run(
+        tmp_path,
+        "parallel",
+        stage="stage6_parallel_passing",
+        val_loss=10.0,
+        train_row={
+            "parallel_branch_count_mean": 2.0,
+            "parallel_score_margin_mean": 0.1,
+            "global_cache_slots_mean": 2.0,
+            "top1_block_histogram": {"0": 1, "1": 1, "2": 1},
+        },
+        parallel_passing_report={
+            "overall_status": "pass",
+            "checks": {
+                "stage6_parallel_stage": True,
+                "parallel_passing_enabled": True,
+                "parallel_route_selected": True,
+                "beam_size_present": True,
+                "beam_size_within_limit": True,
+                "branch_cost_enabled": True,
+                "branch_metrics_present": True,
+                "parallel_branch_active": True,
+                "branch_count_bounded_by_beam": True,
+                "score_margin_measured": True,
+                "delta_memory_policy_present": True,
+                "delta_cache_bounded_by_window": True,
+            },
+        },
+    )
+    compare_report = tmp_path / "parallel_compare.json"
+    compare_report.write_text(
+        json.dumps(
+            {
+                "overall_status": "pass",
+                "candidate_count": 1,
+                "comparisons": [{"status": "pass", "checks": {"parallel_branch_benefit_proxy": True}}],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    report_path = make_stage_gate_report(
+        [stage6],
+        output_path=tmp_path / "gate.json",
+        parallel_compare_report_path=compare_report,
+    )
+    gate = json.loads(report_path.read_text(encoding="utf-8"))["gates"]["stage6_to_scale"]
+
+    assert gate["status"] == "warn"
+    assert gate["checks"]["parallel_compare_passed"] is True
     assert gate["checks"]["parallel_branch_benefit_proxy"] is False

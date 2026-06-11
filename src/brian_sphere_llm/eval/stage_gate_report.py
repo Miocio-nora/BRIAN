@@ -331,7 +331,13 @@ def _gate_stage5(
     global_kv_retention_report: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     comparisons = long_context_compare_report.get("comparisons", []) if long_context_compare_report else []
-    any_long_context_pass = any(item.get("status") == "pass" for item in comparisons if isinstance(item, dict))
+    long_context_key_checks = [
+        "global_kv_active",
+        "quality_not_worse",
+        "memory_budget_present",
+        "global_budget_below_local_context",
+    ]
+    any_long_context_pass = _any_passing_comparison_with_checks(comparisons, long_context_key_checks)
     retention_report = global_kv_retention_report or (stage5.get("global_kv_retention_report") if stage5 else None) or {}
     retention_checks = retention_report.get("checks", {}) if isinstance(retention_report.get("checks"), dict) else {}
     checks = {
@@ -346,6 +352,9 @@ def _gate_stage5(
         and bool(retention_checks.get("window_attention_mass_measured", False)),
         "cache_slots_within_retention_capacity": bool(retention_checks.get("cache_slots_within_retention_capacity", False)),
         "long_context_compare_report_present": bool(long_context_compare_report),
+        "long_context_compare_passed": bool(
+            long_context_compare_report and long_context_compare_report.get("overall_status") == "pass"
+        ),
         "long_context_global_kv_benefit_proxy": any_long_context_pass,
         "checkpoint_present": bool(stage5 and stage5["has_checkpoint_latest"]),
     }
@@ -371,7 +380,15 @@ def _gate_stage6(
     parallel_passing_report: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     comparisons = parallel_compare_report.get("comparisons", []) if parallel_compare_report else []
-    any_parallel_pass = any(item.get("status") == "pass" for item in comparisons if isinstance(item, dict))
+    parallel_key_checks = [
+        "parallel_branch_active",
+        "parallel_score_margin_present",
+        "quality_not_worse",
+        "active_compute_bounded",
+        "estimated_flops_bounded",
+        "parallel_branch_benefit_proxy",
+    ]
+    any_parallel_pass = _any_passing_comparison_with_checks(comparisons, parallel_key_checks)
     passing_report = parallel_passing_report or (stage6.get("parallel_passing_report") if stage6 else None) or {}
     passing_checks = passing_report.get("checks", {}) if isinstance(passing_report.get("checks"), dict) else {}
     checks = {
@@ -386,6 +403,9 @@ def _gate_stage6(
         "global_cache_or_local_route_present": _finite(_routing_metric(stage6, "global_cache_slots_mean"))
         or _finite(_routing_metric(stage6, "average_route_steps")),
         "parallel_compare_report_present": bool(parallel_compare_report),
+        "parallel_compare_passed": bool(
+            parallel_compare_report and parallel_compare_report.get("overall_status") == "pass"
+        ),
         "parallel_branch_benefit_proxy": any_parallel_pass,
         "checkpoint_present": bool(stage6 and stage6["has_checkpoint_latest"]),
     }
@@ -424,6 +444,20 @@ def _overall_status(gates: dict[str, dict[str, Any]]) -> str:
     if any(status == "fail" for status in statuses):
         return "fail"
     return "warn"
+
+
+def _any_passing_comparison_with_checks(comparisons: Any, required_checks: list[str]) -> bool:
+    if not isinstance(comparisons, list):
+        return False
+    for item in comparisons:
+        if not isinstance(item, dict) or item.get("status") != "pass":
+            continue
+        checks = item.get("checks")
+        if not isinstance(checks, dict):
+            continue
+        if all(checks.get(check) is True for check in required_checks):
+            return True
+    return False
 
 
 def _difficulty_step_corr(rows: list[dict[str, Any]]) -> float | None:
