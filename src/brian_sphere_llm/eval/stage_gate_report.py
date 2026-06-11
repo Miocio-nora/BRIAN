@@ -258,7 +258,7 @@ def _gate_stage3(stage3: dict[str, Any] | None, stage1: dict[str, Any] | None, t
     if stage3 and stage1 and _finite(stage3.get("validation_loss")) and _finite(stage1.get("validation_loss")):
         ratio = stage3["validation_loss"] / max(1e-9, stage1["validation_loss"])
     checks = {
-        "validation_loss_not_collapsed": ratio is None or ratio <= thresholds["stage3_loss_ratio_max"],
+        "validation_loss_not_collapsed": ratio is not None and ratio <= thresholds["stage3_loss_ratio_max"],
         "route_entropy_present": _metric_at_least(stage3, "route_entropy", thresholds["route_entropy_min"]),
         "block_load_entropy_present": _metric_at_least(stage3, "block_load_entropy", thresholds["block_load_entropy_min"]),
         "route_path_diversity_present": _metric_at_least(stage3, "route_path_diversity", thresholds["route_path_diversity_min"]),
