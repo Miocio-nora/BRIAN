@@ -16,6 +16,13 @@ def test_r125_formal_package_coverage_passes(tmp_path: Path) -> None:
 
     assert report["overall_status"] == "pass"
     assert report["profile"] == "package_a_r125_route_core"
+    assert report["checks"]["baseline_train_config_present"] is True
+    assert report["checks"]["baseline_train_config_exists"] is True
+    assert report["checks"]["baseline_train_config_loads"] is True
+    assert report["checks"]["baseline_train_mode_resolves"] is True
+    assert report["checks"]["baseline_model_config_valid"] is True
+    assert report["checks"]["baseline_data_config_loads"] is True
+    assert report["baseline"]["train_mode"] == "baseline"
     assert [row["id"] for row in report["requirements"]] == [
         "A0",
         "A1",
@@ -275,6 +282,27 @@ def test_experiment_coverage_fails_missing_baseline_train_config(tmp_path: Path)
 
     assert report["overall_status"] == "fail"
     assert report["checks"]["baseline_train_config_present"] is False
+    assert all(requirement["status"] == "pass" for requirement in report["requirements"])
+
+
+def test_experiment_coverage_fails_broken_baseline_train_config_path(tmp_path: Path) -> None:
+    manifest = tmp_path / "broken_baseline.yaml"
+    source = load_config("configs/experiments/route_core_r125_package.yaml")
+    source["baseline_train_config"] = "configs/train/missing_baseline.yaml"
+    manifest.write_text(yaml.safe_dump(source), encoding="utf-8")
+
+    output = make_experiment_coverage_report(
+        manifest,
+        output_path=tmp_path / "coverage.json",
+        profile="package_a",
+    )
+    report = json.loads(output.read_text(encoding="utf-8"))
+
+    assert report["overall_status"] == "fail"
+    assert report["checks"]["baseline_train_config_present"] is True
+    assert report["checks"]["baseline_train_config_exists"] is False
+    assert report["checks"]["baseline_train_config_loads"] is False
+    assert report["baseline"]["checks"]["train_config_exists"] is False
     assert all(requirement["status"] == "pass" for requirement in report["requirements"])
 
 

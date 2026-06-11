@@ -44,6 +44,7 @@ def make_experiment_coverage_report(
     plan = build_experiment_plan(manifest_path, include_baseline=include_baseline)
     resolved_profile = _resolve_profile(profile, plan.experiment_name)
     entries = [_summarize_entry(entry) for entry in plan.entries]
+    baseline = _summarize_baseline(plan.baseline_train_config)
     requirements = _requirements(resolved_profile, plan, entries)
     checks = {
         "profile_known": resolved_profile != "unknown",
@@ -60,6 +61,16 @@ def make_experiment_coverage_report(
         "data_configs_load": bool(entries) and all(entry["checks"]["data_config_loads"] for entry in entries),
         "data_configs_consistent": _data_configs_consistent(entries),
         "baseline_train_config_present": plan.baseline_train_config is not None,
+        "baseline_train_config_exists": _baseline_check(baseline, "train_config_exists"),
+        "baseline_train_config_loads": _baseline_check(baseline, "train_config_loads"),
+        "baseline_train_mode_resolves": _baseline_check(baseline, "train_mode_resolves"),
+        "baseline_model_config_exists": _baseline_check(baseline, "model_config_exists"),
+        "baseline_model_config_loads": _baseline_check(baseline, "model_config_loads"),
+        "baseline_model_config_valid": _baseline_check(baseline, "model_config_valid"),
+        "baseline_model_base_config_exists": _baseline_check(baseline, "model_base_config_exists"),
+        "baseline_model_base_config_loads": _baseline_check(baseline, "model_base_config_loads"),
+        "baseline_data_config_exists": _baseline_check(baseline, "data_config_exists"),
+        "baseline_data_config_loads": _baseline_check(baseline, "data_config_loads"),
         "required_coverage_satisfied": bool(requirements)
         and all(requirement["status"] == "pass" for requirement in requirements),
     }
@@ -70,6 +81,7 @@ def make_experiment_coverage_report(
         "manifest": plan.to_json(),
         "checks": checks,
         "requirements": requirements,
+        "baseline": baseline,
         "entries": entries,
     }
     if output_path is None:
@@ -504,7 +516,17 @@ def _check_mapping(entry: dict[str, Any] | None, key: str, expected: dict[str, A
 
 
 def _summarize_entry(entry: Any) -> dict[str, Any]:
-    train_config_path = Path(entry.train_config)
+    return {**entry.to_json(), **_summarize_train_config(Path(entry.train_config))}
+
+
+def _summarize_baseline(path: Path | None) -> dict[str, Any] | None:
+    if path is None:
+        return None
+    return {"id": "baseline", "role": "baseline", **_summarize_train_config(path)}
+
+
+def _summarize_train_config(train_config_path: Path) -> dict[str, Any]:
+    train_config_path = Path(train_config_path)
     train_config: dict[str, Any] = {}
     train_config_error = None
     if train_config_path.exists():
@@ -528,7 +550,6 @@ def _summarize_entry(entry: Any) -> dict[str, Any]:
     routing = train_config.get("routing") if isinstance(train_config.get("routing"), dict) else {}
     loss_weights = train_config.get("loss_weights") if isinstance(train_config.get("loss_weights"), dict) else {}
     return {
-        **entry.to_json(),
         "train_config": str(train_config_path),
         "stage": stage or None,
         "train_mode": train_mode,
@@ -561,6 +582,13 @@ def _summarize_entry(entry: Any) -> dict[str, Any]:
             "data_config": data_config_error,
         },
     }
+
+
+def _baseline_check(baseline: dict[str, Any] | None, key: str) -> bool:
+    if baseline is None:
+        return False
+    checks = baseline.get("checks")
+    return bool(isinstance(checks, dict) and checks.get(key) is True)
 
 
 def _resolve_optional_reference(value: Any, source_config: Path) -> Path | None:
@@ -693,6 +721,16 @@ def _overall_status(checks: dict[str, bool], requirements: list[dict[str, Any]])
         "data_configs_load",
         "data_configs_consistent",
         "baseline_train_config_present",
+        "baseline_train_config_exists",
+        "baseline_train_config_loads",
+        "baseline_train_mode_resolves",
+        "baseline_model_config_exists",
+        "baseline_model_config_loads",
+        "baseline_model_config_valid",
+        "baseline_model_base_config_exists",
+        "baseline_model_base_config_loads",
+        "baseline_data_config_exists",
+        "baseline_data_config_loads",
     ]:
         if checks.get(critical_check) is False:
             return "fail"
