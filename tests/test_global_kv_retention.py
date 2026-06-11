@@ -53,6 +53,8 @@ def test_global_kv_retention_report_passes_sink_window_policy(tmp_path: Path) ->
     assert report["model"]["retention_capacity_slots"] == 4
     assert report["checks"]["sink_slots_configured"] is True
     assert report["checks"]["window_slots_configured"] is True
+    assert report["checks"]["global_attention_mass_bounded"] is True
+    assert report["checks"]["global_read_gate_bounded"] is True
     assert report["checks"]["sink_window_mass_conserved"] is True
     assert report["checks"]["cache_slots_within_retention_capacity"] is True
     assert report["checks"]["read_ratio_measured"] is True
@@ -85,3 +87,27 @@ def test_global_kv_retention_report_fails_missing_sink_or_window_metrics(tmp_pat
     assert report["overall_status"] == "fail"
     assert report["checks"]["sink_slots_configured"] is False
     assert report["checks"]["sink_attention_mass_measured"] is False
+
+
+def test_global_kv_retention_report_fails_unbounded_mass_or_gate(tmp_path: Path) -> None:
+    run_dir = _write_run(
+        tmp_path,
+        sink_slots=1,
+        window_slots=3,
+        summary={
+            "global_attention_mass": 1.2,
+            "global_sink_attention_mass": 0.6,
+            "global_window_attention_mass": 0.6,
+            "global_read_gate_mean": 1.1,
+            "global_cache_slots_mean": 2.0,
+        },
+    )
+
+    report_path = make_global_kv_retention_report(run_dir)
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+
+    assert report["overall_status"] == "fail"
+    assert report["checks"]["global_attention_mass_nonzero"] is True
+    assert report["checks"]["global_attention_mass_bounded"] is False
+    assert report["checks"]["global_read_gate_nonzero"] is True
+    assert report["checks"]["global_read_gate_bounded"] is False
