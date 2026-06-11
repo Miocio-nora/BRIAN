@@ -234,6 +234,58 @@ def _long_context_compare_report(*, checks: dict[str, bool] | None = None) -> di
     }
 
 
+def _parallel_passing_report(*, checks: dict[str, bool] | None = None) -> dict:
+    report_checks = {
+        "stage6_parallel_stage": True,
+        "parallel_passing_enabled": True,
+        "parallel_route_selected": True,
+        "shared_base_global_memory_enabled": True,
+        "beam_size_present": True,
+        "beam_size_within_limit": True,
+        "branch_cost_enabled": True,
+        "branch_metrics_present": True,
+        "parallel_branch_active": True,
+        "branch_count_bounded_by_beam": True,
+        "score_margin_measured": True,
+        "score_margin_nonnegative": True,
+        "branch_delta_memory_measured": True,
+        "delta_cache_nonnegative": True,
+        "delta_memory_policy_present": True,
+        "delta_cache_bounded_by_window": True,
+    }
+    if checks is not None:
+        report_checks |= checks
+    return {
+        "overall_status": "pass" if all(report_checks.values()) else "fail",
+        "checks": report_checks,
+        "model": {
+            "beam_size": 2,
+            "branch_cost": 0.01,
+            "memory_policy": "shared_base_global_kv_with_branch_delta",
+        },
+        "routing": {"parallel_branch_count": {"max": 2.0}, "parallel_delta_cache_slots": {"max": 2.0}},
+    }
+
+
+def _parallel_compare_report(*, checks: dict[str, bool] | None = None) -> dict:
+    comparison_checks = {
+        "parallel_branch_active": True,
+        "parallel_score_margin_present": True,
+        "quality_not_worse": True,
+        "active_compute_bounded": True,
+        "estimated_flops_bounded": True,
+        "throughput_not_collapsed": True,
+        "parallel_branch_benefit_proxy": True,
+    }
+    if checks is not None:
+        comparison_checks |= checks
+    return {
+        "overall_status": "pass" if all(comparison_checks.values()) else "warn",
+        "candidate_count": 1,
+        "comparisons": [{"status": "pass" if all(comparison_checks.values()) else "warn", "checks": comparison_checks}],
+    }
+
+
 def _data_manifest_ref() -> dict:
     return {
         "recipe_name": "unit_data",
@@ -1632,25 +1684,7 @@ def test_stage6_gate_uses_parallel_compare_report(tmp_path: Path) -> None:
             "global_cache_slots_mean": 2.0,
             "top1_block_histogram": {"0": 1, "1": 1, "2": 1},
         },
-        parallel_passing_report={
-            "overall_status": "pass",
-            "checks": {
-                "stage6_parallel_stage": True,
-                "parallel_passing_enabled": True,
-                "parallel_route_selected": True,
-                "beam_size_present": True,
-                "beam_size_within_limit": True,
-                "branch_cost_enabled": True,
-                "branch_metrics_present": True,
-                "parallel_branch_active": True,
-                "branch_count_bounded_by_beam": True,
-                "score_margin_measured": True,
-                "delta_memory_policy_present": True,
-                "delta_cache_bounded_by_window": True,
-            },
-            "model": {"beam_size": 2, "branch_cost": 0.01},
-            "routing": {"parallel_branch_count": {"max": 2.0}, "parallel_delta_cache_slots": {"max": 2.0}},
-        },
+        parallel_passing_report=_parallel_passing_report(),
     )
     compare_report = tmp_path / "parallel_compare.json"
     compare_report.write_text(
@@ -1686,11 +1720,55 @@ def test_stage6_gate_uses_parallel_compare_report(tmp_path: Path) -> None:
     assert gate["status"] == "pass"
     assert gate["checks"]["parallel_passing_report_present"] is True
     assert gate["checks"]["parallel_passing_report_passed"] is True
+    assert gate["checks"]["parallel_passing_enabled"] is True
+    assert gate["checks"]["parallel_route_selected"] is True
+    assert gate["checks"]["parallel_shared_base_global_memory_enabled"] is True
+    assert gate["checks"]["parallel_score_margin_nonnegative"] is True
+    assert gate["checks"]["parallel_branch_delta_memory_measured"] is True
+    assert gate["checks"]["parallel_delta_cache_nonnegative"] is True
+    assert gate["checks"]["parallel_delta_memory_policy_present"] is True
     assert gate["checks"]["parallel_branch_count_bounded_by_beam"] is True
     assert gate["checks"]["parallel_delta_cache_bounded"] is True
     assert gate["checks"]["parallel_compare_report_present"] is True
     assert gate["checks"]["parallel_branch_benefit_proxy"] is True
     assert report["supplemental_reports"]["parallel_compare_report"] == str(compare_report)
+
+
+def test_stage6_gate_requires_branch_score_and_delta_memory_checks(tmp_path: Path) -> None:
+    passing_report = _parallel_passing_report()
+    passing_report["checks"]["shared_base_global_memory_enabled"] = False
+    passing_report["checks"]["score_margin_nonnegative"] = False
+    passing_report["checks"]["branch_delta_memory_measured"] = False
+    passing_report["checks"]["delta_cache_nonnegative"] = False
+    stage6 = _write_run(
+        tmp_path,
+        "parallel",
+        stage="stage6_parallel_passing",
+        val_loss=10.0,
+        train_row={
+            "parallel_branch_count_mean": 2.0,
+            "parallel_score_margin_mean": 0.1,
+            "global_cache_slots_mean": 2.0,
+            "top1_block_histogram": {"0": 1, "1": 1, "2": 1},
+        },
+        parallel_passing_report=passing_report,
+    )
+    compare_report = tmp_path / "parallel_compare.json"
+    compare_report.write_text(json.dumps(_parallel_compare_report()), encoding="utf-8")
+
+    report_path = make_stage_gate_report(
+        [stage6],
+        output_path=tmp_path / "gate.json",
+        parallel_compare_report_path=compare_report,
+    )
+    gate = json.loads(report_path.read_text(encoding="utf-8"))["gates"]["stage6_to_scale"]
+
+    assert gate["status"] == "warn"
+    assert gate["checks"]["parallel_passing_report_passed"] is True
+    assert gate["checks"]["parallel_shared_base_global_memory_enabled"] is False
+    assert gate["checks"]["parallel_score_margin_nonnegative"] is False
+    assert gate["checks"]["parallel_branch_delta_memory_measured"] is False
+    assert gate["checks"]["parallel_delta_cache_nonnegative"] is False
 
 
 def test_stage6_gate_accepts_stage7_parallel_alias(tmp_path: Path) -> None:
@@ -1705,23 +1783,7 @@ def test_stage6_gate_accepts_stage7_parallel_alias(tmp_path: Path) -> None:
             "global_cache_slots_mean": 2.0,
             "top1_block_histogram": {"0": 1, "1": 1, "2": 1},
         },
-        parallel_passing_report={
-            "overall_status": "pass",
-            "checks": {
-                "stage6_parallel_stage": True,
-                "parallel_passing_enabled": True,
-                "parallel_route_selected": True,
-                "beam_size_present": True,
-                "beam_size_within_limit": True,
-                "branch_cost_enabled": True,
-                "branch_metrics_present": True,
-                "parallel_branch_active": True,
-                "branch_count_bounded_by_beam": True,
-                "score_margin_measured": True,
-                "delta_memory_policy_present": True,
-                "delta_cache_bounded_by_window": True,
-            },
-        },
+        parallel_passing_report=_parallel_passing_report(),
     )
     compare_report = tmp_path / "parallel_compare.json"
     compare_report.write_text(
@@ -1794,23 +1856,7 @@ def test_stage6_gate_requires_parallel_compare_key_checks(tmp_path: Path) -> Non
             "global_cache_slots_mean": 2.0,
             "top1_block_histogram": {"0": 1, "1": 1, "2": 1},
         },
-        parallel_passing_report={
-            "overall_status": "pass",
-            "checks": {
-                "stage6_parallel_stage": True,
-                "parallel_passing_enabled": True,
-                "parallel_route_selected": True,
-                "beam_size_present": True,
-                "beam_size_within_limit": True,
-                "branch_cost_enabled": True,
-                "branch_metrics_present": True,
-                "parallel_branch_active": True,
-                "branch_count_bounded_by_beam": True,
-                "score_margin_measured": True,
-                "delta_memory_policy_present": True,
-                "delta_cache_bounded_by_window": True,
-            },
-        },
+        parallel_passing_report=_parallel_passing_report(),
     )
     compare_report = tmp_path / "parallel_compare.json"
     compare_report.write_text(

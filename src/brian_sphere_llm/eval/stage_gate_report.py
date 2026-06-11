@@ -573,9 +573,19 @@ def _gate_stage6(
         "parallel_score_margin_present": _finite(_routing_metric(stage6, "parallel_score_margin_mean")),
         "parallel_passing_report_present": bool(passing_report),
         "parallel_passing_report_passed": bool(passing_report.get("overall_status") == "pass"),
+        "parallel_passing_enabled": bool(passing_checks.get("parallel_passing_enabled", False)),
+        "parallel_route_selected": bool(passing_checks.get("parallel_route_selected", False)),
+        "parallel_shared_base_global_memory_enabled": bool(
+            passing_checks.get("shared_base_global_memory_enabled", False)
+        ),
         "parallel_beam_bounded": bool(passing_checks.get("beam_size_within_limit", False)),
+        "parallel_branch_active": bool(passing_checks.get("parallel_branch_active", False)),
         "parallel_branch_count_bounded_by_beam": bool(passing_checks.get("branch_count_bounded_by_beam", False)),
         "parallel_branch_cost_enabled": bool(passing_checks.get("branch_cost_enabled", False)),
+        "parallel_score_margin_nonnegative": bool(passing_checks.get("score_margin_nonnegative", False)),
+        "parallel_branch_delta_memory_measured": bool(passing_checks.get("branch_delta_memory_measured", False)),
+        "parallel_delta_cache_nonnegative": bool(passing_checks.get("delta_cache_nonnegative", False)),
+        "parallel_delta_memory_policy_present": bool(passing_checks.get("delta_memory_policy_present", False)),
         "parallel_delta_cache_bounded": bool(passing_checks.get("delta_cache_bounded_by_window", False)),
         "global_cache_or_local_route_present": _finite(_routing_metric(stage6, "global_cache_slots_mean"))
         or _finite(_routing_metric(stage6, "average_route_steps")),
