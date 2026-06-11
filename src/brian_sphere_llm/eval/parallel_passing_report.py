@@ -50,7 +50,16 @@ def make_parallel_passing_report(
             bool(branch_counts) and beam_size >= 1 and float(_max(branch_counts) or 0.0) <= beam_size + tolerance
         ),
         "score_margin_measured": bool(score_margins),
+        "score_margin_nonnegative": bool(score_margins)
+        and _min(score_margins) is not None
+        and float(_min(score_margins) or 0.0) >= -tolerance,
         "branch_delta_memory_measured": global_kv_enabled and bool(delta_cache_slots),
+        "delta_cache_nonnegative": (not global_kv_enabled)
+        or (
+            bool(delta_cache_slots)
+            and _min(delta_cache_slots) is not None
+            and float(_min(delta_cache_slots) or 0.0) >= -tolerance
+        ),
         "delta_memory_policy_present": (not global_kv_enabled) or bool(delta_cache_slots),
         "delta_cache_bounded_by_window": (not global_kv_enabled)
         or (
@@ -139,6 +148,10 @@ def _summary(values: list[float]) -> dict[str, float | int | None]:
 
 def _max(values: list[float]) -> float | None:
     return max(values) if values else None
+
+
+def _min(values: list[float]) -> float | None:
+    return min(values) if values else None
 
 
 def _bool(value: Any) -> bool:

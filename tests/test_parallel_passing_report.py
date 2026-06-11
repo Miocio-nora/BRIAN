@@ -37,7 +37,9 @@ def test_parallel_passing_report_passes_bounded_beam_and_cost(tmp_path: Path) ->
     assert report["checks"]["beam_size_within_limit"] is True
     assert report["checks"]["branch_cost_enabled"] is True
     assert report["checks"]["branch_count_bounded_by_beam"] is True
+    assert report["checks"]["score_margin_nonnegative"] is True
     assert report["checks"]["branch_delta_memory_measured"] is True
+    assert report["checks"]["delta_cache_nonnegative"] is True
     assert report["checks"]["delta_memory_policy_present"] is True
     assert report["checks"]["delta_cache_bounded_by_window"] is True
     assert report["model"]["memory_policy"] == "shared_base_global_kv_with_branch_delta"
@@ -68,6 +70,32 @@ def test_parallel_passing_report_fails_unbounded_branch_and_delta_cache(tmp_path
     assert report["checks"]["branch_cost_enabled"] is False
     assert report["checks"]["branch_count_bounded_by_beam"] is False
     assert report["checks"]["delta_cache_bounded_by_window"] is False
+
+
+def test_parallel_passing_report_fails_negative_margin_or_delta_cache(tmp_path: Path) -> None:
+    run_dir = _write_run(
+        tmp_path,
+        beam_size=2,
+        branch_cost=0.01,
+        window_slots=3,
+        train_rows=[
+            {
+                "parallel_branch_count_mean": 2.0,
+                "parallel_score_margin_mean": -0.1,
+                "parallel_delta_cache_slots_max": -1.0,
+            },
+        ],
+        include_eval_delta=False,
+    )
+
+    report_path = make_parallel_passing_report(run_dir)
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+
+    assert report["overall_status"] == "fail"
+    assert report["checks"]["score_margin_measured"] is True
+    assert report["checks"]["score_margin_nonnegative"] is False
+    assert report["checks"]["branch_delta_memory_measured"] is True
+    assert report["checks"]["delta_cache_nonnegative"] is False
 
 
 def test_parallel_passing_report_fails_missing_branch_delta_memory(tmp_path: Path) -> None:
