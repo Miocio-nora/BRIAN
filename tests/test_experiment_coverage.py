@@ -83,12 +83,44 @@ def test_cost_control_coverage_passes_loss_weight_sweep(tmp_path: Path) -> None:
 
     assert report["overall_status"] == "pass"
     assert report["profile"] == "cost_control_sweep"
+    assert report["checks"]["data_configs_exist"] is True
+    assert report["checks"]["data_configs_consistent"] is True
+    assert len({entry["data_config"] for entry in report["entries"]}) == 1
     assert [row["id"] for row in report["requirements"]] == ["C0", "C1", "C2", "C3"]
     for requirement_id in ["C0", "C1", "C2", "C3"]:
         requirement = _requirement(report, requirement_id)
         assert requirement["checks"]["stage_matches"] is True
         assert requirement["checks"]["mode_matches"] is True
         assert requirement["checks"]["loss_weights_match"] is True
+
+
+def test_experiment_coverage_fails_inconsistent_data_configs(tmp_path: Path) -> None:
+    source = load_config("configs/experiments/route_core_cost_control.yaml")
+    mixed_train = tmp_path / "ablation_c3_mixed_data.yaml"
+    mixed_train.write_text(
+        yaml.safe_dump(
+            {
+                "extends": str(Path("configs/train/ablation_c3_cost05.yaml").resolve()),
+                "data_config": str(Path("configs/data/r125_tiny_debug.yaml").resolve()),
+            }
+        ),
+        encoding="utf-8",
+    )
+    source["ablations"][-1]["train_config"] = str(mixed_train)
+    manifest = tmp_path / "mixed_data.yaml"
+    manifest.write_text(yaml.safe_dump(source), encoding="utf-8")
+
+    output = make_experiment_coverage_report(
+        manifest,
+        output_path=tmp_path / "coverage.json",
+        profile="cost_control_sweep",
+    )
+    report = json.loads(output.read_text(encoding="utf-8"))
+
+    assert report["overall_status"] == "fail"
+    assert report["checks"]["data_configs_exist"] is True
+    assert report["checks"]["data_configs_consistent"] is False
+    assert _requirement(report, "C3")["status"] == "pass"
 
 
 def test_global_kv_package_coverage_passes_window_and_sink_requirements(tmp_path: Path) -> None:

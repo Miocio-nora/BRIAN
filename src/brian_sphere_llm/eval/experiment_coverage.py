@@ -51,6 +51,8 @@ def make_experiment_coverage_report(
         "train_configs_exist": bool(entries) and all(entry["checks"]["train_config_exists"] for entry in entries),
         "train_configs_load": bool(entries) and all(entry["checks"]["train_config_loads"] for entry in entries),
         "train_modes_resolve": bool(entries) and all(entry["checks"]["train_mode_resolves"] for entry in entries),
+        "data_configs_exist": bool(entries) and all(entry["checks"]["data_config_exists"] for entry in entries),
+        "data_configs_consistent": _data_configs_consistent(entries),
         "baseline_train_config_present": plan.baseline_train_config is not None,
         "required_coverage_satisfied": bool(requirements)
         and all(requirement["status"] == "pass" for requirement in requirements),
@@ -512,7 +514,9 @@ def _summarize_entry(entry: Any) -> dict[str, Any]:
         train_mode = None
         train_mode_error = str(exc)
     model_config_path = _resolve_optional_reference(train_config.get("model_config"), train_config_path)
+    data_config_path = _resolve_optional_reference(train_config.get("data_config"), train_config_path)
     model_config = _load_optional_config(model_config_path)
+    data_config = _load_optional_config(data_config_path)
     routing = train_config.get("routing") if isinstance(train_config.get("routing"), dict) else {}
     loss_weights = train_config.get("loss_weights") if isinstance(train_config.get("loss_weights"), dict) else {}
     return {
@@ -522,13 +526,16 @@ def _summarize_entry(entry: Any) -> dict[str, Any]:
         "train_mode": train_mode,
         "routing_mode": routing.get("mode"),
         "model_config": str(model_config_path) if model_config_path else None,
+        "data_config": str(data_config_path) if data_config_path else None,
         "model": _model_summary(model_config, model_config_path),
+        "data": _data_summary(data_config),
         "loss_weights": {key: _num(value) for key, value in loss_weights.items()},
         "checks": {
             "train_config_exists": train_config_path.exists(),
             "train_config_loads": train_config_path.exists() and train_config_error is None,
             "train_mode_resolves": train_mode is not None and train_mode_error is None,
             "model_config_exists": model_config_path.exists() if model_config_path else False,
+            "data_config_exists": data_config_path.exists() if data_config_path else False,
         },
         "errors": {
             "train_config": train_config_error,
@@ -595,11 +602,37 @@ def _model_summary(config: dict[str, Any], model_config_path: Path | None) -> di
     return summary
 
 
+def _data_summary(config: dict[str, Any]) -> dict[str, Any]:
+    keys = [
+        "recipe_name",
+        "output_dir",
+        "manifest_path",
+        "sequence_length",
+        "target_tokens",
+        "validation_tokens",
+    ]
+    return {key: config.get(key) for key in keys if key in config}
+
+
+def _data_configs_consistent(entries: list[dict[str, Any]]) -> bool:
+    paths = {entry.get("data_config") for entry in entries if entry.get("data_config")}
+    return len(paths) == 1
+
+
 def _overall_status(checks: dict[str, bool], requirements: list[dict[str, Any]]) -> str:
     if not checks.get("profile_known", False):
         return "fail"
     if any(requirement["status"] == "fail" for requirement in requirements):
         return "fail"
+    for critical_check in [
+        "train_configs_exist",
+        "train_configs_load",
+        "train_modes_resolve",
+        "data_configs_exist",
+        "data_configs_consistent",
+    ]:
+        if checks.get(critical_check) is False:
+            return "fail"
     if checks and all(checks.values()):
         return "pass"
     if any(checks.values()):
