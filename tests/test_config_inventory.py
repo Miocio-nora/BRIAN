@@ -133,6 +133,59 @@ def test_train_configs_resolve_stage_model_and_data_refs() -> None:
     assert errors == []
 
 
+def test_scaled_train_configs_keep_b200_memory_controls() -> None:
+    r350_configs = [
+        "stage0_r350_baseline.yaml",
+        "stage4_r350_output_action.yaml",
+        "stage0_r350_main30b_baseline.yaml",
+        "stage4_r350_main30b_output_action.yaml",
+    ]
+    for filename in r350_configs:
+        config = load_config(CONFIG_ROOT / "train" / filename)
+        assert config["precision"] == "bf16"
+        assert config["batch_size"] == 1
+        assert config["lr_schedule"] == "linear_warmup_cosine_decay"
+        assert config["warmup_steps"] > 0
+
+    r1b_expected = {
+        "stage0_r1b_baseline.yaml": {
+            "model_config": "../model/baseline_1b.yaml",
+            "data_config": "../data/r1b_pilot.yaml",
+            "ddp_find_unused_parameters": False,
+            "warmup_steps": 500,
+        },
+        "stage5_r1b_global_kv_pilot.yaml": {
+            "model_config": "../model/brian_r1b.yaml",
+            "data_config": "../data/r1b_pilot.yaml",
+            "ddp_find_unused_parameters": True,
+            "warmup_steps": 500,
+        },
+        "stage0_r1b_main50b_baseline.yaml": {
+            "model_config": "../model/baseline_1b.yaml",
+            "data_config": "../data/r1b_main_50b.yaml",
+            "ddp_find_unused_parameters": False,
+            "warmup_steps": 2000,
+        },
+        "stage5_r1b_main50b_global_kv.yaml": {
+            "model_config": "../model/brian_r1b.yaml",
+            "data_config": "../data/r1b_main_50b.yaml",
+            "ddp_find_unused_parameters": True,
+            "warmup_steps": 2000,
+        },
+    }
+    for filename, expected in r1b_expected.items():
+        config = load_config(CONFIG_ROOT / "train" / filename)
+        assert config["precision"] == "bf16"
+        assert config["batch_size"] == 1
+        assert config["gradient_accumulation_steps"] == 4
+        assert config["activation_checkpointing"] is True
+        assert config["lr_schedule"] == "linear_warmup_cosine_decay"
+        model_config = load_config((CONFIG_ROOT / "train" / filename).parent / config["model_config"])
+        assert model_config.get("parallel_passing", False) is False
+        for key, value in expected.items():
+            assert config[key] == value
+
+
 def test_experiment_manifests_reference_train_configs() -> None:
     errors: list[str] = []
     for path in _yaml_files(CONFIG_ROOT / "experiments"):
