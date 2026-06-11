@@ -20,6 +20,20 @@ def test_loss_terms_are_scalar() -> None:
     assert location_loss([torch.tensor(1.0)]).ndim == 0
 
 
+def test_balance_and_cost_losses_ignore_out_action_probability() -> None:
+    high_out = [torch.tensor([[0.25, 0.25, 0.50], [0.25, 0.25, 0.50]])]
+    low_out = [torch.tensor([[0.25, 0.25, 0.00], [0.25, 0.25, 0.00]])]
+
+    assert block_balance_loss(high_out, num_internal_blocks=2) == block_balance_loss(
+        low_out,
+        num_internal_blocks=2,
+    )
+    assert route_cost_loss(high_out, num_internal_blocks=2) == route_cost_loss(
+        low_out,
+        num_internal_blocks=2,
+    )
+
+
 def _tiny_brian_route_core() -> BrianRouteCore:
     cfg = BrianRouteConfig(
         base=BaselineConfig(vocab_size=64, context_length=8, layers=4, d_model=32, n_heads=4),
