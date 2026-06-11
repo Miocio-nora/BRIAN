@@ -381,6 +381,41 @@ def test_experiment_manifests_reference_train_configs() -> None:
     assert errors == []
 
 
+def test_experiment_manifests_keep_shared_data_config_for_validation() -> None:
+    errors: list[str] = []
+    for path in _yaml_files(CONFIG_ROOT / "experiments"):
+        config = _load_config(path, errors)
+        train_refs: list[tuple[str, Path]] = []
+        baseline_path = _resolve_reference(
+            config,
+            "baseline_train_config",
+            path,
+            errors,
+            required=False,
+            repo_relative=True,
+        )
+        if baseline_path is not None:
+            train_refs.append(("baseline", baseline_path))
+        for index, entry in enumerate(config.get("ablations", [])):
+            if not isinstance(entry, dict):
+                continue
+            train_path = _resolve_reference(entry, "train_config", path, errors, repo_relative=True)
+            if train_path is not None:
+                train_refs.append((str(entry.get("id", index)), train_path))
+
+        data_refs: dict[Path, list[str]] = {}
+        for label, train_path in train_refs:
+            train_config = _load_config(train_path, errors)
+            data_path = _resolve_reference(train_config, "data_config", train_path, errors)
+            if data_path is not None:
+                data_refs.setdefault(data_path.resolve(), []).append(label)
+        if len(data_refs) != 1:
+            formatted = {str(data_path): labels for data_path, labels in data_refs.items()}
+            errors.append(f"{path}: experiment entries must share one data_config for validation: {formatted}")
+
+    assert errors == []
+
+
 def test_eval_configs_declare_eval_names() -> None:
     errors: list[str] = []
     for path in _yaml_files(CONFIG_ROOT / "eval"):
