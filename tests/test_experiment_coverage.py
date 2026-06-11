@@ -83,7 +83,13 @@ def test_cost_control_coverage_passes_loss_weight_sweep(tmp_path: Path) -> None:
 
     assert report["overall_status"] == "pass"
     assert report["profile"] == "cost_control_sweep"
+    assert report["checks"]["model_configs_exist"] is True
+    assert report["checks"]["model_configs_load"] is True
+    assert report["checks"]["model_configs_valid"] is True
+    assert report["checks"]["model_base_configs_exist"] is True
+    assert report["checks"]["model_base_configs_load"] is True
     assert report["checks"]["data_configs_exist"] is True
+    assert report["checks"]["data_configs_load"] is True
     assert report["checks"]["data_configs_consistent"] is True
     assert len({entry["data_config"] for entry in report["entries"]}) == 1
     assert [row["id"] for row in report["requirements"]] == ["C0", "C1", "C2", "C3"]
@@ -121,6 +127,74 @@ def test_experiment_coverage_fails_inconsistent_data_configs(tmp_path: Path) -> 
     assert report["checks"]["data_configs_exist"] is True
     assert report["checks"]["data_configs_consistent"] is False
     assert _requirement(report, "C3")["status"] == "pass"
+
+
+def test_experiment_coverage_fails_missing_model_config(tmp_path: Path) -> None:
+    source = load_config("configs/experiments/route_core_cost_control.yaml")
+    broken_train = tmp_path / "ablation_c3_missing_model.yaml"
+    broken_train.write_text(
+        yaml.safe_dump(
+            {
+                "extends": str(Path("configs/train/ablation_c3_cost05.yaml").resolve()),
+                "model_config": str(tmp_path / "missing_model_config.yaml"),
+            }
+        ),
+        encoding="utf-8",
+    )
+    source["ablations"][-1]["train_config"] = str(broken_train)
+    manifest = tmp_path / "missing_model_manifest.yaml"
+    manifest.write_text(yaml.safe_dump(source), encoding="utf-8")
+
+    output = make_experiment_coverage_report(
+        manifest,
+        output_path=tmp_path / "coverage.json",
+        profile="cost_control_sweep",
+    )
+    report = json.loads(output.read_text(encoding="utf-8"))
+    broken_entry = next(entry for entry in report["entries"] if entry["id"] == "C3")
+
+    assert report["overall_status"] == "fail"
+    assert report["checks"]["model_configs_exist"] is False
+    assert report["checks"]["model_configs_load"] is False
+    assert report["checks"]["model_configs_valid"] is False
+    assert broken_entry["checks"]["model_config_exists"] is False
+    assert broken_entry["checks"]["model_config_loads"] is False
+    assert broken_entry["checks"]["model_config_valid"] is False
+    assert _requirement(report, "C3")["status"] == "pass"
+
+
+def test_experiment_coverage_fails_data_config_load_error(tmp_path: Path) -> None:
+    source = load_config("configs/experiments/route_core_cost_control.yaml")
+    bad_data = tmp_path / "bad_data.yaml"
+    bad_data.write_text("- not\n- a mapping\n", encoding="utf-8")
+    broken_train = tmp_path / "ablation_c3_bad_data.yaml"
+    broken_train.write_text(
+        yaml.safe_dump(
+            {
+                "extends": str(Path("configs/train/ablation_c3_cost05.yaml").resolve()),
+                "data_config": str(bad_data),
+            }
+        ),
+        encoding="utf-8",
+    )
+    source["ablations"][-1]["train_config"] = str(broken_train)
+    manifest = tmp_path / "bad_data_manifest.yaml"
+    manifest.write_text(yaml.safe_dump(source), encoding="utf-8")
+
+    output = make_experiment_coverage_report(
+        manifest,
+        output_path=tmp_path / "coverage.json",
+        profile="cost_control_sweep",
+    )
+    report = json.loads(output.read_text(encoding="utf-8"))
+    broken_entry = next(entry for entry in report["entries"] if entry["id"] == "C3")
+
+    assert report["overall_status"] == "fail"
+    assert report["checks"]["data_configs_exist"] is True
+    assert report["checks"]["data_configs_load"] is False
+    assert broken_entry["checks"]["data_config_exists"] is True
+    assert broken_entry["checks"]["data_config_loads"] is False
+    assert "Expected mapping" in broken_entry["errors"]["data_config"]
 
 
 def test_global_kv_package_coverage_passes_window_and_sink_requirements(tmp_path: Path) -> None:
