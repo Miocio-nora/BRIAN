@@ -37,7 +37,17 @@ def _write_run(
     (run_dir / "train_log.jsonl").write_text(json.dumps(train_row | {"loss": val_loss}) + "\n", encoding="utf-8")
     if determinism_status is not None:
         (run_dir / "eval_determinism_report.json").write_text(
-            json.dumps({"overall_status": determinism_status, "checks": {"numeric_metrics_within_tolerance": True}}),
+            json.dumps(
+                {
+                    "overall_status": determinism_status,
+                    "checks": {
+                        "checkpoint_loaded": True,
+                        "two_eval_passes_completed": True,
+                        "compared_numeric_metrics_present": True,
+                        "numeric_metrics_within_tolerance": determinism_status == "pass",
+                    },
+                }
+            ),
             encoding="utf-8",
         )
     if resume_event is not None:
@@ -86,6 +96,18 @@ def test_pearson_and_difficulty_step_correlation() -> None:
     assert difficulty_step_correlation([1.0], [1.0]) is None
 
 
+def _baseline_difficulty_report() -> dict:
+    return {
+        "sample_count": 3,
+        "difficulty_bin_count": 3,
+        "by_difficulty": {
+            "easy": {"sample_count": 1, "mean_baseline_cross_entropy": 1.0},
+            "medium": {"sample_count": 1, "mean_baseline_cross_entropy": 2.0},
+            "hard": {"sample_count": 1, "mean_baseline_cross_entropy": 3.0},
+        },
+    }
+
+
 def test_stage_gate_report_writes_json(tmp_path: Path) -> None:
     baseline = _write_run(
         tmp_path,
@@ -94,16 +116,13 @@ def test_stage_gate_report_writes_json(tmp_path: Path) -> None:
         val_loss=10.0,
         train_row={},
         determinism_status="pass",
-        resume_event={"resumed_from_step": 1, "target_max_steps": 2, "optimizer_state_loaded": True},
-        baseline_difficulty_report={
-            "sample_count": 3,
-            "difficulty_bin_count": 3,
-            "by_difficulty": {
-                "easy": {"sample_count": 1, "mean_baseline_cross_entropy": 1.0},
-                "medium": {"sample_count": 1, "mean_baseline_cross_entropy": 2.0},
-                "hard": {"sample_count": 1, "mean_baseline_cross_entropy": 3.0},
-            },
+        resume_event={
+            "checkpoint": "checkpoint_latest",
+            "resumed_from_step": 1,
+            "target_max_steps": 2,
+            "optimizer_state_loaded": True,
         },
+        baseline_difficulty_report=_baseline_difficulty_report(),
     )
     fixed = _write_run(
         tmp_path,
@@ -261,6 +280,9 @@ def test_stage_gate_report_writes_json(tmp_path: Path) -> None:
     assert report["run_count"] == 5
     assert report["gates"]["stage0_to_1"]["status"] == "pass"
     assert report["gates"]["stage0_to_1"]["checks"]["checkpoint_resume_event"] is True
+    assert report["gates"]["stage0_to_1"]["checks"]["checkpoint_resume_event_valid"] is True
+    assert report["gates"]["stage0_to_1"]["checks"]["checkpoint_best_artifact"] is True
+    assert report["gates"]["stage0_to_1"]["checks"]["eval_determinism_checks_passed"] is True
     assert report["gates"]["stage0_to_1"]["checks"]["baseline_difficulty_bins_present"] is True
     assert report["gates"]["stage1_to_2"]["status"] == "pass"
     assert report["gates"]["stage1_to_2"]["checks"]["fixed_route_stability_passed"] is True
@@ -272,6 +294,61 @@ def test_stage_gate_report_writes_json(tmp_path: Path) -> None:
     assert report["gates"]["stage5_to_6"]["checks"]["global_kv_retention_passed"] is True
     assert report["gates"]["stage5_to_6"]["checks"]["sink_window_attention_measured"] is True
     assert report["supplemental_reports"]["long_context_compare_report"] == str(long_context_compare)
+
+
+def test_stage0_gate_requires_valid_resume_event(tmp_path: Path) -> None:
+    baseline = _write_run(
+        tmp_path,
+        "baseline",
+        stage="stage0_baseline",
+        val_loss=10.0,
+        train_row={},
+        determinism_status="pass",
+        resume_event={
+            "checkpoint": "checkpoint_latest",
+            "resumed_from_step": 1,
+            "target_max_steps": 2,
+            "optimizer_state_loaded": False,
+        },
+        baseline_difficulty_report=_baseline_difficulty_report(),
+    )
+
+    report_path = make_stage_gate_report([baseline], output_path=tmp_path / "gate.json")
+    gate = json.loads(report_path.read_text(encoding="utf-8"))["gates"]["stage0_to_1"]
+
+    assert gate["status"] == "warn"
+    assert gate["checks"]["checkpoint_resume_event"] is True
+    assert gate["checks"]["checkpoint_resume_event_valid"] is False
+    assert gate["resume_event_checks"]["optimizer_state_loaded"] is False
+
+
+def test_stage0_gate_requires_determinism_key_checks(tmp_path: Path) -> None:
+    baseline = _write_run(
+        tmp_path,
+        "baseline",
+        stage="stage0_baseline",
+        val_loss=10.0,
+        train_row={},
+        determinism_status="pass",
+        resume_event={
+            "checkpoint": "checkpoint_latest",
+            "resumed_from_step": 1,
+            "target_max_steps": 2,
+            "optimizer_state_loaded": True,
+        },
+        baseline_difficulty_report=_baseline_difficulty_report(),
+    )
+    (baseline / "eval_determinism_report.json").write_text(
+        json.dumps({"overall_status": "pass", "checks": {"numeric_metrics_within_tolerance": True}}),
+        encoding="utf-8",
+    )
+
+    report_path = make_stage_gate_report([baseline], output_path=tmp_path / "gate.json")
+    gate = json.loads(report_path.read_text(encoding="utf-8"))["gates"]["stage0_to_1"]
+
+    assert gate["status"] == "warn"
+    assert gate["checks"]["eval_deterministic"] is True
+    assert gate["checks"]["eval_determinism_checks_passed"] is False
 
 
 def test_stage_gate_report_uses_cost_control_report(tmp_path: Path) -> None:

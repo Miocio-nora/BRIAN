@@ -174,15 +174,21 @@ def _summarize_run(run_dir: Path) -> dict[str, Any]:
         "difficulty_step_correlation": difficulty_corr,
         "difficulty_sample_count": _num(difficulty_report.get("sample_count")),
         "eval_determinism_status": determinism_report.get("overall_status"),
+        "eval_determinism_checks": determinism_report.get("checks", {}),
         "eval_determinism_report_present": bool(determinism_report),
     }
     return summary
 
 
 def _gate_stage0(stage0: dict[str, Any] | None) -> dict[str, Any]:
+    resume_event = stage0.get("latest_resume_event") if stage0 else {}
+    resume_event_checks = _resume_event_checks(resume_event)
+    determinism_checks = stage0.get("eval_determinism_checks", {}) if stage0 else {}
     checks = {
         "checkpoint_resume_artifact": bool(stage0 and stage0["has_checkpoint_latest"]),
+        "checkpoint_best_artifact": bool(stage0 and stage0["has_checkpoint_best"]),
         "checkpoint_resume_event": bool(stage0 and stage0.get("has_resume_event")),
+        "checkpoint_resume_event_valid": all(resume_event_checks.values()),
         "eval_log_present": bool(stage0 and stage0["has_eval_log"]),
         "validation_loss_finite": _finite(stage0.get("validation_loss") if stage0 else None),
         "baseline_difficulty_report_present": bool(stage0 and stage0.get("baseline_difficulty_report_present")),
@@ -198,13 +204,16 @@ def _gate_stage0(stage0: dict[str, Any] | None) -> dict[str, Any]:
         ),
         "eval_determinism_report_present": bool(stage0 and stage0.get("eval_determinism_report_present")),
         "eval_deterministic": bool(stage0 and stage0.get("eval_determinism_status") == "pass"),
+        "eval_determinism_checks_passed": _eval_determinism_checks_passed(determinism_checks),
     }
     return _gate(
         "Stage 0 baseline trains, checkpoints, and evaluates deterministically",
         checks,
         {
             "eval_determinism_status": stage0.get("eval_determinism_status") if stage0 else None,
+            "eval_determinism_checks": determinism_checks,
             "latest_resume_event": stage0.get("latest_resume_event") if stage0 else {},
+            "resume_event_checks": resume_event_checks,
             "baseline_difficulty_by_bin": stage0.get("baseline_difficulty_by_bin") if stage0 else {},
         },
     )
@@ -462,6 +471,32 @@ def _any_passing_comparison_with_checks(comparisons: Any, required_checks: list[
     return False
 
 
+def _resume_event_checks(event: Any) -> dict[str, bool]:
+    if not isinstance(event, dict):
+        event = {}
+    resumed_from_step = _int_like(event.get("resumed_from_step"))
+    target_max_steps = _int_like(event.get("target_max_steps"))
+    checkpoint = event.get("checkpoint")
+    return {
+        "checkpoint_points_to_latest": isinstance(checkpoint, str) and Path(checkpoint).name == "checkpoint_latest",
+        "resumed_from_positive_step": resumed_from_step is not None and resumed_from_step >= 1,
+        "target_after_resume_step": resumed_from_step is not None
+        and target_max_steps is not None
+        and target_max_steps > resumed_from_step,
+        "optimizer_state_loaded": event.get("optimizer_state_loaded") is True,
+    }
+
+
+def _eval_determinism_checks_passed(checks: Any) -> bool:
+    required = [
+        "checkpoint_loaded",
+        "two_eval_passes_completed",
+        "compared_numeric_metrics_present",
+        "numeric_metrics_within_tolerance",
+    ]
+    return isinstance(checks, dict) and all(checks.get(key) is True for key in required)
+
+
 def _difficulty_step_corr(rows: list[dict[str, Any]]) -> float | None:
     difficulty = []
     steps = []
@@ -513,6 +548,16 @@ def _latest_exit_hist(summary: dict[str, Any] | None) -> dict[str, int]:
 def _finite(value: Any) -> bool:
     numeric = _num(value)
     return numeric is not None and math.isfinite(numeric)
+
+
+def _int_like(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float) and math.isfinite(value) and value.is_integer():
+        return int(value)
+    return None
 
 
 def _num(value: Any) -> float | None:
