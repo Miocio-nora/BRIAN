@@ -78,6 +78,23 @@ def _controlled_memory_compare() -> dict:
     }
 
 
+def _passing_out_by_difficulty() -> dict:
+    return {
+        "overall_status": "pass",
+        "checks": {
+            "easy_and_hard_present": True,
+            "route_steps_non_decreasing_with_difficulty": True,
+            "active_compute_non_decreasing_with_difficulty": True,
+            "easy_output_probability_at_least_hard": True,
+        },
+        "deltas": {
+            "hard_minus_easy_route_steps": 1.0,
+            "hard_minus_easy_active_block_evals_per_token": 0.5,
+            "easy_minus_hard_p_output": 0.2,
+        },
+    }
+
+
 def test_go_no_go_r125_passes_with_required_evidence(tmp_path: Path) -> None:
     stage_gate = _write_json(tmp_path / "stage_gate.json", _passing_stage_gate())
     position = _write_json(tmp_path / "position.json", {"overall_status": "pass", "candidate_count": 3})
@@ -134,7 +151,7 @@ def test_go_no_go_r350_passes_with_compute_reasoning_and_memory_evidence(tmp_pat
     )
     reasoning_baseline = _write_json(tmp_path / "reasoning_base.json", {"overall": {"exact_match_accuracy": 0.2}})
     reasoning_candidate = _write_json(tmp_path / "reasoning_candidate.json", {"overall": {"exact_match_accuracy": 0.3}})
-    out = _write_json(tmp_path / "out.json", {"overall_status": "pass"})
+    out = _write_json(tmp_path / "out.json", _passing_out_by_difficulty())
     long_context = _write_json(tmp_path / "long_context.json", _controlled_memory_compare())
     output = make_go_no_go_report(
         stage_gate_report_path=stage_gate,
@@ -176,7 +193,7 @@ def test_go_no_go_r350_rejects_empty_passing_long_context_report(tmp_path: Path)
     )
     reasoning_baseline = _write_json(tmp_path / "reasoning_base.json", {"overall": {"exact_match_accuracy": 0.2}})
     reasoning_candidate = _write_json(tmp_path / "reasoning_candidate.json", {"overall": {"exact_match_accuracy": 0.3}})
-    out = _write_json(tmp_path / "out.json", {"overall_status": "pass"})
+    out = _write_json(tmp_path / "out.json", _passing_out_by_difficulty())
     long_context = _write_json(
         tmp_path / "long_context.json",
         {"overall_status": "pass", "candidate_count": 1, "comparisons": []},
@@ -199,6 +216,51 @@ def test_go_no_go_r350_rejects_empty_passing_long_context_report(tmp_path: Path)
     assert report["overall_status"] == "fail"
     assert global_kv["status"] == "fail"
     assert global_kv["evidence"]["long_context_compare"]["benefit_candidates"] == []
+
+
+def test_go_no_go_r350_rejects_empty_passing_out_by_difficulty_report(tmp_path: Path) -> None:
+    stage_gate = _write_json(tmp_path / "stage_gate.json", _passing_stage_gate())
+    compute = _write_json(
+        tmp_path / "compute.json",
+        {
+            "run_count": 2,
+            "baseline_run": "baseline",
+            "runs": [
+                {"run_dir": "baseline"},
+                {
+                    "run_dir": "routed",
+                    "stage": "stage4_output_action",
+                    "validation_loss": 9.9,
+                    "baseline_comparison": {
+                        "same_active_compute_view": True,
+                        "validation_loss_delta": -0.1,
+                    },
+                },
+            ],
+        },
+    )
+    reasoning_baseline = _write_json(tmp_path / "reasoning_base.json", {"overall": {"exact_match_accuracy": 0.2}})
+    reasoning_candidate = _write_json(tmp_path / "reasoning_candidate.json", {"overall": {"exact_match_accuracy": 0.3}})
+    out = _write_json(tmp_path / "out.json", {"overall_status": "pass"})
+    long_context = _write_json(tmp_path / "long_context.json", _controlled_memory_compare())
+
+    output = make_go_no_go_report(
+        stage_gate_report_path=stage_gate,
+        compute_report_path=compute,
+        reasoning_baseline_report_path=reasoning_baseline,
+        reasoning_candidate_report_paths=[reasoning_candidate],
+        out_by_difficulty_report_path=out,
+        long_context_compare_report_path=long_context,
+        phase="r350_to_1b",
+        output_path=tmp_path / "go.json",
+    )
+    report = json.loads(output.read_text(encoding="utf-8"))
+    criteria = {item["name"]: item for item in report["phases"]["r350_to_1b"]["criteria"]}
+    out_action = criteria["out_action_reduces_compute_on_easy_samples"]
+
+    assert report["overall_status"] == "fail"
+    assert out_action["status"] == "fail"
+    assert out_action["evidence"]["checks"] is None
 
 
 def test_go_no_go_r350_accepts_global_kv_ablation_memory_quality_evidence(tmp_path: Path) -> None:
@@ -224,7 +286,7 @@ def test_go_no_go_r350_accepts_global_kv_ablation_memory_quality_evidence(tmp_pa
     )
     reasoning_baseline = _write_json(tmp_path / "reasoning_base.json", {"overall": {"exact_match_accuracy": 0.2}})
     reasoning_candidate = _write_json(tmp_path / "reasoning_candidate.json", {"overall": {"exact_match_accuracy": 0.3}})
-    out = _write_json(tmp_path / "out.json", {"overall_status": "pass"})
+    out = _write_json(tmp_path / "out.json", _passing_out_by_difficulty())
     global_kv_ablation = _write_json(
         tmp_path / "global_kv_ablation.json",
         {

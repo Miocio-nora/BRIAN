@@ -202,8 +202,8 @@ def _r350_decision(
         ),
         _criterion(
             "out_action_reduces_compute_on_easy_samples",
-            _report_passed(out_by_difficulty_report),
-            _report_evidence(out_by_difficulty_report),
+            _out_by_difficulty_passed(out_by_difficulty_report),
+            _out_by_difficulty_evidence(out_by_difficulty_report),
         ),
         _criterion(
             "global_kv_long_context_benefit_if_tested",
@@ -360,6 +360,33 @@ def _report_evidence(report: dict[str, Any]) -> dict[str, Any]:
         "status": report.get("status"),
         "candidate_count": report.get("candidate_count"),
         "checks": report.get("checks"),
+    }
+
+
+def _out_by_difficulty_passed(report: dict[str, Any]) -> bool | None:
+    if not report:
+        return None
+    if report.get("overall_status") != "pass":
+        return False
+    checks = report.get("checks")
+    if not isinstance(checks, dict):
+        return False
+    required = [
+        "easy_and_hard_present",
+        "route_steps_non_decreasing_with_difficulty",
+        "active_compute_non_decreasing_with_difficulty",
+        "easy_output_probability_at_least_hard",
+    ]
+    return all(checks.get(key) is True for key in required)
+
+
+def _out_by_difficulty_evidence(report: dict[str, Any]) -> dict[str, Any]:
+    if not report:
+        return {}
+    return {
+        **_report_evidence(report),
+        "deltas": report.get("deltas"),
+        "by_difficulty": report.get("by_difficulty"),
     }
 
 
