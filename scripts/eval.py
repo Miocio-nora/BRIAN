@@ -50,6 +50,7 @@ def main() -> None:
     parser.add_argument("--utilization", type=float, default=None, help="Reference utilization for compute reports.")
     parser.add_argument("--min-active-compute-range", type=float, default=None, help="Minimum active compute range for cost reports.")
     parser.add_argument("--cost-control-report", default=None, help="Cost-control report path for stage gate eval.")
+    parser.add_argument("--hard-exit-compare-report", default=None, help="Hard-exit comparison report path for stage gate eval.")
     parser.add_argument("--stage-gate-report", default=None, help="Stage-gate report path for decision reports.")
     parser.add_argument("--routing-report", default=None, help="Routing report path for decision and audit reports.")
     parser.add_argument("--compute-report", default=None, help="Compute report path for decision reports.")
@@ -81,6 +82,8 @@ def main() -> None:
             thresholds=config.get("thresholds", {}),
             cost_control_report_path=args.cost_control_report or config.get("cost_control_report_path"),
             out_by_difficulty_report_path=args.out_by_difficulty_report or config.get("out_by_difficulty_report_path"),
+            hard_exit_compare_report_path=args.hard_exit_compare_report
+            or config.get("hard_exit_compare_report_path"),
             global_kv_retention_report_path=args.global_kv_retention_report
             or config.get("global_kv_retention_report_path"),
             long_context_compare_report_path=args.long_context_compare_report

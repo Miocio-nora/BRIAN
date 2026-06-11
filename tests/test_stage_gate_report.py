@@ -136,6 +136,47 @@ def _baseline_difficulty_report() -> dict:
     }
 
 
+def _hard_exit_compare_report(*, overall_status: str = "pass", checks: dict[str, bool] | None = None) -> dict:
+    comparison_checks = {
+        "baseline_without_hard_exit": True,
+        "candidate_with_hard_exit": True,
+        "inference_timing_present": True,
+        "latency_ratio_within_threshold": True,
+        "inference_time_ratio_within_threshold": True,
+        "route_steps_not_increasing": True,
+        "validation_loss_not_worse": True,
+    }
+    if checks is not None:
+        comparison_checks |= checks
+    return {
+        "baseline_run": "stage4_without_hard_exit",
+        "baseline": {"hard_exit_enabled": False, "average_route_steps": 2.5},
+        "candidate_count": 1,
+        "comparisons": [
+            {
+                "candidate_run": "stage4_hard_exit",
+                "candidate": {"hard_exit_enabled": True, "average_route_steps": 2.0},
+                "baseline_comparison": {
+                    "validation_loss_delta": 0.0,
+                    "validation_loss_ratio": 1.0,
+                    "inference_latency_ms_per_token_ratio": 0.9,
+                    "inference_time_seconds_ratio": 0.9,
+                    "average_route_steps_ratio": 0.8,
+                },
+                "checks": comparison_checks,
+                "status": "pass" if all(comparison_checks.values()) else "warn",
+            }
+        ],
+        "thresholds": {
+            "max_validation_loss_delta": 0.0,
+            "max_latency_ratio": 1.0,
+            "max_inference_time_ratio": 1.0,
+            "max_route_step_ratio": 1.0,
+        },
+        "overall_status": overall_status,
+    }
+
+
 def _data_manifest_ref() -> dict:
     return {
         "recipe_name": "unit_data",
@@ -929,24 +970,163 @@ def test_stage_gate_report_uses_cost_control_report(tmp_path: Path) -> None:
         ),
         encoding="utf-8",
     )
+    hard_exit_report = tmp_path / "hard_exit_compare.json"
+    hard_exit_report.write_text(json.dumps(_hard_exit_compare_report()), encoding="utf-8")
+    report_path = make_stage_gate_report(
+        [stage4],
+        output_path=tmp_path / "gate.json",
+        cost_control_report_path=cost_report,
+        out_by_difficulty_report_path=out_report,
+        hard_exit_compare_report_path=hard_exit_report,
+    )
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    gate = report["gates"]["stage4_to_5"]
+    assert gate["status"] == "pass"
+    assert gate["checks"]["cost_control_report_present"] is True
+    assert gate["checks"]["cost_control_active_range_present"] is True
+    assert gate["checks"]["cost_control_average_steps_not_increasing"] is True
+    assert gate["checks"]["out_by_difficulty_report_present"] is True
+    assert gate["checks"]["out_by_difficulty_passed"] is True
+    assert gate["checks"]["hard_exit_compare_report_present"] is True
+    assert gate["checks"]["hard_exit_compare_passed"] is True
+    assert gate["checks"]["hard_exit_compute_adjusted_candidate_passed"] is True
+    assert gate["checks"]["not_never_exit"] is True
+    assert gate["checks"]["hard_compute_not_below_easy"] is True
+    assert gate["cost_control_status"] == "pass"
+    assert gate["hard_exit_compare_status"] == "pass"
+    assert report["supplemental_reports"]["cost_control_report"] == str(cost_report)
+    assert report["supplemental_reports"]["out_by_difficulty_report"] == str(out_report)
+    assert report["supplemental_reports"]["hard_exit_compare_report"] == str(hard_exit_report)
+
+
+def test_stage4_gate_requires_hard_exit_compare_report(tmp_path: Path) -> None:
+    stage4 = _write_run(
+        tmp_path,
+        "stage4",
+        stage="stage4_output_action",
+        val_loss=10.0,
+        train_row={
+            "average_route_steps": 2.0,
+            "first_exit_step_histogram": {"1": 1, "2": 2},
+            "top1_block_histogram": {"0": 1, "1": 1, "2": 1},
+        },
+    )
+    cost_report = tmp_path / "cost.json"
+    cost_report.write_text(
+        json.dumps(
+            {
+                "analysis": {
+                    "status": "pass",
+                    "checks": {
+                        "active_compute_range_present": True,
+                        "active_compute_not_increasing_with_cost": True,
+                        "average_steps_not_increasing_with_cost": True,
+                        "output_probability_not_decreasing_with_cost": True,
+                    },
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    out_report = tmp_path / "out_by_difficulty.json"
+    out_report.write_text(
+        json.dumps(
+            {
+                "overall_status": "pass",
+                "checks": {
+                    "route_steps_non_decreasing_with_difficulty": True,
+                    "active_compute_non_decreasing_with_difficulty": True,
+                    "easy_output_probability_at_least_hard": True,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
     report_path = make_stage_gate_report(
         [stage4],
         output_path=tmp_path / "gate.json",
         cost_control_report_path=cost_report,
         out_by_difficulty_report_path=out_report,
     )
-    report = json.loads(report_path.read_text(encoding="utf-8"))
-    gate = report["gates"]["stage4_to_5"]
+    gate = json.loads(report_path.read_text(encoding="utf-8"))["gates"]["stage4_to_5"]
+
+    assert gate["status"] == "warn"
     assert gate["checks"]["cost_control_report_present"] is True
-    assert gate["checks"]["cost_control_active_range_present"] is True
-    assert gate["checks"]["cost_control_average_steps_not_increasing"] is True
     assert gate["checks"]["out_by_difficulty_report_present"] is True
-    assert gate["checks"]["out_by_difficulty_passed"] is True
-    assert gate["checks"]["not_never_exit"] is True
-    assert gate["checks"]["hard_compute_not_below_easy"] is True
-    assert gate["cost_control_status"] == "pass"
-    assert report["supplemental_reports"]["cost_control_report"] == str(cost_report)
-    assert report["supplemental_reports"]["out_by_difficulty_report"] == str(out_report)
+    assert gate["checks"]["hard_exit_compare_report_present"] is False
+    assert gate["checks"]["hard_exit_compare_passed"] is False
+    assert gate["checks"]["hard_exit_compute_adjusted_candidate_passed"] is False
+
+
+def test_stage4_gate_requires_passing_hard_exit_compare_report(tmp_path: Path) -> None:
+    stage4 = _write_run(
+        tmp_path,
+        "stage4",
+        stage="stage4_output_action",
+        val_loss=10.0,
+        train_row={
+            "average_route_steps": 2.0,
+            "first_exit_step_histogram": {"1": 1, "2": 2},
+            "top1_block_histogram": {"0": 1, "1": 1, "2": 1},
+        },
+    )
+    cost_report = tmp_path / "cost.json"
+    cost_report.write_text(
+        json.dumps(
+            {
+                "analysis": {
+                    "status": "pass",
+                    "checks": {
+                        "active_compute_range_present": True,
+                        "active_compute_not_increasing_with_cost": True,
+                        "average_steps_not_increasing_with_cost": True,
+                        "output_probability_not_decreasing_with_cost": True,
+                    },
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    out_report = tmp_path / "out_by_difficulty.json"
+    out_report.write_text(
+        json.dumps(
+            {
+                "overall_status": "pass",
+                "checks": {
+                    "route_steps_non_decreasing_with_difficulty": True,
+                    "active_compute_non_decreasing_with_difficulty": True,
+                    "easy_output_probability_at_least_hard": True,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    hard_exit_report = tmp_path / "hard_exit_compare.json"
+    hard_exit_report.write_text(
+        json.dumps(
+            _hard_exit_compare_report(
+                overall_status="warn",
+                checks={"latency_ratio_within_threshold": False},
+            )
+        ),
+        encoding="utf-8",
+    )
+
+    report_path = make_stage_gate_report(
+        [stage4],
+        output_path=tmp_path / "gate.json",
+        cost_control_report_path=cost_report,
+        out_by_difficulty_report_path=out_report,
+        hard_exit_compare_report_path=hard_exit_report,
+    )
+    gate = json.loads(report_path.read_text(encoding="utf-8"))["gates"]["stage4_to_5"]
+
+    assert gate["status"] == "warn"
+    assert gate["checks"]["hard_exit_compare_report_present"] is True
+    assert gate["checks"]["hard_exit_compare_passed"] is False
+    assert gate["checks"]["hard_exit_compute_adjusted_candidate_passed"] is False
+    assert gate["hard_exit_compare_checks"][0]["checks"]["latency_ratio_within_threshold"] is False
 
 
 def test_stage4_gate_warns_when_model_never_exits(tmp_path: Path) -> None:

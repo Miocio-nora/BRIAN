@@ -31,6 +31,7 @@ def make_stage_gate_report(
     thresholds: dict[str, float] | None = None,
     cost_control_report_path: str | Path | None = None,
     out_by_difficulty_report_path: str | Path | None = None,
+    hard_exit_compare_report_path: str | Path | None = None,
     global_kv_retention_report_path: str | Path | None = None,
     long_context_compare_report_path: str | Path | None = None,
     parallel_passing_report_path: str | Path | None = None,
@@ -41,6 +42,9 @@ def make_stage_gate_report(
     by_stage = {summary["stage"]: summary for summary in summaries if summary["stage"]}
     cost_control_report = _read_json_if_exists(Path(cost_control_report_path)) if cost_control_report_path else {}
     out_by_difficulty_report = _read_json_if_exists(Path(out_by_difficulty_report_path)) if out_by_difficulty_report_path else {}
+    hard_exit_compare_report = (
+        _read_json_if_exists(Path(hard_exit_compare_report_path)) if hard_exit_compare_report_path else {}
+    )
     long_context_compare_report = (
         _read_json_if_exists(Path(long_context_compare_report_path)) if long_context_compare_report_path else {}
     )
@@ -57,7 +61,12 @@ def make_stage_gate_report(
         "stage1_to_2": _gate_stage1(by_stage.get("stage1_fixed_route"), by_stage.get("stage0_baseline"), thresholds),
         "stage2_to_3": _gate_stage2(by_stage.get("stage2_router_imitation"), thresholds),
         "stage3_to_4": _gate_stage3(by_stage.get("stage3_scheduled_free_routing"), by_stage.get("stage1_fixed_route"), thresholds),
-        "stage4_to_5": _gate_stage4(by_stage.get("stage4_output_action"), cost_control_report, out_by_difficulty_report),
+        "stage4_to_5": _gate_stage4(
+            by_stage.get("stage4_output_action"),
+            cost_control_report,
+            out_by_difficulty_report,
+            hard_exit_compare_report,
+        ),
         "stage5_to_6": _gate_stage5(
             by_stage.get("stage5_global_kv"),
             thresholds,
@@ -79,6 +88,7 @@ def make_stage_gate_report(
         "supplemental_reports": {
             "cost_control_report": str(cost_control_report_path) if cost_control_report_path else None,
             "out_by_difficulty_report": str(out_by_difficulty_report_path) if out_by_difficulty_report_path else None,
+            "hard_exit_compare_report": str(hard_exit_compare_report_path) if hard_exit_compare_report_path else None,
             "global_kv_retention_report": str(global_kv_retention_report_path)
             if global_kv_retention_report_path
             else None,
@@ -375,6 +385,7 @@ def _gate_stage4(
     stage4: dict[str, Any] | None,
     cost_control_report: dict[str, Any] | None = None,
     out_by_difficulty_report: dict[str, Any] | None = None,
+    hard_exit_compare_report: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     exit_hist = _latest_exit_hist(stage4)
     total_exits = sum(exit_hist.values()) if exit_hist else 0
@@ -383,6 +394,17 @@ def _gate_stage4(
     cost_analysis = cost_control_report.get("analysis", {}) if cost_control_report else {}
     cost_checks = cost_analysis.get("checks", {}) if isinstance(cost_analysis.get("checks"), dict) else {}
     out_checks = out_by_difficulty_report.get("checks", {}) if isinstance(out_by_difficulty_report.get("checks"), dict) else {}
+    hard_exit_key_checks = [
+        "baseline_without_hard_exit",
+        "candidate_with_hard_exit",
+        "inference_timing_present",
+        "latency_ratio_within_threshold",
+        "inference_time_ratio_within_threshold",
+        "route_steps_not_increasing",
+        "validation_loss_not_worse",
+    ]
+    hard_exit_comparisons = hard_exit_compare_report.get("comparisons", []) if hard_exit_compare_report else []
+    any_hard_exit_pass = _any_passing_comparison_with_checks(hard_exit_comparisons, hard_exit_key_checks)
     checks = {
         "exit_distribution_present": bool(exit_hist),
         "not_all_immediate_exit": bool(exit_hist) and immediate < total_exits,
@@ -400,6 +422,11 @@ def _gate_stage4(
         "hard_compute_not_below_easy": bool(out_checks.get("route_steps_non_decreasing_with_difficulty", False))
         and bool(out_checks.get("active_compute_non_decreasing_with_difficulty", False)),
         "easy_output_probability_not_below_hard": bool(out_checks.get("easy_output_probability_at_least_hard", False)),
+        "hard_exit_compare_report_present": bool(hard_exit_compare_report),
+        "hard_exit_compare_passed": bool(
+            hard_exit_compare_report and hard_exit_compare_report.get("overall_status") == "pass"
+        ),
+        "hard_exit_compute_adjusted_candidate_passed": any_hard_exit_pass,
         "checkpoint_present": bool(stage4 and stage4["has_checkpoint_latest"]),
         **_routed_run_artifact_gate_checks(stage4),
         **_validation_report_gate_checks(stage4),
@@ -425,6 +452,17 @@ def _gate_stage4(
             "out_by_difficulty_status": out_by_difficulty_report.get("overall_status") if out_by_difficulty_report else None,
             "out_by_difficulty_checks": out_checks,
             "out_by_difficulty_deltas": out_by_difficulty_report.get("deltas", {}) if out_by_difficulty_report else {},
+            "hard_exit_compare_status": hard_exit_compare_report.get("overall_status")
+            if hard_exit_compare_report
+            else None,
+            "hard_exit_compare_candidate_count": hard_exit_compare_report.get("candidate_count")
+            if hard_exit_compare_report
+            else None,
+            "hard_exit_compare_thresholds": hard_exit_compare_report.get("thresholds", {})
+            if hard_exit_compare_report
+            else {},
+            "hard_exit_compare_required_checks": hard_exit_key_checks,
+            "hard_exit_compare_checks": _comparison_checks(hard_exit_comparisons),
             **_validation_report_gate_extras(stage4),
             **_routing_report_gate_extras(stage4),
             **_model_stats_gate_extras(stage4),
@@ -585,6 +623,24 @@ def _any_passing_comparison_with_checks(comparisons: Any, required_checks: list[
         if all(checks.get(check) is True for check in required_checks):
             return True
     return False
+
+
+def _comparison_checks(comparisons: Any) -> list[dict[str, Any]]:
+    if not isinstance(comparisons, list):
+        return []
+    rows = []
+    for item in comparisons:
+        if not isinstance(item, dict):
+            continue
+        rows.append(
+            {
+                "candidate_run": item.get("candidate_run"),
+                "status": item.get("status"),
+                "checks": item.get("checks", {}),
+                "baseline_comparison": item.get("baseline_comparison", {}),
+            }
+        )
+    return rows
 
 
 def _resume_event_checks(event: Any) -> dict[str, bool]:
