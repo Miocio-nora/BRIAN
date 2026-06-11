@@ -45,6 +45,15 @@ def test_generate_reasoning_samples_cycles_tasks_and_difficulties() -> None:
     assert "->" in samples[0].prompt
 
 
+def test_generate_reasoning_samples_default_includes_transform() -> None:
+    samples = generate_reasoning_samples(5, seed=1, difficulties=["easy"])
+    transform = samples[2]
+
+    assert transform.task_family == "transform"
+    assert transform.prompt.startswith("transform:")
+    assert "->" in transform.prompt
+
+
 def test_normalize_answer_and_summary() -> None:
     assert normalize_answer("  a   b\n") == "a b"
     summary = summarize_reasoning_rows(

@@ -97,7 +97,7 @@ def generate_reasoning_samples(
     difficulties: list[str] | None = None,
 ) -> list[ReasoningSample]:
     rng = random.Random(seed)
-    families = task_families or ["copy", "reverse", "arithmetic", "rewrite"]
+    families = task_families or ["copy", "reverse", "transform", "arithmetic", "rewrite"]
     difficulty_values = difficulties or ["easy", "medium", "hard"]
     samples = []
     for index in range(count):
@@ -204,10 +204,15 @@ def normalize_answer(text: str) -> str:
 
 
 def _make_sample(rng: random.Random, task_family: str, difficulty: str) -> ReasoningSample:
-    if task_family in {"copy", "reverse"}:
+    if task_family in {"copy", "reverse", "transform"}:
         length = {"easy": 4, "medium": 8, "hard": 16}[difficulty]
         values = [str(rng.randint(0, 9)) for _ in range(length)]
-        answer_values = values if task_family == "copy" else list(reversed(values))
+        if task_family == "copy":
+            answer_values = values
+        elif task_family == "reverse":
+            answer_values = list(reversed(values))
+        else:
+            answer_values = [str((int(value) + 1) % 10) for value in values]
         return ReasoningSample(task_family, difficulty, f"{task_family}: {' '.join(values)} ->", " " + " ".join(answer_values))
     if task_family == "arithmetic":
         terms = {"easy": 2, "medium": 4, "hard": 8}[difficulty]

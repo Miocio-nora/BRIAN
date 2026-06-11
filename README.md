@@ -16,7 +16,7 @@ Implemented v0.1 pieces:
 
 - reproducible data manifest and fixed-length token packing;
 - offline tokenizer artifacts (`tokenizer.json`, `tokenizer_config.json`, and metadata) for smoke data;
-- synthetic routing smoke data;
+- synthetic routing smoke data covering copy, reverse, transform, arithmetic, rewrite, parentheses, and repeated transforms;
 - LLaMA-like decoder-only baseline;
 - BRIAN route-core wrapper with pre / route-pool / post blocks;
 - block-position state, latent router, pseudo policies, and route metrics;
