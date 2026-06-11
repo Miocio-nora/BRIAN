@@ -125,6 +125,16 @@ python scripts/eval.py \
 
 This writes a reasoning report with exact-match accuracy, teacher-forced target token accuracy, per-task/per-difficulty summaries, and routed compute diagnostics.
 
+Summarize whether the OUT action reduces routed compute on easy samples:
+
+```bash
+python scripts/eval.py \
+  --config configs/eval/out_by_difficulty.yaml \
+  --reasoning-report <reasoning_report.json>
+```
+
+This reads the reasoning report's sample JSONL and writes an OUT-by-difficulty report with easy/medium/hard route-step, active-compute, and output-probability summaries.
+
 Run the lightweight long-context / Global KV eval:
 
 ```bash
@@ -260,6 +270,7 @@ python scripts/eval.py \
   --config configs/eval/go_no_go_report.yaml \
   --stage-gate-report reports/stage_gate_report.json \
   --compute-report reports/compute_report.json \
+  --out-by-difficulty-report reports/out_by_difficulty_report.json \
   --long-context-compare-report reports/long_context_compare.json \
   --parallel-compare-report reports/parallel_compare.json
 ```

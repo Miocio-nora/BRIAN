@@ -1,0 +1,10 @@
+eval_name: out_by_difficulty_report
+output_path: reports/out_by_difficulty_report.json
+reasoning_report_path: null
+samples_path: null
+difficulty_order:
+  - easy
+  - medium
+  - hard
+min_step_delta: 0.0
+min_output_probability_delta: 0.0

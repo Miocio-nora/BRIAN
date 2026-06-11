@@ -12,6 +12,7 @@ from brian_sphere_llm.eval.difficulty_report import make_difficulty_report
 from brian_sphere_llm.eval.go_no_go_report import make_go_no_go_report
 from brian_sphere_llm.eval.long_context import make_long_context_report
 from brian_sphere_llm.eval.long_context_compare import make_long_context_comparison_report
+from brian_sphere_llm.eval.out_by_difficulty import make_out_by_difficulty_report
 from brian_sphere_llm.eval.parallel_compare import make_parallel_comparison_report
 from brian_sphere_llm.eval.reasoning import make_reasoning_report
 from brian_sphere_llm.eval.routing_report import make_routing_report
@@ -40,6 +41,8 @@ def main() -> None:
     parser.add_argument("--parallel-compare-report", default=None, help="Parallel comparison report path for stage gate eval.")
     parser.add_argument("--position-ablation-report", default=None, help="Position ablation report path for go/no-go eval.")
     parser.add_argument("--out-by-difficulty-report", default=None, help="OUT-by-difficulty report path for go/no-go eval.")
+    parser.add_argument("--reasoning-report", default=None, help="Reasoning report path for OUT-by-difficulty eval.")
+    parser.add_argument("--samples-path", default=None, help="Sample JSONL path for OUT-by-difficulty eval.")
     parser.add_argument("--checkpoint", default=None, help="Checkpoint name for model-based evals.")
     parser.add_argument("--sample-count", type=int, default=None, help="Sample count for synthetic evals.")
     parser.add_argument("--baseline-report", default=None, help="Baseline report path for comparison evals.")
@@ -150,6 +153,19 @@ def main() -> None:
             max_estimated_flops_ratio=float(config.get("max_estimated_flops_ratio", 2.0)),
             min_throughput_ratio=float(config.get("min_throughput_ratio", 0.0)),
             min_parallel_branch_count=float(config.get("min_parallel_branch_count", 1.5)),
+        )
+    elif eval_name == "out_by_difficulty_report":
+        reasoning_report = args.reasoning_report or config.get("reasoning_report_path")
+        samples_path = args.samples_path or config.get("samples_path")
+        if not reasoning_report and not samples_path:
+            raise SystemExit("out_by_difficulty_report requires --reasoning-report or --samples-path")
+        report = make_out_by_difficulty_report(
+            reasoning_report_path=reasoning_report,
+            samples_path=samples_path,
+            output_path=args.output or config.get("output_path"),
+            difficulty_order=list(config.get("difficulty_order", ["easy", "medium", "hard"])),
+            min_step_delta=float(config.get("min_step_delta", 0.0)),
+            min_output_probability_delta=float(config.get("min_output_probability_delta", 0.0)),
         )
     elif eval_name == "go_no_go_report":
         stage_gate_report = args.stage_gate_report or config.get("stage_gate_report_path")
