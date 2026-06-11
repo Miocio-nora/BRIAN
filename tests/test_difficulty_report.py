@@ -5,6 +5,8 @@ torch = pytest.importorskip("torch")
 from brian_sphere_llm.eval.difficulty import summarize_difficulty_samples
 from brian_sphere_llm.eval.difficulty_report import (
     _assign_difficulty_bins,
+    _forward_routed_for_eval,
+    _mapping_config,
     _summarize_baseline_difficulty_samples,
     causal_lm_sample_losses,
     output_probability_per_sample,
@@ -69,6 +71,33 @@ def test_summarize_difficulty_samples_rejects_boolean_numeric_metrics() -> None:
     assert summary["mean_routed_cross_entropy"] is None
     assert summary["mean_route_steps"] is None
     assert summary["difficulty_step_correlation"] is None
+
+
+def test_difficulty_eval_forward_parses_string_false_hard_exit() -> None:
+    class CaptureModel:
+        hard_exit = None
+
+        def __call__(self, *args, **kwargs):
+            self.hard_exit = kwargs["hard_exit"]
+            return {"logits": torch.zeros(1, 4, 8)}
+
+    model = CaptureModel()
+    batch = torch.randint(0, 8, (1, 4))
+
+    _forward_routed_for_eval(
+        model,
+        batch,
+        config={"stage": "stage4_output_action", "routing": {"hard_exit": "false"}},
+        route_mode="free",
+        global_step=1,
+    )
+
+    assert model.hard_exit is False
+
+
+def test_difficulty_eval_forward_rejects_non_mapping_routing_config() -> None:
+    with pytest.raises(ValueError, match="routing"):
+        _mapping_config({"routing": True}, "routing")
 
 
 def test_baseline_difficulty_bins_are_ce_ordered() -> None:

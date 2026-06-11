@@ -8,8 +8,11 @@ torch = pytest.importorskip("torch")
 from brian_sphere_llm.data.pack import write_index, write_token_bin
 from brian_sphere_llm.model.baseline import BaselineConfig, BaselineLM
 from brian_sphere_llm.train.trainer import (
+    _bool_config,
     _float_config,
+    _forward_for_stage,
     _int_config,
+    _mapping_config,
     _model_stats,
     _schedule_values,
     evaluate,
@@ -48,6 +51,40 @@ def test_train_config_numeric_helpers_reject_boolean_values() -> None:
         _float_config({"learning_rate": False}, "learning_rate", minimum=0.0)
     with pytest.raises(ValueError, match="grad_clip"):
         _float_config({"grad_clip": True}, "grad_clip", minimum=0.0)
+
+
+def test_train_config_bool_helper_parses_strings_and_rejects_non_boolean() -> None:
+    assert _bool_config({"resume": "false"}, "resume", default=True) is False
+    assert _bool_config({"resume": "true"}, "resume", default=False) is True
+    with pytest.raises(ValueError, match="resume"):
+        _bool_config({"resume": 1}, "resume", default=False)
+
+
+def test_train_config_mapping_helper_rejects_non_mapping() -> None:
+    with pytest.raises(ValueError, match="routing"):
+        _mapping_config({"routing": True}, "routing")
+
+
+def test_forward_for_stage_parses_string_false_hard_exit() -> None:
+    class CaptureModel:
+        hard_exit = None
+
+        def __call__(self, *args, **kwargs):
+            self.hard_exit = kwargs["hard_exit"]
+            return {"loss": torch.tensor(0.0)}
+
+    model = CaptureModel()
+    batch = torch.randint(0, 8, (1, 4))
+
+    _forward_for_stage(
+        model,
+        batch,
+        config={"stage": "stage4_output_action", "routing": {"hard_exit": "false"}},
+        route_mode="free",
+        global_step=1,
+    )
+
+    assert model.hard_exit is False
 
 
 def test_evaluate_reports_inference_timing_metrics() -> None:

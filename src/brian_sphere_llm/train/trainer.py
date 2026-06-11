@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 import json
 import math
 import time
@@ -104,7 +105,7 @@ def train_from_config(config_path: str | Path) -> Path:
     start_step = 0
     best_eval_loss: float | None = None
     latest = run_dir / "checkpoint_latest"
-    if config.get("resume") and (latest / "state.pt").exists():
+    if _bool_config(config, "resume", default=False) and (latest / "state.pt").exists():
         payload = load_checkpoint(latest, model=model, optimizer=optimizer)
         start_step = int(payload.get("step", 0))
         best_eval_loss = payload.get("best_eval_loss")
@@ -120,7 +121,7 @@ def train_from_config(config_path: str | Path) -> Path:
 
     train_log = JsonlLogger(run_dir / "train_log.jsonl")
     eval_log = JsonlLogger(run_dir / "eval_log.jsonl")
-    write_routing_report = bool(config.get("write_routing_report_on_checkpoint", True))
+    write_routing_report = _bool_config(config, "write_routing_report_on_checkpoint", default=True)
     stage_mode = train_mode_for_stage(config["stage"])
     iterator = iter(train_loader)
     model.train()
@@ -182,8 +183,8 @@ def train_from_config(config_path: str | Path) -> Path:
 def _forward_for_stage(model: Any, batch: "torch.Tensor", *, config: dict[str, Any], route_mode: str, global_step: int) -> dict:
     if route_mode == "baseline":
         return model(batch, targets=batch)
-    routing_cfg = config.get("routing", {})
-    loss_weights = dict(config.get("loss_weights", {}))
+    routing_cfg = _mapping_config(config, "routing")
+    loss_weights = dict(_mapping_config(config, "loss_weights"))
     schedule_values = _schedule_values(config, route_mode=route_mode, global_step=global_step)
     router_probability = schedule_values.get("scheduled_router_probability")
     if "scheduled_lambda_route" in schedule_values:
@@ -194,7 +195,12 @@ def _forward_for_stage(model: Any, batch: "torch.Tensor", *, config: dict[str, A
         route_mode=route_mode,
         pseudo_policy=str(routing_cfg.get("pseudo_policy", "sequential")),
         loss_weights=loss_weights,
-        hard_exit=bool(routing_cfg.get("hard_exit", config.get("stage") == "stage4_output_action")),
+        hard_exit=_bool_mapping_value(
+            routing_cfg,
+            "hard_exit",
+            default=str(config.get("stage")) == "stage4_output_action",
+            name="routing.hard_exit",
+        ),
         router_probability=router_probability,
         global_step=global_step,
     )
@@ -206,10 +212,10 @@ def _forward_for_stage(model: Any, batch: "torch.Tensor", *, config: dict[str, A
 def _schedule_values(config: dict[str, Any], *, route_mode: str, global_step: int) -> dict[str, float]:
     if route_mode != "scheduled":
         return {}
-    routing_cfg = config.get("routing", {})
-    schedule = routing_cfg.get("schedule", []) if isinstance(routing_cfg, dict) else []
-    loss_weights = config.get("loss_weights", {})
-    default_lambda_route = loss_weights.get("route", 0.0) if isinstance(loss_weights, dict) else 0.0
+    routing_cfg = _mapping_config(config, "routing")
+    schedule = routing_cfg.get("schedule", [])
+    loss_weights = _mapping_config(config, "loss_weights")
+    default_lambda_route = loss_weights.get("route", 0.0)
     return {
         "scheduled_router_probability": scheduled_value(schedule, global_step, "router_probability", 0.0),
         "scheduled_lambda_route": scheduled_value(schedule, global_step, "lambda_route", default_lambda_route),
@@ -332,6 +338,35 @@ def _float_config(
     if minimum is not None and number < minimum:
         raise ValueError(f"{key} must be >= {minimum}.")
     return number
+
+
+def _bool_config(config: dict[str, Any], key: str, *, default: bool) -> bool:
+    return _bool_value(config.get(key, default), key)
+
+
+def _bool_mapping_value(mapping: Mapping[str, Any], key: str, *, default: bool, name: str) -> bool:
+    return _bool_value(mapping.get(key, default), name)
+
+
+def _bool_value(value: Any, name: str) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "off"}:
+            return False
+    raise ValueError(f"{name} must be a boolean.")
+
+
+def _mapping_config(config: dict[str, Any], key: str) -> Mapping[str, Any]:
+    value = config.get(key, {})
+    if value is None:
+        return {}
+    if not isinstance(value, Mapping):
+        raise ValueError(f"{key} must be a mapping.")
+    return value
 
 
 def _data_manifest_ref(data_config: dict[str, Any], tokenized_dir: Path) -> dict[str, Any]:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 import json
 from pathlib import Path
 from typing import Any
@@ -285,8 +286,8 @@ def _forward_routed_for_eval(
 ) -> dict[str, Any]:
     if route_mode == "baseline":
         return model(batch)
-    routing_cfg = config.get("routing", {})
-    loss_weights = dict(config.get("loss_weights", {}))
+    routing_cfg = _mapping_config(config, "routing")
+    loss_weights = dict(_mapping_config(config, "loss_weights"))
     router_probability = None
     if route_mode == "scheduled":
         schedule = routing_cfg.get("schedule", [])
@@ -298,10 +299,37 @@ def _forward_routed_for_eval(
         route_mode=route_mode,
         pseudo_policy=str(routing_cfg.get("pseudo_policy", "sequential")),
         loss_weights=loss_weights,
-        hard_exit=bool(routing_cfg.get("hard_exit", config.get("stage") == "stage4_output_action")),
+        hard_exit=_bool_mapping_value(
+            routing_cfg,
+            "hard_exit",
+            default=str(config.get("stage")) == "stage4_output_action",
+            name="routing.hard_exit",
+        ),
         router_probability=router_probability,
         global_step=global_step,
     )
+
+
+def _bool_mapping_value(mapping: Mapping[str, Any], key: str, *, default: bool, name: str) -> bool:
+    value = mapping.get(key, default)
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "off"}:
+            return False
+    raise ValueError(f"{name} must be a boolean.")
+
+
+def _mapping_config(config: dict[str, Any], key: str) -> Mapping[str, Any]:
+    value = config.get(key, {})
+    if value is None:
+        return {}
+    if not isinstance(value, Mapping):
+        raise ValueError(f"{key} must be a mapping.")
+    return value
 
 
 def _load_model_for_run(run_dir: Path, checkpoint: str, device: "torch.device") -> Any:
