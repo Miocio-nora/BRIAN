@@ -89,6 +89,16 @@ Training writes `routing_report.json` at checkpoint saves by default (`write_rou
 
 When `resume: true` loads `checkpoint_latest`, training appends `resume_events.jsonl`. Stage 0 gates use this file as explicit checkpoint-resume evidence.
 
+Generate fixed-route stability evidence for a Stage 1 run:
+
+```bash
+python scripts/eval.py \
+  --config configs/eval/fixed_route_stability.yaml \
+  --run <stage1_fixed_route_run>
+```
+
+This writes `fixed_route_stability_report.json` with fixed-path shape, finite-logit/loss, route-target, and position-norm checks. Stage 1 gates use it as explicit no-instability evidence.
+
 Generate a stage gate report across multiple runs:
 
 ```bash

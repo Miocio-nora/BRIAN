@@ -88,6 +88,7 @@ def _summarize_run(run_dir: Path) -> dict[str, Any]:
     model_stats = _read_json_if_exists(run_dir / "model_stats.json")
     routing_report = _read_json_if_exists(run_dir / "routing_report.json")
     baseline_difficulty_report = _read_json_if_exists(run_dir / "baseline_difficulty_report.json")
+    fixed_route_stability_report = _read_json_if_exists(run_dir / "fixed_route_stability_report.json")
     difficulty_report = _read_json_if_exists(run_dir / "difficulty_step_report.json")
     determinism_report = _read_json_if_exists(run_dir / "eval_determinism_report.json")
     eval_rows = _read_jsonl(run_dir / "eval_log.jsonl")
@@ -118,6 +119,9 @@ def _summarize_run(run_dir: Path) -> dict[str, Any]:
         "baseline_difficulty_sample_count": _num(baseline_difficulty_report.get("sample_count")),
         "baseline_difficulty_bin_count": _num(baseline_difficulty_report.get("difficulty_bin_count")),
         "baseline_difficulty_by_bin": baseline_difficulty_report.get("by_difficulty", {}),
+        "fixed_route_stability_report_present": bool(fixed_route_stability_report),
+        "fixed_route_stability_status": fixed_route_stability_report.get("overall_status"),
+        "fixed_route_stability_checks": fixed_route_stability_report.get("checks", {}),
         "difficulty_step_correlation": difficulty_corr,
         "difficulty_sample_count": _num(difficulty_report.get("sample_count")),
         "eval_determinism_status": determinism_report.get("overall_status"),
@@ -165,9 +169,19 @@ def _gate_stage1(stage1: dict[str, Any] | None, stage0: dict[str, Any] | None, t
         "loss_within_1_to_3_percent": ratio is not None and ratio <= thresholds["fixed_route_loss_ratio_max"],
         "route_imitation_accuracy": _metric_at_least(stage1, "route_imitation_accuracy", thresholds["route_imitation_fixed_min"]),
         "position_state_finite": _finite(_routing_metric(stage1, "position_norm_mean")),
+        "fixed_route_stability_report_present": bool(stage1 and stage1.get("fixed_route_stability_report_present")),
+        "fixed_route_stability_passed": bool(stage1 and stage1.get("fixed_route_stability_status") == "pass"),
         "checkpoint_present": bool(stage1 and stage1["has_checkpoint_latest"]),
     }
-    return _gate("Stage 1 fixed route wrapper matches baseline and router imitates fixed path", checks, {"loss_ratio": ratio})
+    return _gate(
+        "Stage 1 fixed route wrapper matches baseline and router imitates fixed path",
+        checks,
+        {
+            "loss_ratio": ratio,
+            "fixed_route_stability_status": stage1.get("fixed_route_stability_status") if stage1 else None,
+            "fixed_route_stability_checks": stage1.get("fixed_route_stability_checks") if stage1 else {},
+        },
+    )
 
 
 def _gate_stage2(stage2: dict[str, Any] | None, thresholds: dict[str, float]) -> dict[str, Any]:

@@ -10,6 +10,7 @@ from brian_sphere_llm.eval.compute_report import make_compute_report
 from brian_sphere_llm.eval.cost_control_report import make_cost_control_report
 from brian_sphere_llm.eval.determinism_report import make_eval_determinism_report
 from brian_sphere_llm.eval.difficulty_report import make_baseline_difficulty_report, make_difficulty_report
+from brian_sphere_llm.eval.fixed_route_stability import make_fixed_route_stability_report
 from brian_sphere_llm.eval.go_no_go_report import make_go_no_go_report
 from brian_sphere_llm.eval.long_context import make_long_context_report
 from brian_sphere_llm.eval.long_context_compare import make_long_context_comparison_report
@@ -96,6 +97,18 @@ def main() -> None:
             device_name=str(config.get("device", "auto")),
             checkpoint=str(args.checkpoint or config.get("checkpoint", "checkpoint_best")),
             difficulty_bins=list(config.get("difficulty_bins") or ["easy", "medium", "hard"]),
+        )
+    elif eval_name == "fixed_route_stability_report":
+        if not args.run:
+            raise SystemExit("fixed_route_stability_report requires --run")
+        report = make_fixed_route_stability_report(
+            args.run,
+            output_path=args.output or config.get("output_path"),
+            split=args.split or str(config.get("split", "val")),
+            batch_size=args.batch_size or config.get("batch_size"),
+            max_batches=args.max_batches or int(config.get("max_batches", 8)),
+            checkpoint=str(args.checkpoint or config.get("checkpoint", "checkpoint_best")),
+            device_name=str(config.get("device", "auto")),
         )
     elif eval_name == "compute_report":
         runs = args.runs or ([args.run] if args.run else config.get("runs", []))

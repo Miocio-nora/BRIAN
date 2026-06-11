@@ -18,6 +18,7 @@ def _write_run(
     determinism_status: str | None = None,
     resume_event: dict | None = None,
     baseline_difficulty_report: dict | None = None,
+    fixed_route_stability_report: dict | None = None,
 ) -> Path:
     run_dir = root / name
     run_dir.mkdir(parents=True)
@@ -39,6 +40,11 @@ def _write_run(
     if baseline_difficulty_report is not None:
         (run_dir / "baseline_difficulty_report.json").write_text(
             json.dumps(baseline_difficulty_report),
+            encoding="utf-8",
+        )
+    if fixed_route_stability_report is not None:
+        (run_dir / "fixed_route_stability_report.json").write_text(
+            json.dumps(fixed_route_stability_report),
             encoding="utf-8",
         )
     return run_dir
@@ -80,6 +86,19 @@ def test_stage_gate_report_writes_json(tmp_path: Path) -> None:
             "block_load_entropy": 0.5,
             "top1_block_histogram": {"0": 2, "1": 2, "2": 1},
         },
+        fixed_route_stability_report={
+            "overall_status": "pass",
+            "checks": {
+                "forward_completed": True,
+                "logits_shape_matches": True,
+                "logits_finite": True,
+                "sample_losses_finite": True,
+                "fixed_route_matches_targets": True,
+                "route_imitation_accuracy_is_one": True,
+                "position_norm_finite": True,
+                "routing_summary_finite": True,
+            },
+        },
     )
     stage5 = _write_run(
         tmp_path,
@@ -116,6 +135,7 @@ def test_stage_gate_report_writes_json(tmp_path: Path) -> None:
     assert report["gates"]["stage0_to_1"]["checks"]["checkpoint_resume_event"] is True
     assert report["gates"]["stage0_to_1"]["checks"]["baseline_difficulty_bins_present"] is True
     assert report["gates"]["stage1_to_2"]["status"] == "pass"
+    assert report["gates"]["stage1_to_2"]["checks"]["fixed_route_stability_passed"] is True
     assert report["gates"]["stage5_to_6"]["status"] == "pass"
     assert report["supplemental_reports"]["long_context_compare_report"] == str(long_context_compare)
 

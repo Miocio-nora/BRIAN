@@ -1,0 +1,7 @@
+eval_name: fixed_route_stability_report
+output_path: null
+split: val
+batch_size: null
+max_batches: 8
+checkpoint: checkpoint_best
+device: auto
