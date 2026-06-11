@@ -18,6 +18,7 @@ DEFAULT_THRESHOLDS = {
     "route_entropy_min": 0.05,
     "block_load_entropy_min": 0.05,
     "route_path_diversity_min": 0.05,
+    "difficulty_step_correlation_min": 0.0,
     "global_attention_mass_min": 1e-6,
     "global_read_gate_min": 1e-6,
 }
@@ -319,6 +320,7 @@ def _gate_stage3(stage3: dict[str, Any] | None, stage1: dict[str, Any] | None, t
     ratio = None
     if stage3 and stage1 and _finite(stage3.get("validation_loss")) and _finite(stage1.get("validation_loss")):
         ratio = stage3["validation_loss"] / max(1e-9, stage1["validation_loss"])
+    difficulty_corr = _num(stage3.get("difficulty_step_correlation") if stage3 else None)
     checks = {
         "validation_loss_not_collapsed": ratio is not None and ratio <= thresholds["stage3_loss_ratio_max"],
         "route_entropy_present": _metric_at_least(stage3, "route_entropy", thresholds["route_entropy_min"]),
@@ -327,7 +329,9 @@ def _gate_stage3(stage3: dict[str, Any] | None, stage1: dict[str, Any] | None, t
         "average_route_steps_present": _finite(_routing_metric(stage3, "average_route_steps")),
         "difficulty_report_present": _num(stage3.get("difficulty_sample_count") if stage3 else None) is not None
         and float(stage3["difficulty_sample_count"]) >= 1.0,
-        "difficulty_step_correlation_finite": _finite(stage3.get("difficulty_step_correlation") if stage3 else None),
+        "difficulty_step_correlation_finite": _finite(difficulty_corr),
+        "difficulty_step_correlation_positive": difficulty_corr is not None
+        and difficulty_corr > thresholds["difficulty_step_correlation_min"],
         "scheduled_routing_report_present": bool(stage3 and stage3.get("scheduled_routing_report_present")),
         "scheduled_routing_passed": bool(stage3 and stage3.get("scheduled_routing_status") == "pass"),
         "checkpoint_present": bool(stage3 and stage3["has_checkpoint_latest"]),
@@ -342,6 +346,8 @@ def _gate_stage3(stage3: dict[str, Any] | None, stage1: dict[str, Any] | None, t
         checks,
         {
             "loss_ratio_vs_stage1": ratio,
+            "difficulty_step_correlation": difficulty_corr,
+            "difficulty_step_correlation_min": thresholds["difficulty_step_correlation_min"],
             "scheduled_routing_status": stage3.get("scheduled_routing_status") if stage3 else None,
             "scheduled_routing_checks": stage3.get("scheduled_routing_checks") if stage3 else {},
             "scheduled_routing_logged_values": stage3.get("scheduled_routing_logged_values") if stage3 else [],
