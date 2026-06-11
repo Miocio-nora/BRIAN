@@ -185,6 +185,7 @@ def make_experiment_package_report(
         has_compute_row = bool(compute_row)
         comparison = compute_row.get("baseline_comparison") if isinstance(compute_row, dict) else None
         baseline_comparison_present = entry.role == "baseline" or bool(isinstance(comparison, dict))
+        baseline_comparison_views_present = entry.role == "baseline" or _baseline_comparison_views_present(comparison)
         entry_rows.append(
             {
                 **entry.to_json(),
@@ -194,12 +195,14 @@ def make_experiment_package_report(
                 "routing_report_present": has_routing_report,
                 "compute_row_present": has_compute_row,
                 "baseline_comparison_present": baseline_comparison_present,
+                "baseline_comparison_views_present": baseline_comparison_views_present,
                 "status": _entry_status(
                     result_present=result is not None,
                     run_dir_present=bool(run_dir),
                     routing_report_present=has_routing_report,
                     compute_row_present=has_compute_row,
                     baseline_comparison_present=baseline_comparison_present,
+                    baseline_comparison_views_present=baseline_comparison_views_present,
                     baseline_required=bool(baseline_run_str) and entry.role != "baseline",
                 ),
             }
@@ -216,6 +219,8 @@ def make_experiment_package_report(
         "baseline_run_known": bool(baseline_run_str),
         "non_baseline_compute_comparisons_present": bool(non_baseline_rows)
         and all(row["baseline_comparison_present"] for row in non_baseline_rows),
+        "non_baseline_compute_comparison_views_present": bool(non_baseline_rows)
+        and all(row["baseline_comparison_views_present"] for row in non_baseline_rows),
     }
     report = {
         "experiment_name": plan.experiment_name,
@@ -292,16 +297,30 @@ def _entry_status(
     routing_report_present: bool,
     compute_row_present: bool,
     baseline_comparison_present: bool,
+    baseline_comparison_views_present: bool,
     baseline_required: bool,
 ) -> str:
     required = [result_present, run_dir_present, routing_report_present, compute_row_present]
     if baseline_required:
         required.append(baseline_comparison_present)
+        required.append(baseline_comparison_views_present)
     if all(required):
         return "pass"
     if any(required):
         return "warn"
     return "fail"
+
+
+def _baseline_comparison_views_present(comparison: Any) -> bool:
+    if not isinstance(comparison, dict):
+        return False
+    required = [
+        "same_parameter_count_view",
+        "same_active_compute_view",
+        "similar_training_flops_view",
+        "validation_loss_delta",
+    ]
+    return all(key in comparison for key in required)
 
 
 def _package_status(checks: dict[str, bool], entries: list[dict[str, Any]]) -> str:
