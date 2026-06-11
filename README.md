@@ -305,6 +305,17 @@ python scripts/run_experiment.py \
 
 This manifest covers A0-A7 from the project plan: fixed baseline, fixed route wrapper, sequential router imitation, skip/recur router imitation, scheduled free routing with block-position state, no-position ablation, no hard output-action ablation, and no-location-loss ablation.
 
+Audit a formal experiment package manifest before training:
+
+```bash
+python scripts/eval.py \
+  --config configs/eval/experiment_coverage.yaml \
+  --experiment-manifest configs/experiments/route_core_r125_package.yaml
+```
+
+This writes `reports/experiment_coverage_report.json`, checking that the manifest covers the required Project Plan package entries, that train configs resolve, and that stages/modes/model flags match the intended ablation roles.
+The same report supports the R350 scaling, Global KV, and parallel-passing manifests with `profile: auto`.
+
 Resolve an experiment manifest without training:
 
 ```bash

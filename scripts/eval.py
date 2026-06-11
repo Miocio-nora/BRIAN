@@ -10,6 +10,7 @@ from brian_sphere_llm.eval.compute_report import make_compute_report
 from brian_sphere_llm.eval.cost_control_report import make_cost_control_report
 from brian_sphere_llm.eval.determinism_report import make_eval_determinism_report
 from brian_sphere_llm.eval.difficulty_report import make_baseline_difficulty_report, make_difficulty_report
+from brian_sphere_llm.eval.experiment_coverage import make_experiment_coverage_report
 from brian_sphere_llm.eval.fixed_route_stability import make_fixed_route_stability_report
 from brian_sphere_llm.eval.global_kv_ablation import make_global_kv_ablation_report
 from brian_sphere_llm.eval.global_kv_retention import make_global_kv_retention_report
@@ -358,6 +359,16 @@ def main() -> None:
             parallel_passing_report_path=args.parallel_passing_report
             or config.get("parallel_passing_report_path"),
             thresholds=config.get("thresholds", {}),
+        )
+    elif eval_name == "experiment_coverage_report":
+        manifest = args.experiment_manifest or config.get("experiment_manifest")
+        if not manifest:
+            raise SystemExit("experiment_coverage_report requires --experiment-manifest")
+        report = make_experiment_coverage_report(
+            manifest,
+            output_path=args.output or config.get("output_path"),
+            profile=str(config.get("profile", "auto")),
+            include_baseline=bool(config.get("include_baseline", False)),
         )
     else:
         if not args.run:

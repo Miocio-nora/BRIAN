@@ -1,0 +1,5 @@
+eval_name: experiment_coverage_report
+output_path: reports/experiment_coverage_report.json
+experiment_manifest: null
+profile: auto
+include_baseline: false
