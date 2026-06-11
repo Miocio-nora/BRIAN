@@ -330,9 +330,11 @@ def test_stage_gate_report_writes_json(tmp_path: Path) -> None:
     assert report["gates"]["stage0_to_1"]["checks"]["data_manifest_ref_valid"] is True
     assert report["gates"]["stage0_to_1"]["checks"]["config_resolved_present"] is True
     assert report["gates"]["stage0_to_1"]["checks"]["train_log_present"] is True
+    assert report["gates"]["stage0_to_1"]["checks"]["validation_report_valid"] is True
     assert report["gates"]["stage0_to_1"]["checks"]["baseline_difficulty_bins_present"] is True
     assert report["gates"]["stage1_to_2"]["status"] == "pass"
     assert report["gates"]["stage1_to_2"]["checks"]["fixed_route_stability_passed"] is True
+    assert report["gates"]["stage1_to_2"]["checks"]["validation_report_valid"] is True
     assert report["gates"]["stage1_to_2"]["checks"]["routing_report_valid"] is True
     assert report["gates"]["stage1_to_2"]["checks"]["checkpoint_best_present"] is True
     assert report["gates"]["stage2_to_3"]["status"] == "pass"
@@ -464,6 +466,48 @@ def test_stage0_gate_requires_valid_model_stats(tmp_path: Path) -> None:
     assert gate["checks"]["model_stats_valid"] is False
     assert gate["model_stats_checks"]["model_name_present"] is True
     assert gate["model_stats_checks"]["parameter_count_positive_integer"] is False
+
+
+def test_stage0_gate_requires_valid_validation_report(tmp_path: Path) -> None:
+    baseline = _write_run(
+        tmp_path,
+        "baseline",
+        stage="stage0_baseline",
+        val_loss=10.0,
+        train_row={},
+        determinism_status="pass",
+        resume_event={
+            "checkpoint": "checkpoint_latest",
+            "resumed_from_step": 1,
+            "target_max_steps": 2,
+            "optimizer_state_loaded": True,
+        },
+        baseline_difficulty_report=_baseline_difficulty_report(),
+    )
+    (baseline / "lm_eval_report.json").write_text(
+        json.dumps(
+            {
+                "overall_status": "fail",
+                "checks": {
+                    "eval_log_present": True,
+                    "validation_loss_present": True,
+                    "perplexity_present": False,
+                    "requested_metrics_present": False,
+                },
+                "metrics": {"validation_loss": 10.0, "perplexity": None},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    report_path = make_stage_gate_report([baseline], output_path=tmp_path / "gate.json")
+    gate = json.loads(report_path.read_text(encoding="utf-8"))["gates"]["stage0_to_1"]
+
+    assert gate["status"] == "warn"
+    assert gate["checks"]["validation_report_present"] is True
+    assert gate["checks"]["validation_report_valid"] is False
+    assert gate["validation_report_status"] == "fail"
+    assert gate["validation_report_checks"]["perplexity_present"] is False
 
 
 def test_stage1_gate_requires_valid_routing_report(tmp_path: Path) -> None:
