@@ -20,6 +20,10 @@ Implemented v0.1 pieces:
 - BRIAN route-core wrapper with pre / route-pool / post blocks;
 - block-position state, latent router, pseudo policies, and route metrics;
 - Stage 0 baseline, Stage 1 fixed route, Stage 2 router imitation, and Stage 3 scheduled routing entrypoints;
+- top-2 weighted route fusion for free/scheduled routing;
+- hard `OUT` terminal behavior for Stage 4;
+- minimal canonical Global KV path with sink + sliding window retention for Stage 5;
+- branch scoring and pruning skeleton for later parallel passing;
 - JSONL train/eval logs, model stats, checkpoint save/resume, and routing report generation;
 - B200-compatible conda environment using PyTorch CUDA 12.8 wheels.
 
@@ -69,6 +73,9 @@ python scripts/train.py --config configs/train/stage0_tiny_debug.yaml
 python scripts/train.py --config configs/train/stage1_tiny_debug.yaml
 python scripts/train.py --config configs/train/stage2_tiny_debug.yaml
 python scripts/train.py --config configs/train/stage3_tiny_debug.yaml
+python scripts/train.py --config configs/train/stage3_top2_tiny_debug.yaml
+python scripts/train.py --config configs/train/stage4_tiny_debug.yaml
+python scripts/train.py --config configs/train/stage5_tiny_debug.yaml
 ```
 
 Generate a routing report:
@@ -185,7 +192,7 @@ Main stages:
 | 3 | Gradually allow router-controlled forward paths. |
 | 4 | Enable `OUT` as a hard terminal action. |
 | 5 | Add optional canonical global KV memory after route-core stability. |
-| 6 | Add optional parallel latent passing only after earlier stages succeed. |
+| 6 | Add optional parallel latent passing only after earlier stages succeed. Skeleton interfaces exist; model integration is intentionally deferred. |
 
 ## Required Diagnostics
 

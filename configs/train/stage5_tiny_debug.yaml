@@ -1,0 +1,3 @@
+extends: stage4_tiny_debug.yaml
+stage: stage5_global_kv
+model_config: ../model/brian_tiny_global_kv.yaml

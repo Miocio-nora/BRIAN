@@ -1,0 +1,7 @@
+extends: brian_r125_top2.yaml
+model_name: brian_r125_global_kv
+global_kv: true
+global_code_dim: 64
+global_sink_slots: 4
+global_window_slots: 32
+hard_exit: true

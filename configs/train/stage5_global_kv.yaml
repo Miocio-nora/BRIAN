@@ -1,4 +1,12 @@
 extends: stage4_output_action.yaml
 stage: stage5_global_kv
-enabled: false
-note: "Planning config only. Implement after route-core gates pass."
+model_config: ../model/brian_r125_global_kv.yaml
+routing:
+  mode: scheduled
+  pseudo_policy: mixed_skip_recur
+  hard_exit: true
+loss_weights:
+  route: 0.05
+  balance: 0.01
+  cost: 0.01
+  location: 0.02

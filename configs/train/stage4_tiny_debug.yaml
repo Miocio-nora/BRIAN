@@ -1,0 +1,22 @@
+extends: stage3_tiny_debug.yaml
+stage: stage4_output_action
+model_config: ../model/brian_tiny_top2.yaml
+routing:
+  mode: scheduled
+  pseudo_policy: mixed_skip_recur
+  hard_exit: true
+  schedule:
+    - max_step: 1
+      router_probability: 0.25
+      lambda_route: 0.5
+    - max_step: 2
+      router_probability: 0.75
+      lambda_route: 0.2
+    - max_step: 3
+      router_probability: 1.00
+      lambda_route: 0.05
+loss_weights:
+  route: 0.05
+  balance: 0.01
+  cost: 0.01
+  location: 0.02

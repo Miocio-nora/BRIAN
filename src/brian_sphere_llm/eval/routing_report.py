@@ -19,6 +19,10 @@ ROUTING_KEYS = {
     "position_norm_mean",
     "location_distance_mean",
     "route_imitation_accuracy",
+    "weighted_fusion_ratio",
+    "global_attention_mass",
+    "global_read_gate_mean",
+    "global_cache_slots_mean",
 }
 
 
