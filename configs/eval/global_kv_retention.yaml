@@ -1,0 +1,6 @@
+eval_name: global_kv_retention_report
+output_path: null
+min_global_attention_mass: 0.000001
+min_global_read_gate: 0.000001
+mass_tolerance: 0.00001
+capacity_slack: 0.000001

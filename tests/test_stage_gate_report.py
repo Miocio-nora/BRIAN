@@ -22,6 +22,7 @@ def _write_run(
     pseudo_route_curriculum_report: dict | None = None,
     scheduled_routing_report: dict | None = None,
     difficulty_report: dict | None = None,
+    global_kv_retention_report: dict | None = None,
 ) -> Path:
     run_dir = root / name
     run_dir.mkdir(parents=True)
@@ -63,6 +64,11 @@ def _write_run(
     if difficulty_report is not None:
         (run_dir / "difficulty_step_report.json").write_text(
             json.dumps(difficulty_report),
+            encoding="utf-8",
+        )
+    if global_kv_retention_report is not None:
+        (run_dir / "global_kv_retention_report.json").write_text(
+            json.dumps(global_kv_retention_report),
             encoding="utf-8",
         )
     return run_dir
@@ -186,6 +192,36 @@ def test_stage_gate_report_writes_json(tmp_path: Path) -> None:
             "global_cache_slots_mean": 2.0,
             "top1_block_histogram": {"0": 1, "1": 1, "2": 1},
         },
+        global_kv_retention_report={
+            "overall_status": "pass",
+            "model": {
+                "global_kv_enabled": True,
+                "global_sink_slots": 1,
+                "global_window_slots": 3,
+                "retention_capacity_slots": 4,
+            },
+            "metrics": {
+                "global_attention_mass": 1.0,
+                "global_sink_attention_mass": 0.25,
+                "global_window_attention_mass": 0.75,
+                "global_read_gate_mean": 0.01,
+                "global_cache_slots_mean": 2.0,
+            },
+            "checks": {
+                "stage5_global_kv_stage": True,
+                "global_kv_enabled": True,
+                "sink_slots_configured": True,
+                "window_slots_configured": True,
+                "retention_capacity_present": True,
+                "global_attention_mass_nonzero": True,
+                "global_read_gate_nonzero": True,
+                "global_cache_slots_present": True,
+                "sink_attention_mass_measured": True,
+                "window_attention_mass_measured": True,
+                "sink_window_mass_conserved": True,
+                "cache_slots_within_retention_capacity": True,
+            },
+        },
     )
     long_context_compare = tmp_path / "long_context_compare.json"
     long_context_compare.write_text(
@@ -216,6 +252,8 @@ def test_stage_gate_report_writes_json(tmp_path: Path) -> None:
     assert report["gates"]["stage3_to_4"]["status"] == "pass"
     assert report["gates"]["stage3_to_4"]["checks"]["scheduled_routing_passed"] is True
     assert report["gates"]["stage5_to_6"]["status"] == "pass"
+    assert report["gates"]["stage5_to_6"]["checks"]["global_kv_retention_passed"] is True
+    assert report["gates"]["stage5_to_6"]["checks"]["sink_window_attention_measured"] is True
     assert report["supplemental_reports"]["long_context_compare_report"] == str(long_context_compare)
 
 
@@ -303,6 +341,7 @@ def test_stage5_gate_warns_without_long_context_compare_report(tmp_path: Path) -
     report_path = make_stage_gate_report([stage5], output_path=tmp_path / "gate.json")
     gate = json.loads(report_path.read_text(encoding="utf-8"))["gates"]["stage5_to_6"]
     assert gate["status"] == "warn"
+    assert gate["checks"]["global_kv_retention_report_present"] is False
     assert gate["checks"]["long_context_compare_report_present"] is False
     assert gate["checks"]["long_context_global_kv_benefit_proxy"] is False
 

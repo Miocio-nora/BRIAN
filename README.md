@@ -200,6 +200,16 @@ python scripts/eval.py \
 
 This writes a needle-retrieval / two-hop tracing report with exact-match accuracy, teacher-forced target token accuracy, truncation rate, estimated fp16 KV/global-code memory budgets, and Global KV routing diagnostics including sink/window attention mass.
 
+Summarize the Stage 5 Global KV sink + sliding-window retention evidence:
+
+```bash
+python scripts/eval.py \
+  --config configs/eval/global_kv_retention.yaml \
+  --run <stage5_global_kv_run>
+```
+
+This writes `global_kv_retention_report.json` in the run directory by default. The report checks that Global KV is enabled, sink/window slots are configured, sink/window attention mass is measured, global read/cache metrics are non-zero, and cache slots stay within the configured retention capacity.
+
 Compare a local-KV baseline against one or more Global KV candidates:
 
 ```bash
@@ -226,6 +236,7 @@ The comparison report checks that Global KV is active, the estimated Global KV c
 python scripts/eval.py \
   --config configs/eval/stage_gate_eval.yaml \
   --runs <stage0_run> <stage1_run> <stage2_run> <stage3_run> <stage4_run> <stage5_run> \
+  --global-kv-retention-report <stage5_global_kv_run>/global_kv_retention_report.json \
   --long-context-compare-report reports/long_context_compare.json
 ```
 

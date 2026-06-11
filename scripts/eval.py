@@ -11,6 +11,7 @@ from brian_sphere_llm.eval.cost_control_report import make_cost_control_report
 from brian_sphere_llm.eval.determinism_report import make_eval_determinism_report
 from brian_sphere_llm.eval.difficulty_report import make_baseline_difficulty_report, make_difficulty_report
 from brian_sphere_llm.eval.fixed_route_stability import make_fixed_route_stability_report
+from brian_sphere_llm.eval.global_kv_retention import make_global_kv_retention_report
 from brian_sphere_llm.eval.go_no_go_report import make_go_no_go_report
 from brian_sphere_llm.eval.long_context import make_long_context_report
 from brian_sphere_llm.eval.long_context_compare import make_long_context_comparison_report
@@ -43,6 +44,7 @@ def main() -> None:
     parser.add_argument("--stage-gate-report", default=None, help="Stage-gate report path for decision reports.")
     parser.add_argument("--compute-report", default=None, help="Compute report path for decision reports.")
     parser.add_argument("--long-context-compare-report", default=None, help="Long-context comparison report path for stage gate eval.")
+    parser.add_argument("--global-kv-retention-report", default=None, help="Global KV retention report path for stage gate eval.")
     parser.add_argument("--parallel-compare-report", default=None, help="Parallel comparison report path for stage gate eval.")
     parser.add_argument("--position-ablation-report", default=None, help="Position ablation report path for go/no-go eval.")
     parser.add_argument("--out-by-difficulty-report", default=None, help="OUT-by-difficulty report path for go/no-go eval.")
@@ -66,6 +68,8 @@ def main() -> None:
             thresholds=config.get("thresholds", {}),
             cost_control_report_path=args.cost_control_report or config.get("cost_control_report_path"),
             out_by_difficulty_report_path=args.out_by_difficulty_report or config.get("out_by_difficulty_report_path"),
+            global_kv_retention_report_path=args.global_kv_retention_report
+            or config.get("global_kv_retention_report_path"),
             long_context_compare_report_path=args.long_context_compare_report
             or config.get("long_context_compare_report_path"),
             parallel_compare_report_path=args.parallel_compare_report or config.get("parallel_compare_report_path"),
@@ -184,6 +188,17 @@ def main() -> None:
             min_global_attention_mass=float(config.get("min_global_attention_mass", 1e-6)),
             min_global_read_gate=float(config.get("min_global_read_gate", 1e-6)),
             quality_tolerance=float(config.get("quality_tolerance", 0.0)),
+        )
+    elif eval_name == "global_kv_retention_report":
+        if not args.run:
+            raise SystemExit("global_kv_retention_report requires --run")
+        report = make_global_kv_retention_report(
+            args.run,
+            output_path=args.output or config.get("output_path"),
+            min_global_attention_mass=float(config.get("min_global_attention_mass", 1e-6)),
+            min_global_read_gate=float(config.get("min_global_read_gate", 1e-6)),
+            mass_tolerance=float(config.get("mass_tolerance", 1e-5)),
+            capacity_slack=float(config.get("capacity_slack", 1e-6)),
         )
     elif eval_name == "parallel_compare":
         baseline_run = args.baseline_run or config.get("baseline_run")

@@ -29,6 +29,7 @@ def make_stage_gate_report(
     thresholds: dict[str, float] | None = None,
     cost_control_report_path: str | Path | None = None,
     out_by_difficulty_report_path: str | Path | None = None,
+    global_kv_retention_report_path: str | Path | None = None,
     long_context_compare_report_path: str | Path | None = None,
     parallel_compare_report_path: str | Path | None = None,
 ) -> Path:
@@ -40,6 +41,9 @@ def make_stage_gate_report(
     long_context_compare_report = (
         _read_json_if_exists(Path(long_context_compare_report_path)) if long_context_compare_report_path else {}
     )
+    global_kv_retention_report = (
+        _read_json_if_exists(Path(global_kv_retention_report_path)) if global_kv_retention_report_path else {}
+    )
     parallel_compare_report = _read_json_if_exists(Path(parallel_compare_report_path)) if parallel_compare_report_path else {}
     gates = {
         "stage0_to_1": _gate_stage0(by_stage.get("stage0_baseline")),
@@ -47,7 +51,12 @@ def make_stage_gate_report(
         "stage2_to_3": _gate_stage2(by_stage.get("stage2_router_imitation"), thresholds),
         "stage3_to_4": _gate_stage3(by_stage.get("stage3_scheduled_free_routing"), by_stage.get("stage1_fixed_route"), thresholds),
         "stage4_to_5": _gate_stage4(by_stage.get("stage4_output_action"), cost_control_report, out_by_difficulty_report),
-        "stage5_to_6": _gate_stage5(by_stage.get("stage5_global_kv"), thresholds, long_context_compare_report),
+        "stage5_to_6": _gate_stage5(
+            by_stage.get("stage5_global_kv"),
+            thresholds,
+            long_context_compare_report,
+            global_kv_retention_report,
+        ),
         "stage6_to_scale": _gate_stage6(by_stage.get("stage6_parallel_passing"), parallel_compare_report),
     }
     report = {
@@ -59,6 +68,9 @@ def make_stage_gate_report(
         "supplemental_reports": {
             "cost_control_report": str(cost_control_report_path) if cost_control_report_path else None,
             "out_by_difficulty_report": str(out_by_difficulty_report_path) if out_by_difficulty_report_path else None,
+            "global_kv_retention_report": str(global_kv_retention_report_path)
+            if global_kv_retention_report_path
+            else None,
             "long_context_compare_report": str(long_context_compare_report_path) if long_context_compare_report_path else None,
             "parallel_compare_report": str(parallel_compare_report_path) if parallel_compare_report_path else None,
         },
@@ -96,6 +108,7 @@ def _summarize_run(run_dir: Path) -> dict[str, Any]:
     scheduled_routing_report = _read_json_if_exists(run_dir / "scheduled_routing_report.json")
     difficulty_report = _read_json_if_exists(run_dir / "difficulty_step_report.json")
     determinism_report = _read_json_if_exists(run_dir / "eval_determinism_report.json")
+    global_kv_retention_report = _read_json_if_exists(run_dir / "global_kv_retention_report.json")
     eval_rows = _read_jsonl(run_dir / "eval_log.jsonl")
     train_rows = _read_jsonl(run_dir / "train_log.jsonl")
     resume_rows = _read_jsonl(run_dir / "resume_events.jsonl")
@@ -135,6 +148,12 @@ def _summarize_run(run_dir: Path) -> dict[str, Any]:
         "scheduled_routing_status": scheduled_routing_report.get("overall_status"),
         "scheduled_routing_checks": scheduled_routing_report.get("checks", {}),
         "scheduled_routing_logged_values": scheduled_routing_report.get("logged_schedule_values", []),
+        "global_kv_retention_report": global_kv_retention_report,
+        "global_kv_retention_report_present": bool(global_kv_retention_report),
+        "global_kv_retention_status": global_kv_retention_report.get("overall_status"),
+        "global_kv_retention_checks": global_kv_retention_report.get("checks", {}),
+        "global_kv_retention_metrics": global_kv_retention_report.get("metrics", {}),
+        "global_kv_retention_model": global_kv_retention_report.get("model", {}),
         "difficulty_step_correlation": difficulty_corr,
         "difficulty_sample_count": _num(difficulty_report.get("sample_count")),
         "eval_determinism_status": determinism_report.get("overall_status"),
@@ -292,21 +311,35 @@ def _gate_stage5(
     stage5: dict[str, Any] | None,
     thresholds: dict[str, float],
     long_context_compare_report: dict[str, Any] | None = None,
+    global_kv_retention_report: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     comparisons = long_context_compare_report.get("comparisons", []) if long_context_compare_report else []
     any_long_context_pass = any(item.get("status") == "pass" for item in comparisons if isinstance(item, dict))
+    retention_report = global_kv_retention_report or (stage5.get("global_kv_retention_report") if stage5 else None) or {}
+    retention_checks = retention_report.get("checks", {}) if isinstance(retention_report.get("checks"), dict) else {}
     checks = {
         "global_attention_mass_nonzero": _metric_at_least(stage5, "global_attention_mass", thresholds["global_attention_mass_min"]),
         "global_read_gate_nonzero": _metric_at_least(stage5, "global_read_gate_mean", thresholds["global_read_gate_min"]),
         "global_cache_slots_present": _metric_at_least(stage5, "global_cache_slots_mean", 1.0),
+        "global_kv_retention_report_present": bool(retention_report),
+        "global_kv_retention_passed": bool(retention_report.get("overall_status") == "pass"),
+        "sink_window_retention_configured": bool(retention_checks.get("sink_slots_configured", False))
+        and bool(retention_checks.get("window_slots_configured", False)),
+        "sink_window_attention_measured": bool(retention_checks.get("sink_attention_mass_measured", False))
+        and bool(retention_checks.get("window_attention_mass_measured", False)),
+        "cache_slots_within_retention_capacity": bool(retention_checks.get("cache_slots_within_retention_capacity", False)),
         "long_context_compare_report_present": bool(long_context_compare_report),
         "long_context_global_kv_benefit_proxy": any_long_context_pass,
         "checkpoint_present": bool(stage5 and stage5["has_checkpoint_latest"]),
     }
     return _gate(
-        "Stage 5 Global KV is active and has long-context comparison evidence",
+        "Stage 5 Global KV retention is active and has long-context comparison evidence",
         checks,
         {
+            "global_kv_retention_status": retention_report.get("overall_status") if retention_report else None,
+            "global_kv_retention_checks": retention_checks,
+            "global_kv_retention_metrics": retention_report.get("metrics", {}) if retention_report else {},
+            "global_kv_retention_model": retention_report.get("model", {}) if retention_report else {},
             "long_context_compare_status": long_context_compare_report.get("overall_status") if long_context_compare_report else None,
             "long_context_compare_candidate_count": long_context_compare_report.get("candidate_count")
             if long_context_compare_report
