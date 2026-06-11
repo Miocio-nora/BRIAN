@@ -7,6 +7,9 @@ max_steps: 25000
 eval_interval: 1000
 save_interval: 2500
 learning_rate: 0.0003
+lr_schedule: linear_warmup_cosine_decay
+warmup_steps: 500
+min_learning_rate: 0.00003
 routing:
   mode: scheduled
   pseudo_policy: mixed_skip_recur

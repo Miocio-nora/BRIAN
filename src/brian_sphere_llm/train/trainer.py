@@ -61,6 +61,11 @@ def train_from_config(config_path: str | Path) -> Path:
     eval_interval = _int_config(config, "eval_interval", default=max_steps, minimum=1)
     save_interval = _int_config(config, "save_interval", default=max_steps, minimum=1)
     learning_rate = _float_config(config, "learning_rate", minimum=0.0)
+    lr_schedule = _lr_schedule_config(config)
+    warmup_steps = _int_config(config, "warmup_steps", default=0, minimum=0)
+    min_learning_rate = _float_config(config, "min_learning_rate", default=0.0, minimum=0.0)
+    if min_learning_rate > learning_rate:
+        raise ValueError("min_learning_rate must be <= learning_rate.")
     weight_decay = _float_config(config, "weight_decay", default=0.0, minimum=0.0)
     set_seed(seed)
 
@@ -133,6 +138,15 @@ def train_from_config(config_path: str | Path) -> Path:
         _synchronize_if_cuda(device)
         started = time.time()
         optimizer.zero_grad(set_to_none=True)
+        current_learning_rate = _learning_rate_for_step(
+            step,
+            base_learning_rate=learning_rate,
+            min_learning_rate=min_learning_rate,
+            max_steps=max_steps,
+            warmup_steps=warmup_steps,
+            schedule=lr_schedule,
+        )
+        _set_optimizer_lr(optimizer, current_learning_rate)
         token_count = 0
         losses: list[float] = []
         loss_components: dict[str, list[float]] = {}
@@ -165,6 +179,7 @@ def train_from_config(config_path: str | Path) -> Path:
         row = {
             "step": step,
             "loss": _mean(losses),
+            "learning_rate": current_learning_rate,
             "micro_batch_size": batch_size,
             "gradient_accumulation_steps": gradient_accumulation_steps,
             "effective_batch_size": batch_size * gradient_accumulation_steps,
@@ -231,6 +246,39 @@ def _forward_for_stage(model: Any, batch: "torch.Tensor", *, config: dict[str, A
 def _set_activation_checkpointing(model: Any, enabled: bool) -> None:
     if hasattr(model, "activation_checkpointing"):
         model.activation_checkpointing = enabled
+
+
+def _set_optimizer_lr(optimizer: Any, learning_rate: float) -> None:
+    for group in optimizer.param_groups:
+        group["lr"] = learning_rate
+
+
+def _learning_rate_for_step(
+    step: int,
+    *,
+    base_learning_rate: float,
+    min_learning_rate: float,
+    max_steps: int,
+    warmup_steps: int,
+    schedule: str,
+) -> float:
+    if schedule == "constant":
+        return base_learning_rate
+    if schedule == "linear_warmup_cosine_decay":
+        if warmup_steps > 0 and step <= warmup_steps:
+            return base_learning_rate * (step / warmup_steps)
+        decay_steps = max(1, max_steps - warmup_steps)
+        progress = min(1.0, max(0.0, (step - warmup_steps) / decay_steps))
+        cosine = 0.5 * (1.0 + math.cos(math.pi * progress))
+        return min_learning_rate + (base_learning_rate - min_learning_rate) * cosine
+    raise ValueError(f"Unsupported lr_schedule: {schedule}")
+
+
+def _lr_schedule_config(config: dict[str, Any]) -> str:
+    schedule = str(config.get("lr_schedule", "constant"))
+    if schedule in {"constant", "linear_warmup_cosine_decay"}:
+        return schedule
+    raise ValueError("lr_schedule must be one of: constant, linear_warmup_cosine_decay.")
 
 
 def _accumulate_loss_components(accumulator: dict[str, list[float]], components: Any) -> None:

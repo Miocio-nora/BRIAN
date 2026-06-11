@@ -8,6 +8,9 @@ max_steps: 10000
 eval_interval: 500
 save_interval: 1000
 learning_rate: 0.00015
+lr_schedule: linear_warmup_cosine_decay
+warmup_steps: 500
+min_learning_rate: 0.000015
 activation_checkpointing: true
 routing:
   mode: scheduled

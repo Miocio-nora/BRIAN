@@ -264,15 +264,29 @@ def _validate_train_config(config: dict[str, Any], path: Path, errors: list[str]
     for key, minimum in [
         ("batch_size", 1),
         ("gradient_accumulation_steps", 1),
+        ("warmup_steps", 0),
         ("max_steps", 1),
         ("eval_interval", 1),
         ("save_interval", 1),
     ]:
         if key in config:
             _int_config_value(config.get(key), key, path, errors, minimum=minimum)
-    for key in ["learning_rate", "weight_decay", "grad_clip"]:
+    for key in ["learning_rate", "min_learning_rate", "weight_decay", "grad_clip"]:
         if key in config:
             _float_config_value(config.get(key), key, path, errors, minimum=0.0)
+    if "learning_rate" in config and "min_learning_rate" in config:
+        learning_rate = _float_config_value(config.get("learning_rate"), "learning_rate", path, errors, minimum=0.0)
+        min_learning_rate = _float_config_value(
+            config.get("min_learning_rate"),
+            "min_learning_rate",
+            path,
+            errors,
+            minimum=0.0,
+        )
+        if learning_rate is not None and min_learning_rate is not None and min_learning_rate > learning_rate:
+            errors.append(f"{path}: min_learning_rate must be <= learning_rate")
+    if "lr_schedule" in config and config.get("lr_schedule") not in {"constant", "linear_warmup_cosine_decay"}:
+        errors.append(f"{path}: lr_schedule must be constant or linear_warmup_cosine_decay")
     for key in ["activation_checkpointing", "resume", "write_routing_report_on_checkpoint"]:
         if key in config and not isinstance(config.get(key), bool):
             errors.append(f"{path}: {key} must be a boolean")

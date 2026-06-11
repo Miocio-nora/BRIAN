@@ -12,6 +12,8 @@ from brian_sphere_llm.train.trainer import (
     _float_config,
     _forward_for_stage,
     _int_config,
+    _learning_rate_for_step,
+    _lr_schedule_config,
     _mapping_config,
     _model_stats,
     _schedule_values,
@@ -58,6 +60,49 @@ def test_train_config_bool_helper_parses_strings_and_rejects_non_boolean() -> No
     assert _bool_config({"resume": "true"}, "resume", default=False) is True
     with pytest.raises(ValueError, match="resume"):
         _bool_config({"resume": 1}, "resume", default=False)
+
+
+def test_learning_rate_schedule_supports_warmup_and_cosine_decay() -> None:
+    assert (
+        _learning_rate_for_step(
+            1,
+            base_learning_rate=0.1,
+            min_learning_rate=0.01,
+            max_steps=10,
+            warmup_steps=2,
+            schedule="linear_warmup_cosine_decay",
+        )
+        == pytest.approx(0.05)
+    )
+    assert _learning_rate_for_step(
+        2,
+        base_learning_rate=0.1,
+        min_learning_rate=0.01,
+        max_steps=10,
+        warmup_steps=2,
+        schedule="linear_warmup_cosine_decay",
+    ) == pytest.approx(0.1)
+    assert _learning_rate_for_step(
+        10,
+        base_learning_rate=0.1,
+        min_learning_rate=0.01,
+        max_steps=10,
+        warmup_steps=2,
+        schedule="linear_warmup_cosine_decay",
+    ) == pytest.approx(0.01)
+    assert _learning_rate_for_step(
+        7,
+        base_learning_rate=0.1,
+        min_learning_rate=0.01,
+        max_steps=10,
+        warmup_steps=2,
+        schedule="constant",
+    ) == pytest.approx(0.1)
+
+
+def test_learning_rate_schedule_config_rejects_unknown_name() -> None:
+    with pytest.raises(ValueError, match="lr_schedule"):
+        _lr_schedule_config({"lr_schedule": "triangular"})
 
 
 def test_train_config_mapping_helper_rejects_non_mapping() -> None:
@@ -246,6 +291,7 @@ def test_train_from_config_writes_routing_report_on_checkpoint(tmp_path: Path) -
     assert report["latest_eval"]["validation_loss"] >= 0.0
     assert report["cost_quality_curve"]["summary"]["train_point_count"] == 1
     train_row = json.loads((run_dir / "train_log.jsonl").read_text(encoding="utf-8").splitlines()[-1])
+    assert train_row["learning_rate"] == pytest.approx(0.001)
     assert train_row["micro_batch_size"] == 2
     assert train_row["gradient_accumulation_steps"] == 2
     assert train_row["effective_batch_size"] == 4

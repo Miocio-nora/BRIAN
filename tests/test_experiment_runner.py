@@ -128,6 +128,10 @@ def test_scale_followup_experiment_manifests_resolve_repo_paths() -> None:
     assert load_config(r1b.entries[2].train_config)["activation_checkpointing"] is True
     assert load_config(r1b.entries[1].train_config)["gradient_accumulation_steps"] == 4
     assert load_config(r1b.entries[2].train_config)["gradient_accumulation_steps"] == 4
+    assert load_config(r1b.entries[1].train_config)["lr_schedule"] == "linear_warmup_cosine_decay"
+    assert load_config(r1b.entries[2].train_config)["lr_schedule"] == "linear_warmup_cosine_decay"
+    assert load_config(r1b.entries[1].train_config)["warmup_steps"] == 2000
+    assert load_config(r1b.entries[2].train_config)["warmup_steps"] == 2000
 
 
 def test_run_experiment_dry_run_writes_resolved_plan(tmp_path: Path) -> None:
