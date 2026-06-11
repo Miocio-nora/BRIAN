@@ -17,6 +17,7 @@ def _write_run(
     train_row: dict,
     determinism_status: str | None = None,
     resume_event: dict | None = None,
+    baseline_difficulty_report: dict | None = None,
 ) -> Path:
     run_dir = root / name
     run_dir.mkdir(parents=True)
@@ -35,6 +36,11 @@ def _write_run(
         )
     if resume_event is not None:
         (run_dir / "resume_events.jsonl").write_text(json.dumps(resume_event) + "\n", encoding="utf-8")
+    if baseline_difficulty_report is not None:
+        (run_dir / "baseline_difficulty_report.json").write_text(
+            json.dumps(baseline_difficulty_report),
+            encoding="utf-8",
+        )
     return run_dir
 
 
@@ -53,6 +59,15 @@ def test_stage_gate_report_writes_json(tmp_path: Path) -> None:
         train_row={},
         determinism_status="pass",
         resume_event={"resumed_from_step": 1, "target_max_steps": 2, "optimizer_state_loaded": True},
+        baseline_difficulty_report={
+            "sample_count": 3,
+            "difficulty_bin_count": 3,
+            "by_difficulty": {
+                "easy": {"sample_count": 1, "mean_baseline_cross_entropy": 1.0},
+                "medium": {"sample_count": 1, "mean_baseline_cross_entropy": 2.0},
+                "hard": {"sample_count": 1, "mean_baseline_cross_entropy": 3.0},
+            },
+        },
     )
     fixed = _write_run(
         tmp_path,
@@ -99,6 +114,7 @@ def test_stage_gate_report_writes_json(tmp_path: Path) -> None:
     assert report["run_count"] == 3
     assert report["gates"]["stage0_to_1"]["status"] == "pass"
     assert report["gates"]["stage0_to_1"]["checks"]["checkpoint_resume_event"] is True
+    assert report["gates"]["stage0_to_1"]["checks"]["baseline_difficulty_bins_present"] is True
     assert report["gates"]["stage1_to_2"]["status"] == "pass"
     assert report["gates"]["stage5_to_6"]["status"] == "pass"
     assert report["supplemental_reports"]["long_context_compare_report"] == str(long_context_compare)

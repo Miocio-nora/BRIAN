@@ -126,6 +126,16 @@ python scripts/eval.py \
 
 This writes `eval_determinism_report.json` by running the same checkpoint twice with the same seed and comparing numeric validation/routing metrics. Stage 0 gates use this as explicit determinism evidence.
 
+Generate baseline validation CE difficulty bins:
+
+```bash
+python scripts/eval.py \
+  --config configs/eval/baseline_difficulty.yaml \
+  --run <stage0_baseline_run>
+```
+
+This writes `baseline_difficulty_report.json` plus sample JSONL rows with baseline cross-entropy and easy/medium/hard bins. Stage 0 gates use this as explicit sample-level CE evidence.
+
 Run the lightweight synthetic reasoning eval:
 
 ```bash

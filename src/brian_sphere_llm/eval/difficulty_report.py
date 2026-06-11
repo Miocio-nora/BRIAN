@@ -24,6 +24,76 @@ except ModuleNotFoundError:  # pragma: no cover
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
+def make_baseline_difficulty_report(
+    run_dir: str | Path,
+    *,
+    output_path: str | Path | None = None,
+    sample_output_path: str | Path | None = None,
+    split: str = "val",
+    batch_size: int | None = None,
+    max_batches: int = 8,
+    device_name: str = "auto",
+    checkpoint: str = "checkpoint_best",
+    difficulty_bins: list[str] | None = None,
+) -> Path:
+    if torch is None or F is None:
+        raise ModuleNotFoundError("PyTorch is required for baseline difficulty reports.")
+
+    run_dir = Path(run_dir)
+    config = load_config(run_dir / "config_resolved.yaml")
+    data_config = config.get("data_config_resolved")
+    if not isinstance(data_config, dict):
+        raise ValueError("Run config must include data_config_resolved.")
+
+    device = _device(device_name)
+    model = _load_model_for_run(run_dir, checkpoint, device)
+    model.eval()
+    effective_batch_size = int(batch_size or config.get("batch_size", 1))
+    loader = build_dataloader(
+        tokenized_dir=data_config["output_dir"],
+        split=split,
+        batch_size=effective_batch_size,
+        shuffle=False,
+    )
+    samples: list[dict[str, Any]] = []
+    with torch.no_grad():
+        for batch_index, batch in enumerate(loader):
+            if batch_index >= max_batches:
+                break
+            batch = batch.to(device)
+            outputs = model(batch)
+            losses = causal_lm_sample_losses(outputs["logits"], batch)
+            offset = batch_index * effective_batch_size
+            for sample_index in range(batch.size(0)):
+                samples.append(
+                    {
+                        "sample_id": offset + sample_index,
+                        "baseline_cross_entropy": float(losses[sample_index].detach().cpu()),
+                    }
+                )
+
+    bins = difficulty_bins or ["easy", "medium", "hard"]
+    _assign_difficulty_bins(samples, bins)
+    if output_path is None:
+        output_path = run_dir / "baseline_difficulty_report.json"
+    output_path = Path(output_path)
+    if sample_output_path is None:
+        sample_output_path = output_path.with_name(output_path.stem + "_samples.jsonl")
+    sample_output_path = Path(sample_output_path)
+    _write_jsonl(samples, sample_output_path)
+    summary = {
+        **_summarize_baseline_difficulty_samples(samples, bins),
+        "run_dir": str(run_dir),
+        "split": split,
+        "batch_size": effective_batch_size,
+        "max_batches": max_batches,
+        "checkpoint": str(_checkpoint_dir(run_dir, checkpoint)),
+        "samples_path": str(sample_output_path),
+    }
+    write_json(summary, output_path)
+    return output_path
+
+
 def make_difficulty_report(
     baseline_run: str | Path,
     routed_run: str | Path,
@@ -162,6 +232,49 @@ def output_probability_per_sample(route_info: dict[str, Any], *, out_action: int
     return [float(value) for value in values]
 
 
+def _assign_difficulty_bins(samples: list[dict[str, Any]], bins: list[str]) -> None:
+    if not samples or not bins:
+        return
+    ranked_indexes = sorted(
+        range(len(samples)),
+        key=lambda index: (float(samples[index]["baseline_cross_entropy"]), int(samples[index]["sample_id"])),
+    )
+    for rank, sample_index in enumerate(ranked_indexes):
+        bin_index = min(len(bins) - 1, rank * len(bins) // len(samples))
+        samples[sample_index]["difficulty_bin"] = bins[bin_index]
+
+
+def _summarize_baseline_difficulty_samples(samples: list[dict[str, Any]], bins: list[str]) -> dict[str, Any]:
+    losses = [float(sample["baseline_cross_entropy"]) for sample in samples]
+    by_difficulty = {label: _baseline_bin_summary(samples, label) for label in bins}
+    nonempty_bin_count = sum(1 for summary in by_difficulty.values() if summary["sample_count"] > 0)
+    return {
+        "sample_count": len(samples),
+        "difficulty_bins": bins,
+        "difficulty_bin_count": nonempty_bin_count,
+        "mean_baseline_cross_entropy": _mean(losses),
+        "min_baseline_cross_entropy": min(losses) if losses else None,
+        "max_baseline_cross_entropy": max(losses) if losses else None,
+        "by_difficulty": by_difficulty,
+    }
+
+
+def _baseline_bin_summary(samples: list[dict[str, Any]], label: str) -> dict[str, float | int | None]:
+    losses = [float(sample["baseline_cross_entropy"]) for sample in samples if sample.get("difficulty_bin") == label]
+    return {
+        "sample_count": len(losses),
+        "mean_baseline_cross_entropy": _mean(losses),
+        "min_baseline_cross_entropy": min(losses) if losses else None,
+        "max_baseline_cross_entropy": max(losses) if losses else None,
+    }
+
+
+def _mean(values: list[float]) -> float | None:
+    if not values:
+        return None
+    return sum(values) / len(values)
+
+
 def _forward_routed_for_eval(
     model: Any,
     batch: "torch.Tensor",
@@ -260,7 +373,7 @@ def _device(name: str) -> "torch.device":
     return torch.device(name)
 
 
-def _write_jsonl(rows: list[dict[str, float | int]], path: Path) -> None:
+def _write_jsonl(rows: list[dict[str, Any]], path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8") as handle:
         for row in rows:

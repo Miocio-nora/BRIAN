@@ -1,0 +1,12 @@
+eval_name: baseline_difficulty_report
+output_path: null
+sample_output_path: null
+split: val
+batch_size: null
+max_batches: 8
+device: auto
+checkpoint: checkpoint_best
+difficulty_bins:
+  - easy
+  - medium
+  - hard

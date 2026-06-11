@@ -4,6 +4,8 @@ torch = pytest.importorskip("torch")
 
 from brian_sphere_llm.eval.difficulty import summarize_difficulty_samples
 from brian_sphere_llm.eval.difficulty_report import (
+    _assign_difficulty_bins,
+    _summarize_baseline_difficulty_samples,
     causal_lm_sample_losses,
     output_probability_per_sample,
     route_steps_per_sample,
@@ -51,3 +53,30 @@ def test_summarize_difficulty_samples() -> None:
     )
     assert summary["sample_count"] == 3
     assert summary["difficulty_step_correlation"] == pytest.approx(1.0)
+
+
+def test_baseline_difficulty_bins_are_ce_ordered() -> None:
+    samples = [
+        {"sample_id": 0, "baseline_cross_entropy": 3.0},
+        {"sample_id": 1, "baseline_cross_entropy": 1.0},
+        {"sample_id": 2, "baseline_cross_entropy": 2.0},
+        {"sample_id": 3, "baseline_cross_entropy": 6.0},
+        {"sample_id": 4, "baseline_cross_entropy": 5.0},
+        {"sample_id": 5, "baseline_cross_entropy": 4.0},
+    ]
+    bins = ["easy", "medium", "hard"]
+
+    _assign_difficulty_bins(samples, bins)
+    summary = _summarize_baseline_difficulty_samples(samples, bins)
+
+    assert samples[1]["difficulty_bin"] == "easy"
+    assert samples[2]["difficulty_bin"] == "easy"
+    assert samples[0]["difficulty_bin"] == "medium"
+    assert samples[5]["difficulty_bin"] == "medium"
+    assert samples[4]["difficulty_bin"] == "hard"
+    assert samples[3]["difficulty_bin"] == "hard"
+    assert summary["sample_count"] == 6
+    assert summary["difficulty_bin_count"] == 3
+    assert summary["by_difficulty"]["easy"]["mean_baseline_cross_entropy"] == pytest.approx(1.5)
+    assert summary["by_difficulty"]["medium"]["mean_baseline_cross_entropy"] == pytest.approx(3.5)
+    assert summary["by_difficulty"]["hard"]["mean_baseline_cross_entropy"] == pytest.approx(5.5)

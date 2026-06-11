@@ -87,6 +87,7 @@ def _summarize_run(run_dir: Path) -> dict[str, Any]:
     config = _read_yaml_if_exists(run_dir / "config_resolved.yaml")
     model_stats = _read_json_if_exists(run_dir / "model_stats.json")
     routing_report = _read_json_if_exists(run_dir / "routing_report.json")
+    baseline_difficulty_report = _read_json_if_exists(run_dir / "baseline_difficulty_report.json")
     difficulty_report = _read_json_if_exists(run_dir / "difficulty_step_report.json")
     determinism_report = _read_json_if_exists(run_dir / "eval_determinism_report.json")
     eval_rows = _read_jsonl(run_dir / "eval_log.jsonl")
@@ -113,6 +114,10 @@ def _summarize_run(run_dir: Path) -> dict[str, Any]:
         "train_loss": _num(final_train.get("loss")),
         "routing": routing_report.get("summary", {}),
         "latest_eval": final_eval,
+        "baseline_difficulty_report_present": bool(baseline_difficulty_report),
+        "baseline_difficulty_sample_count": _num(baseline_difficulty_report.get("sample_count")),
+        "baseline_difficulty_bin_count": _num(baseline_difficulty_report.get("difficulty_bin_count")),
+        "baseline_difficulty_by_bin": baseline_difficulty_report.get("by_difficulty", {}),
         "difficulty_step_correlation": difficulty_corr,
         "difficulty_sample_count": _num(difficulty_report.get("sample_count")),
         "eval_determinism_status": determinism_report.get("overall_status"),
@@ -127,6 +132,17 @@ def _gate_stage0(stage0: dict[str, Any] | None) -> dict[str, Any]:
         "checkpoint_resume_event": bool(stage0 and stage0.get("has_resume_event")),
         "eval_log_present": bool(stage0 and stage0["has_eval_log"]),
         "validation_loss_finite": _finite(stage0.get("validation_loss") if stage0 else None),
+        "baseline_difficulty_report_present": bool(stage0 and stage0.get("baseline_difficulty_report_present")),
+        "baseline_difficulty_samples_present": bool(
+            stage0
+            and _num(stage0.get("baseline_difficulty_sample_count")) is not None
+            and stage0["baseline_difficulty_sample_count"] >= 1
+        ),
+        "baseline_difficulty_bins_present": bool(
+            stage0
+            and _num(stage0.get("baseline_difficulty_bin_count")) is not None
+            and stage0["baseline_difficulty_bin_count"] >= 3
+        ),
         "eval_determinism_report_present": bool(stage0 and stage0.get("eval_determinism_report_present")),
         "eval_deterministic": bool(stage0 and stage0.get("eval_determinism_status") == "pass"),
     }
@@ -136,6 +152,7 @@ def _gate_stage0(stage0: dict[str, Any] | None) -> dict[str, Any]:
         {
             "eval_determinism_status": stage0.get("eval_determinism_status") if stage0 else None,
             "latest_resume_event": stage0.get("latest_resume_event") if stage0 else {},
+            "baseline_difficulty_by_bin": stage0.get("baseline_difficulty_by_bin") if stage0 else {},
         },
     )
 
