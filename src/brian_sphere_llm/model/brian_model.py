@@ -243,7 +243,8 @@ class BrianRouteCore(ModuleBase):
                 )
             logits = self._apply_location_bias(self.router(hidden, self._router_position(position)), position)
             probs = F.softmax(logits, dim=-1)
-            top_actions, top_weights = self._topk_actions(probs)
+            effective_top_k = self._top_k_for_step(step)
+            top_actions, top_weights = self._topk_actions(probs, effective_top_k)
             if step < len(route_targets):
                 target_action = route_targets[step]
             else:
@@ -254,10 +255,15 @@ class BrianRouteCore(ModuleBase):
                 selected = target_action
             elif route_mode == "scheduled":
                 selected, use_router = self._scheduled_select(logits, target_action, global_step, router_probability)
-                use_weighted_fusion = use_router & (self.config.top_k > 1)
+                use_weighted_fusion = use_router & (effective_top_k > 1)
             elif route_mode == "free":
                 selected = torch.argmax(logits, dim=-1)
-                use_weighted_fusion = torch.full((batch_size,), self.config.top_k > 1, dtype=torch.bool, device=input_ids.device)
+                use_weighted_fusion = torch.full(
+                    (batch_size,),
+                    effective_top_k > 1,
+                    dtype=torch.bool,
+                    device=input_ids.device,
+                )
             else:
                 raise ValueError(f"Unknown route_mode: {route_mode}")
 
@@ -376,9 +382,9 @@ class BrianRouteCore(ModuleBase):
                 dtype=torch.long,
             )
         beam_size = max(1, self.config.beam_size)
-        top_k = max(1, min(self.config.top_k, self.config.route_pool_blocks + 1))
 
-        for _step in range(self.config.max_route_steps):
+        for step in range(self.config.max_route_steps):
+            top_k = max(1, min(self._top_k_for_step(step), self.config.route_pool_blocks + 1))
             current_beam = branch_hidden.size(1)
             flat_hidden = branch_hidden.reshape(batch_size * current_beam, *branch_hidden.shape[2:])
             flat_position = branch_position.reshape(batch_size * current_beam, branch_position.size(-1))
@@ -543,8 +549,12 @@ class BrianRouteCore(ModuleBase):
                 next_hidden[mask] = block(hidden[mask], block_position[mask])
         return next_hidden
 
-    def _topk_actions(self, probs: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        top_k = max(1, min(self.config.top_k, self.config.route_pool_blocks + 1))
+    def _top_k_for_step(self, step: int) -> int:
+        value = self.config.top_k if step <= 0 else self.config.later_top_k
+        return max(1, min(int(value), self.config.route_pool_blocks + 1))
+
+    def _topk_actions(self, probs: torch.Tensor, top_k: int) -> tuple[torch.Tensor, torch.Tensor]:
+        top_k = max(1, min(int(top_k), self.config.route_pool_blocks + 1))
         top_probs, top_actions = probs.topk(top_k, dim=-1)
         internal_mask = top_actions != self.out_action
         internal_weights = top_probs * internal_mask.float()
@@ -690,6 +700,7 @@ class BrianRouteCore(ModuleBase):
             "post_blocks": self.config.post_blocks,
             "block_position_dim": self.config.block_position_dim,
             "top_k": self.config.top_k,
+            "later_top_k": self.config.later_top_k,
             "block_position_mode": self.config.block_position_mode,
             "position_to_router": str(self.config.position_to_router),
             "position_to_blocks": str(self.config.position_to_blocks),

@@ -70,8 +70,7 @@ def summarize_routes(route_info: dict[str, Any], num_internal_blocks: int) -> di
         summary["skip_ratio"] = skips / denom
         summary["recur_ratio"] = recurs / denom
     if topk_actions:
-        stacked_topk = torch.stack(topk_actions).detach().cpu()
-        flat_topk = stacked_topk.flatten().tolist()
+        flat_topk = torch.cat([actions.detach().cpu().reshape(-1) for actions in topk_actions]).tolist()
         counts = Counter(int(value) for value in flat_topk)
         summary["topk_block_histogram"] = {str(key): counts.get(key, 0) for key in range(num_internal_blocks + 1)}
     if used_weighted_fusion:

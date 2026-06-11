@@ -190,7 +190,10 @@ def _active_layer_evals(model_stats: dict[str, Any], config: dict[str, Any], rou
     top_k = _num(model_stats.get("top_k"))
     if top_k is None and isinstance(model_config, dict):
         top_k = _num(model_config.get("top_k"))
-    top_k = max(1.0, float(top_k or 1.0))
+    later_top_k = _num(model_stats.get("later_top_k"))
+    if later_top_k is None and isinstance(model_config, dict):
+        later_top_k = _num(model_config.get("later_top_k"))
+    top_k = max(1.0, float(top_k or 1.0), float(later_top_k or 1.0))
     weighted_ratio = max(0.0, min(1.0, float(_num(routing_summary.get("weighted_fusion_ratio")) or 0.0)))
     parallel_branch_count = max(1.0, float(_num(routing_summary.get("parallel_branch_count_mean")) or 1.0))
     route_exec_multiplier = (1.0 + weighted_ratio * (top_k - 1.0)) * parallel_branch_count

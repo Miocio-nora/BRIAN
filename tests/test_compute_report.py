@@ -110,6 +110,34 @@ def test_summarize_run_estimates_active_route_compute(tmp_path: Path) -> None:
     assert summary["train_cuda_max_memory_allocated_mb_latest"] == 16.0
 
 
+def test_summarize_run_uses_later_top_k_for_weighted_fusion_compute(tmp_path: Path) -> None:
+    run = _write_run(
+        tmp_path,
+        "later_topk",
+        config={
+            "stage": "stage3_scheduled_free_routing",
+            "model_config_resolved": {"top_k": 1, "later_top_k": 2},
+        },
+        model_stats={
+            "model_name": "brian_route_core",
+            "parameter_count": 200,
+            "pre_blocks": 1,
+            "route_pool_blocks": 2,
+            "post_blocks": 1,
+            "top_k": 1,
+            "later_top_k": 2,
+        },
+        routing_summary={
+            "average_route_steps": 2.0,
+            "active_block_evals_per_token": 1.0,
+            "weighted_fusion_ratio": 0.5,
+        },
+    )
+    summary = summarize_run(run, tflops_per_gpu=1.0, utilization=1.0)
+
+    assert summary["active_layer_evals_per_token"] == pytest.approx(5.0)
+
+
 def test_summarize_run_marks_stage4_output_action_as_hard_exit_by_default(tmp_path: Path) -> None:
     run = _write_run(
         tmp_path,
