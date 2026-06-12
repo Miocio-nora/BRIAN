@@ -572,6 +572,7 @@ def _global_kv_ablation_benefit_candidates(report: dict[str, Any]) -> list[dict[
     rows = comparisons.get("local_vs_global", []) if isinstance(comparisons, dict) else []
     if not isinstance(rows, list):
         return []
+    report_passed = report.get("overall_status") == "pass"
     candidates = []
     for row in rows:
         if not isinstance(row, dict):
@@ -580,7 +581,8 @@ def _global_kv_ablation_benefit_candidates(report: dict[str, Any]) -> list[dict[
         exact_delta = _num(row.get("exact_match_delta_vs_local"))
         teacher_delta = _num(row.get("teacher_forced_token_accuracy_delta_vs_local"))
         passes = (
-            capacity_ratio is not None
+            report_passed
+            and capacity_ratio is not None
             and capacity_ratio < 1.0
             and exact_delta is not None
             and exact_delta >= 0.0
@@ -592,6 +594,7 @@ def _global_kv_ablation_benefit_candidates(report: dict[str, Any]) -> list[dict[
                 "entry_id": row.get("entry_id"),
                 "entry_name": row.get("entry_name"),
                 "run_dir": row.get("run_dir"),
+                "report_passed": report_passed,
                 "global_cache_capacity_ratio": capacity_ratio,
                 "exact_match_delta_vs_local": exact_delta,
                 "teacher_forced_token_accuracy_delta_vs_local": teacher_delta,
@@ -775,6 +778,7 @@ def _global_kv_ablation_memory_candidates(
     rows = comparisons.get("local_vs_global", []) if isinstance(comparisons, dict) else []
     if not isinstance(rows, list):
         return []
+    report_passed = report.get("overall_status") == "pass"
     candidates = []
     for row in rows:
         if not isinstance(row, dict):
@@ -785,8 +789,10 @@ def _global_kv_ablation_memory_candidates(
                 "entry_id": row.get("entry_id"),
                 "entry_name": row.get("entry_name"),
                 "run_dir": row.get("run_dir"),
+                "report_passed": report_passed,
                 "global_cache_capacity_ratio": capacity_ratio,
-                "passes_memory_control_proxy": capacity_ratio is not None
+                "passes_memory_control_proxy": report_passed
+                and capacity_ratio is not None
                 and capacity_ratio <= max_global_kv_cache_capacity_ratio,
             }
         )

@@ -906,6 +906,74 @@ def test_go_no_go_r350_accepts_global_kv_ablation_memory_quality_evidence(tmp_pa
     ][0]["passes_memory_quality_proxy"] is True
 
 
+def test_go_no_go_r350_requires_passing_global_kv_ablation_report(tmp_path: Path) -> None:
+    stage_gate = _write_json(tmp_path / "stage_gate.json", _passing_stage_gate())
+    compute = _write_json(
+        tmp_path / "compute.json",
+        {
+            "run_count": 2,
+            "baseline_run": "baseline",
+            "runs": [
+                {"run_dir": "baseline", "stage": "stage0_baseline"},
+                {
+                    "run_dir": "routed",
+                    "stage": "stage4_output_action",
+                    "validation_loss": 9.9,
+                    "baseline_comparison": {
+                        "baseline_run": "baseline",
+                        "same_parameter_count_view": True,
+                        "same_active_compute_view": True,
+                        "similar_training_flops_view": True,
+                        "validation_loss_delta": -0.1,
+                    },
+                },
+            ],
+        },
+    )
+    reasoning_baseline = _write_json(tmp_path / "reasoning_base.json", {"overall": {"exact_match_accuracy": 0.2}})
+    reasoning_candidate = _write_json(tmp_path / "reasoning_candidate.json", {"overall": {"exact_match_accuracy": 0.3}})
+    out = _write_json(tmp_path / "out.json", _passing_out_by_difficulty())
+    global_kv_ablation = _write_json(
+        tmp_path / "global_kv_ablation.json",
+        {
+            "overall_status": "fail",
+            "comparisons": {
+                "local_vs_global": [
+                    {
+                        "entry_id": "K4",
+                        "entry_name": "global_kv_with_sink",
+                        "run_dir": "global",
+                        "global_cache_capacity_ratio": 0.25,
+                        "exact_match_delta_vs_local": 0.0,
+                        "teacher_forced_token_accuracy_delta_vs_local": 0.02,
+                    }
+                ]
+            },
+        },
+    )
+
+    output = make_go_no_go_report(
+        stage_gate_report_path=stage_gate,
+        compute_report_path=compute,
+        reasoning_baseline_report_path=reasoning_baseline,
+        reasoning_candidate_report_paths=[reasoning_candidate],
+        out_by_difficulty_report_path=out,
+        global_kv_ablation_report_path=global_kv_ablation,
+        phase="r350_to_1b",
+        output_path=tmp_path / "go.json",
+    )
+    report = json.loads(output.read_text(encoding="utf-8"))
+    criteria = {item["name"]: item for item in report["phases"]["r350_to_1b"]["criteria"]}
+    candidate = criteria["global_kv_long_context_benefit_if_tested"]["evidence"]["global_kv_ablation"][
+        "benefit_candidates"
+    ][0]
+
+    assert report["overall_status"] == "fail"
+    assert criteria["global_kv_long_context_benefit_if_tested"]["status"] == "fail"
+    assert candidate["report_passed"] is False
+    assert candidate["passes_memory_quality_proxy"] is False
+
+
 def test_go_no_go_r350_difficulty_uses_any_positive_correlation(tmp_path: Path) -> None:
     stage_gate_data = _passing_stage_gate()
     stage_gate_data["runs"] = [
@@ -1437,6 +1505,72 @@ def test_go_no_go_r1b_success_requires_passing_long_context_input_reports(tmp_pa
     assert criteria["kv_memory_remains_controlled"]["status"] == "fail"
     assert memory["report_status_checks"]["baseline_report_passed"] is False
     assert memory["report_status_contract_passed"] is False
+    assert memory["passes_memory_control_proxy"] is False
+
+
+def test_go_no_go_r1b_success_requires_passing_global_kv_ablation_for_memory_control(tmp_path: Path) -> None:
+    stage_gate = _write_json(tmp_path / "stage_gate.json", _passing_stage_gate())
+    compute = _write_json(
+        tmp_path / "compute.json",
+        {
+            "run_count": 2,
+            "baseline_run": "baseline",
+            "runs": [
+                {
+                    "run_dir": "baseline",
+                    "stage": "stage0_baseline",
+                    "validation_loss": 10.0,
+                    "inference_latency_ms_per_token_latest": 1.0,
+                },
+                {
+                    "run_dir": "r1b_candidate",
+                    "stage": "stage6_parallel_passing",
+                    "validation_loss": 10.2,
+                    "inference_latency_ms_per_token_latest": 1.5,
+                    "baseline_comparison": {
+                        "baseline_run": "baseline",
+                        "same_parameter_count_view": True,
+                        "same_active_compute_view": True,
+                        "similar_training_flops_view": True,
+                        "estimated_flops_per_token_ratio": 0.9,
+                        "inference_latency_ms_per_token_ratio": 1.5,
+                        "validation_loss_delta": 0.2,
+                    },
+                },
+            ],
+        },
+    )
+    global_kv_ablation = _write_json(
+        tmp_path / "global_kv_ablation.json",
+        {
+            "overall_status": "fail",
+            "comparisons": {
+                "local_vs_global": [
+                    {
+                        "entry_id": "K4",
+                        "entry_name": "global_kv_with_sink",
+                        "run_dir": "global",
+                        "global_cache_capacity_ratio": 0.25,
+                    }
+                ]
+            },
+        },
+    )
+
+    output = make_go_no_go_report(
+        stage_gate_report_path=stage_gate,
+        compute_report_path=compute,
+        global_kv_ablation_report_path=global_kv_ablation,
+        phase="r1b_success",
+        output_path=tmp_path / "go.json",
+    )
+    report = json.loads(output.read_text(encoding="utf-8"))
+    criteria = {item["name"]: item for item in report["phases"]["r1b_success"]["criteria"]}
+    memory = criteria["kv_memory_remains_controlled"]["evidence"]["global_kv_ablation"]["memory_candidates"][0]
+
+    assert report["overall_status"] == "fail"
+    assert criteria["kv_memory_remains_controlled"]["status"] == "fail"
+    assert memory["report_passed"] is False
     assert memory["passes_memory_control_proxy"] is False
 
 
