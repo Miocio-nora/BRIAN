@@ -872,7 +872,7 @@ def test_stage0_gate_requires_determinism_key_checks(tmp_path: Path) -> None:
     gate = json.loads(report_path.read_text(encoding="utf-8"))["gates"]["stage0_to_1"]
 
     assert gate["status"] == "warn"
-    assert gate["checks"]["eval_deterministic"] is True
+    assert gate["checks"]["eval_deterministic"] is False
     assert gate["checks"]["eval_determinism_checks_passed"] is False
 
 
@@ -1220,6 +1220,47 @@ def test_stage1_gate_requires_valid_routing_report(tmp_path: Path) -> None:
     assert gate["routing_report_status"] == "warn"
     assert gate["routing_report_checks"]["core_route_metrics_present"] is False
     assert gate["routing_report_checks"]["route_path_examples_present"] is False
+
+
+def test_stage1_gate_requires_fixed_route_stability_checks_to_pass(tmp_path: Path) -> None:
+    baseline = _write_run(
+        tmp_path,
+        "baseline",
+        stage="stage0_baseline",
+        val_loss=10.0,
+        train_row={},
+    )
+    fixed = _write_run(
+        tmp_path,
+        "fixed",
+        stage="stage1_fixed_route",
+        val_loss=10.1,
+        train_row={
+            "route_imitation_accuracy": 0.99,
+            "position_norm_mean": 1.0,
+        },
+        fixed_route_stability_report={
+            "overall_status": "pass",
+            "checks": {
+                "forward_completed": True,
+                "logits_shape_matches": True,
+                "logits_finite": True,
+                "sample_losses_finite": True,
+                "fixed_route_matches_targets": False,
+                "route_imitation_accuracy_is_one": True,
+                "position_norm_finite": True,
+                "routing_summary_finite": True,
+            },
+        },
+    )
+
+    report_path = make_stage_gate_report([baseline, fixed], output_path=tmp_path / "gate.json")
+    gate = json.loads(report_path.read_text(encoding="utf-8"))["gates"]["stage1_to_2"]
+
+    assert gate["status"] == "warn"
+    assert gate["checks"]["fixed_route_stability_report_present"] is True
+    assert gate["checks"]["fixed_route_stability_passed"] is False
+    assert gate["fixed_route_stability_checks"]["fixed_route_matches_targets"] is False
 
 
 def test_stage1_gate_requires_active_compute_in_validation_report(tmp_path: Path) -> None:

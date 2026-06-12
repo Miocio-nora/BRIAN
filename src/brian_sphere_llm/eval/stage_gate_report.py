@@ -263,7 +263,8 @@ def _gate_stage0(stage0: dict[str, Any] | None) -> dict[str, Any]:
         "baseline_difficulty_bin_means_present": baseline_difficulty_checks["bin_means_present"],
         "baseline_difficulty_bin_means_ordered": baseline_difficulty_checks["bin_means_ordered"],
         "eval_determinism_report_present": bool(stage0 and stage0.get("eval_determinism_report_present")),
-        "eval_deterministic": bool(stage0 and stage0.get("eval_determinism_status") == "pass"),
+        "eval_deterministic": bool(stage0 and stage0.get("eval_determinism_status") == "pass")
+        and _eval_determinism_checks_passed(determinism_checks),
         "eval_determinism_checks_passed": _eval_determinism_checks_passed(determinism_checks),
         **_baseline_run_artifact_gate_checks(stage0),
         **_validation_report_gate_checks(stage0),
@@ -292,12 +293,14 @@ def _gate_stage1(stage1: dict[str, Any] | None, stage0: dict[str, Any] | None, t
     ratio = None
     if stage1 and stage0 and _finite(stage1.get("validation_loss")) and _finite(stage0.get("validation_loss")):
         ratio = stage1["validation_loss"] / max(1e-9, stage0["validation_loss"])
+    stability_checks = stage1.get("fixed_route_stability_checks", {}) if stage1 else {}
     checks = {
         "loss_within_1_to_3_percent": ratio is not None and ratio <= thresholds["fixed_route_loss_ratio_max"],
         "route_imitation_accuracy": _metric_at_least(stage1, "route_imitation_accuracy", thresholds["route_imitation_fixed_min"]),
         "position_state_finite": _finite(_routing_metric(stage1, "position_norm_mean")),
         "fixed_route_stability_report_present": bool(stage1 and stage1.get("fixed_route_stability_report_present")),
-        "fixed_route_stability_passed": bool(stage1 and stage1.get("fixed_route_stability_status") == "pass"),
+        "fixed_route_stability_passed": bool(stage1 and stage1.get("fixed_route_stability_status") == "pass")
+        and _checks_all_true(stability_checks),
         "checkpoint_present": bool(stage1 and stage1["has_checkpoint_latest"]),
         **_routed_run_artifact_gate_checks(stage1),
         **_validation_report_gate_checks(stage1),
@@ -854,15 +857,17 @@ def _check_true(checks: Any, key: str) -> bool:
     return isinstance(checks, dict) and checks.get(key) is True
 
 
+def _checks_all_true(checks: Any) -> bool:
+    return isinstance(checks, dict) and bool(checks) and all(value is True for value in checks.values())
+
+
 def _report_with_checks_passed(report: Any) -> bool:
     if not isinstance(report, dict):
         return False
     checks = report.get("checks")
     return (
         report.get("overall_status") == "pass"
-        and isinstance(checks, dict)
-        and bool(checks)
-        and all(value is True for value in checks.values())
+        and _checks_all_true(checks)
     )
 
 
@@ -872,9 +877,7 @@ def _status_with_checks_passed(report: Any) -> bool:
     checks = report.get("checks")
     return (
         report.get("status") == "pass"
-        and isinstance(checks, dict)
-        and bool(checks)
-        and all(value is True for value in checks.values())
+        and _checks_all_true(checks)
     )
 
 
@@ -1105,7 +1108,7 @@ def _routing_report_gate_checks(summary: dict[str, Any] | None) -> dict[str, boo
         "routing_report_present": bool(summary and summary.get("routing_report_present")),
         "routing_report_valid": bool(summary and summary.get("routing_report_status") == "pass")
         and isinstance(checks, dict)
-        and all(checks.values()),
+        and _checks_all_true(checks),
     }
 
 
