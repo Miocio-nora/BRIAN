@@ -420,6 +420,7 @@ def _gate_stage3(stage3: dict[str, Any] | None, stage1: dict[str, Any] | None, t
         ratio = stage3["validation_loss"] / max(1e-9, stage1["validation_loss"])
     difficulty_corr = _num(stage3.get("difficulty_step_correlation") if stage3 else None)
     scheduled_checks = stage3.get("scheduled_routing_checks", {}) if stage3 else {}
+    scheduled_behavior_checks = _scheduled_routing_behavior_checks(scheduled_checks)
     checks = {
         "validation_loss_not_collapsed": ratio is not None and ratio <= thresholds["stage3_loss_ratio_max"],
         "route_entropy_present": _metric_at_least(stage3, "route_entropy", thresholds["route_entropy_min"]),
@@ -439,12 +440,43 @@ def _gate_stage3(stage3: dict[str, Any] | None, stage1: dict[str, Any] | None, t
         "scheduled_routing_scheduled_mode": bool(
             isinstance(scheduled_checks, dict) and scheduled_checks.get("scheduled_routing_mode") is True
         ),
+        "scheduled_routing_scheduled_stage": scheduled_behavior_checks["scheduled_stage"],
+        "scheduled_routing_schedule_present": scheduled_behavior_checks["schedule_present"],
+        "scheduled_routing_schedule_values_numeric": scheduled_behavior_checks["schedule_values_numeric"],
+        "scheduled_routing_router_probability_monotonic": scheduled_behavior_checks[
+            "router_probability_monotonic_nondecreasing"
+        ],
+        "scheduled_routing_lambda_route_monotonic": scheduled_behavior_checks[
+            "lambda_route_monotonic_nonincreasing"
+        ],
+        "scheduled_routing_router_probability_increases": scheduled_behavior_checks["router_probability_increases"],
+        "scheduled_routing_lambda_route_decays": scheduled_behavior_checks["lambda_route_decays"],
+        "scheduled_routing_reaches_free_router": scheduled_behavior_checks["reaches_free_router"],
+        "scheduled_routing_train_schedule_values_present": scheduled_behavior_checks[
+            "logged_schedule_values_present"
+        ],
+        "scheduled_routing_train_router_probability_matches": scheduled_behavior_checks[
+            "logged_router_probability_matches_schedule"
+        ],
+        "scheduled_routing_train_lambda_route_matches": scheduled_behavior_checks[
+            "logged_lambda_route_matches_schedule"
+        ],
+        "scheduled_routing_eval_schedule_values_present": scheduled_behavior_checks[
+            "logged_eval_schedule_values_present"
+        ],
+        "scheduled_routing_eval_router_probability_matches": scheduled_behavior_checks[
+            "logged_eval_router_probability_matches_schedule"
+        ],
+        "scheduled_routing_eval_lambda_route_matches": scheduled_behavior_checks[
+            "logged_eval_lambda_route_matches_schedule"
+        ],
         "scheduled_routing_passed": bool(
             stage3
             and stage3.get("scheduled_routing_status") == "pass"
             and isinstance(scheduled_checks, dict)
             and scheduled_checks.get("stage3_scheduled_free_routing_stage") is True
             and scheduled_checks.get("scheduled_routing_mode") is True
+            and all(scheduled_behavior_checks.values())
         ),
         "checkpoint_present": bool(stage3 and stage3["has_checkpoint_latest"]),
         **_routed_run_artifact_gate_checks(stage3),
@@ -868,6 +900,28 @@ def _pseudo_route_curriculum_behavior_checks(checks: Any) -> dict[str, bool]:
 
 def _curriculum_check_true(checks: dict[str, Any], *names: str) -> bool:
     return any(checks.get(name) is True for name in names)
+
+
+def _scheduled_routing_behavior_checks(checks: Any) -> dict[str, bool]:
+    if not isinstance(checks, dict):
+        checks = {}
+    required_checks = [
+        "scheduled_stage",
+        "schedule_present",
+        "schedule_values_numeric",
+        "router_probability_monotonic_nondecreasing",
+        "lambda_route_monotonic_nonincreasing",
+        "router_probability_increases",
+        "lambda_route_decays",
+        "reaches_free_router",
+        "logged_schedule_values_present",
+        "logged_router_probability_matches_schedule",
+        "logged_lambda_route_matches_schedule",
+        "logged_eval_schedule_values_present",
+        "logged_eval_router_probability_matches_schedule",
+        "logged_eval_lambda_route_matches_schedule",
+    ]
+    return {key: checks.get(key) is True for key in required_checks}
 
 
 def _rank_state_resume_event_checks(event: Any, summary: dict[str, Any] | None) -> dict[str, bool]:
