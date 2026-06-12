@@ -396,14 +396,11 @@ def _report_passed(report: dict[str, Any]) -> bool | None:
     if not report:
         return None
     checks = report.get("checks")
-    checks_passed = None
-    if isinstance(checks, dict):
-        checks_passed = bool(checks) and all(value is True for value in checks.values())
     if report.get("overall_status") in {"fail", "warn"} or report.get("status") in {"fail", "warn"}:
         return False
     if report.get("overall_status") == "pass" or report.get("status") == "pass":
-        return False if checks_passed is False else True
-    return checks_passed
+        return isinstance(checks, dict) and bool(checks) and all(value is True for value in checks.values())
+    return False
 
 
 def _report_evidence(report: dict[str, Any]) -> dict[str, Any]:

@@ -81,6 +81,28 @@ def test_out_by_difficulty_requires_passing_reasoning_report(tmp_path: Path) -> 
     assert report["checks"]["route_steps_non_decreasing_with_difficulty"] is True
 
 
+def test_out_by_difficulty_requires_explicit_reasoning_report_status(tmp_path: Path) -> None:
+    samples = _write_jsonl(
+        tmp_path / "reasoning_samples.jsonl",
+        [
+            _sample("easy", route_steps=1.0, active=0.25, p_output=0.9),
+            _sample("hard", route_steps=2.0, active=0.50, p_output=0.1),
+        ],
+    )
+    reasoning = _write_reasoning_report(tmp_path / "reasoning.json", samples)
+    data = json.loads(reasoning.read_text(encoding="utf-8"))
+    data.pop("overall_status")
+    reasoning.write_text(json.dumps(data), encoding="utf-8")
+
+    output = make_out_by_difficulty_report(reasoning_report_path=reasoning, output_path=tmp_path / "out.json")
+    report = json.loads(output.read_text(encoding="utf-8"))
+
+    assert report["overall_status"] == "fail"
+    assert report["checks"]["reasoning_report_present"] is True
+    assert report["checks"]["reasoning_report_passed"] is False
+    assert report["checks"]["route_steps_non_decreasing_with_difficulty"] is True
+
+
 def test_out_by_difficulty_fails_when_hard_exits_earlier(tmp_path: Path) -> None:
     samples = _write_jsonl(
         tmp_path / "samples.jsonl",

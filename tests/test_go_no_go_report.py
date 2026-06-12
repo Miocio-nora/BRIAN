@@ -1157,11 +1157,11 @@ def test_go_no_go_r350_rejects_boolean_reasoning_scores(tmp_path: Path) -> None:
     stage_gate = _write_json(tmp_path / "stage_gate.json", _passing_stage_gate())
     reasoning_baseline = _write_json(
         tmp_path / "reasoning_base.json",
-        {"overall_status": "pass", "overall": {"exact_match_accuracy": False}},
+        _reasoning_report(exact=False, teacher=False),
     )
     reasoning_candidate = _write_json(
         tmp_path / "reasoning_candidate.json",
-        {"overall_status": "pass", "overall": {"exact_match_accuracy": True}},
+        _reasoning_report(exact=True, teacher=True),
     )
 
     output = make_go_no_go_report(
@@ -1202,6 +1202,31 @@ def test_go_no_go_r350_requires_passing_reasoning_candidate_report(tmp_path: Pat
     assert reasoning["status"] == "fail"
     assert reasoning["evidence"]["baseline_report_passed"] is True
     assert reasoning["evidence"]["candidate_reports"][0]["report_passed"] is False
+    assert reasoning["evidence"]["candidate_scores"] == [None]
+
+
+def test_go_no_go_r350_requires_explicit_reasoning_candidate_status(tmp_path: Path) -> None:
+    stage_gate = _write_json(tmp_path / "stage_gate.json", _passing_stage_gate())
+    reasoning_baseline = _write_json(tmp_path / "reasoning_base.json", _reasoning_report(exact=0.2))
+    candidate_data = _reasoning_report(exact=0.4)
+    candidate_data.pop("overall_status")
+    reasoning_candidate = _write_json(tmp_path / "reasoning_candidate.json", candidate_data)
+
+    output = make_go_no_go_report(
+        stage_gate_report_path=stage_gate,
+        reasoning_baseline_report_path=reasoning_baseline,
+        reasoning_candidate_report_paths=[reasoning_candidate],
+        phase="r350_to_1b",
+        output_path=tmp_path / "go.json",
+    )
+    report = json.loads(output.read_text(encoding="utf-8"))
+    criteria = {item["name"]: item for item in report["phases"]["r350_to_1b"]["criteria"]}
+    reasoning = criteria["reasoning_or_synthetic_multistep_improves"]
+
+    assert reasoning["status"] == "fail"
+    assert reasoning["evidence"]["baseline_report_passed"] is True
+    assert reasoning["evidence"]["candidate_reports"][0]["report_passed"] is False
+    assert reasoning["evidence"]["candidate_reports"][0]["overall_status"] is None
     assert reasoning["evidence"]["candidate_scores"] == [None]
 
 
