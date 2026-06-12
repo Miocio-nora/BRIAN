@@ -695,6 +695,62 @@ def test_risk_audit_requires_stage5_long_context_coverage(tmp_path: Path) -> Non
     assert candidate["passes_stage5_long_context_contract"] is False
 
 
+def test_risk_audit_requires_passing_long_context_report_for_global_kv_clearance(tmp_path: Path) -> None:
+    retention = _write_json(
+        tmp_path / "retention.json",
+        {
+            "overall_status": "pass",
+            "metrics": {"global_attention_mass": 0.02},
+            "checks": {"global_attention_mass_nonzero": True},
+        },
+    )
+    long_context = _write_json(
+        tmp_path / "long_context_compare.json",
+        {
+            "overall_status": "fail",
+            "candidate_count": 1,
+            "comparisons": [
+                {
+                    "candidate_report": "global.json",
+                    "candidate_run_dir": "global",
+                    "status": "pass",
+                    "checks": {
+                        "baseline_stage4_output_action": True,
+                        "baseline_scheduled_route_mode": True,
+                        "baseline_local_kv": True,
+                        "candidate_stage5_global_kv": True,
+                        "candidate_scheduled_route_mode": True,
+                        "candidate_global_kv_enabled": True,
+                        "baseline_task_family_coverage": True,
+                        "baseline_difficulty_coverage": True,
+                        "candidate_task_family_coverage": True,
+                        "candidate_difficulty_coverage": True,
+                        "global_kv_active": True,
+                        "quality_not_worse": True,
+                        "memory_budget_present": True,
+                        "global_budget_below_local_context": True,
+                    },
+                }
+            ],
+        },
+    )
+
+    output = make_risk_audit_report(
+        output_path=tmp_path / "risk.json",
+        global_kv_retention_report_path=retention,
+        long_context_compare_report_path=long_context,
+    )
+    report = json.loads(output.read_text(encoding="utf-8"))
+    no_difference = _symptom(report, "global_kv_noise", "global_on_off_no_difference")
+    candidate = no_difference["evidence"]["comparison_candidates"][0]
+
+    assert report["risks"]["global_kv_noise"]["status"] == "fail"
+    assert no_difference["triggered"] is True
+    assert no_difference["evidence"]["overall_status"] == "fail"
+    assert no_difference["evidence"]["passing_comparison_count"] == 0
+    assert candidate["passes_stage5_long_context_contract"] is True
+
+
 def test_risk_audit_eval_config_resolves() -> None:
     config = load_config("configs/eval/risk_audit.yaml")
     assert config["eval_name"] == "risk_audit_report"

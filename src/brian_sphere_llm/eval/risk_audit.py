@@ -535,7 +535,8 @@ def _global_on_off_no_difference(
     comparisons = _list(long_context_compare_report.get("comparisons"))
     if comparisons:
         candidates = _long_context_compare_candidates(comparisons)
-        if any(candidate["passes_stage5_long_context_contract"] is True for candidate in candidates):
+        report_passed = long_context_compare_report.get("overall_status") == "pass"
+        if report_passed and any(candidate["passes_stage5_long_context_contract"] is True for candidate in candidates):
             return False, {
                 "source": "long_context_compare_report",
                 "overall_status": long_context_compare_report.get("overall_status"),
