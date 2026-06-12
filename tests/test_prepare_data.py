@@ -199,7 +199,49 @@ def test_prepare_mixture_data_records_expected_and_realized_shares(
     }
     assert set(stats["source_mixture_realized"]) == set(stats["source_mixture_expected"])
     assert set(stats["source_mixture_realized_share"]) == set(stats["source_mixture_expected"])
+    manifest_rows = [
+        json.loads(line)
+        for line in (output_dir / "manifest.jsonl").read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    code_rows = [row for row in manifest_rows if row["mixture_tag"] == "code_structured"]
+    assert code_rows
+    assert code_rows[0]["source_dataset"] == "code"
+    assert code_rows[0]["route_metadata"]["task_family"] == "code_structured"
     assert math.isclose(sum(stats["source_mixture_realized_share"].values()), 1.0)
+
+
+def test_prepare_mixture_uses_local_synthetic_math_and_code_without_hf(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fail_hf_rows(*, dataset_name: str, split: str, streaming: bool):
+        raise AssertionError(f"unexpected HF load for {dataset_name}")
+
+    monkeypatch.setattr("brian_sphere_llm.data.prepare.iter_hf_text_dataset", fail_hf_rows)
+
+    rows = list(
+        islice(
+            _mixture_rows(
+                {
+                    "target_tokens": 1000,
+                    "seed": 1,
+                    "mixture": {
+                        "math_symbolic_qa": {
+                            "weight": 0.5,
+                            "source_dataset": "synthetic_math_symbolic",
+                        },
+                        "code_structured": {
+                            "weight": 0.5,
+                            "source_dataset": "synthetic_code_structured",
+                        },
+                    },
+                }
+            ),
+            6,
+        )
+    )
+
+    assert {row["mixture_tag"] for row in rows} == {"math_symbolic_qa", "code_structured"}
+    assert {row["source_dataset"] for row in rows} == {"synthetic_math_symbolic", "synthetic_code_structured"}
+    assert all(row["route_metadata"]["task_family"] in {"math_symbolic_qa", "code_structured"} for row in rows)
 
 
 def test_mixture_rows_interleave_sources_by_weight(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -203,8 +203,8 @@ def _mixture_rows(config: dict[str, Any]):
         weight = _float_config(item, "weight", minimum=0.0)
         if weight <= 0.0:
             continue
-        if tag == "synthetic_routing":
-            row_iter = _synthetic_mixture_rows(item, synthetic_count, seed)
+        if tag in {"synthetic_routing", "math_symbolic_qa", "code_structured"}:
+            row_iter = _local_synthetic_mixture_rows(tag, item, synthetic_count, seed)
         else:
             row_iter = _hf_mixture_rows(tag, item)
         sources.append({"order": order, "weight": weight, "emitted": 0, "rows": row_iter})
@@ -218,6 +218,19 @@ def _mixture_rows(config: dict[str, Any]):
         source["emitted"] += 1
 
 
+def _local_synthetic_mixture_rows(tag: str, item: dict[str, Any], count: int, seed: int) -> Iterator[dict[str, Any]]:
+    if tag == "synthetic_routing":
+        yield from _synthetic_mixture_rows(item, count, seed)
+        return
+    if tag == "math_symbolic_qa":
+        yield from _math_symbolic_rows(item, count, seed)
+        return
+    if tag == "code_structured":
+        yield from _code_structured_rows(item, count, seed)
+        return
+    raise ValueError(f"Unsupported local synthetic mixture tag: {tag}")
+
+
 def _synthetic_mixture_rows(item: dict[str, Any], count: int, seed: int) -> Iterator[dict[str, Any]]:
     for index, sample in enumerate(generate_synthetic_samples(count, seed)):
         yield {
@@ -228,6 +241,59 @@ def _synthetic_mixture_rows(item: dict[str, Any], count: int, seed: int) -> Iter
             "license": "internal-test",
             "mixture_tag": "synthetic_routing",
             "route_metadata": sample.metadata,
+        }
+
+
+def _math_symbolic_rows(item: dict[str, Any], count: int, seed: int) -> Iterator[dict[str, Any]]:
+    for index in range(count):
+        left = (seed * 17 + index * 3) % 97
+        right = (seed * 31 + index * 5) % 89
+        operation = ["+", "-", "*"][index % 3]
+        if operation == "+":
+            answer = left + right
+        elif operation == "-":
+            answer = left - right
+        else:
+            answer = left * right
+        text = f"symbolic math: {left} {operation} {right} = {answer}"
+        yield {
+            "sample_id": f"math-symbolic-{index}",
+            "text": text,
+            "source_dataset": item.get("source_dataset", "synthetic_math_symbolic"),
+            "source_url_or_id": f"math-symbolic-{index}",
+            "license": "internal-test",
+            "mixture_tag": "math_symbolic_qa",
+            "route_metadata": {
+                "task_family": "math_symbolic_qa",
+                "operator": operation,
+                "difficulty_bin": "easy" if index % 3 == 0 else "medium" if index % 3 == 1 else "hard",
+            },
+        }
+
+
+def _code_structured_rows(item: dict[str, Any], count: int, seed: int) -> Iterator[dict[str, Any]]:
+    for index in range(count):
+        variable = f"x{(seed + index) % 13}"
+        increment = (seed + index * 7) % 11 + 1
+        repeat = index % 4 + 1
+        final_value = increment * repeat
+        text = (
+            f"code trace: {variable}=0; "
+            f"for i in range({repeat}): {variable}={variable}+{increment}; "
+            f"return {variable} -> {final_value}"
+        )
+        yield {
+            "sample_id": f"code-structured-{index}",
+            "text": text,
+            "source_dataset": item.get("source_dataset", "synthetic_code_structured"),
+            "source_url_or_id": f"code-structured-{index}",
+            "license": "internal-test",
+            "mixture_tag": "code_structured",
+            "route_metadata": {
+                "task_family": "code_structured",
+                "loop_count": repeat,
+                "difficulty_bin": "easy" if repeat <= 1 else "medium" if repeat <= 3 else "hard",
+            },
         }
 
 
