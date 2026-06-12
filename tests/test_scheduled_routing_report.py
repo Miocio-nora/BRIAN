@@ -3,7 +3,7 @@ from pathlib import Path
 
 import yaml
 
-from brian_sphere_llm.eval.scheduled_routing import make_scheduled_routing_report
+from brian_sphere_llm.eval.scheduled_routing import _overall_status, make_scheduled_routing_report
 from brian_sphere_llm.utils.config import load_config
 
 
@@ -57,6 +57,12 @@ def test_scheduled_routing_report_checks_schedule_and_logged_values(tmp_path: Pa
     assert report["logged_schedule_values"][-1]["scheduled_router_probability"] == 1.0
     assert report["logged_eval_schedule_values"][-1]["scheduled_router_probability"] == 1.0
     assert report["latest_eval_schedule_values"]["scheduled_lambda_route"] == 0.05
+
+
+def test_scheduled_routing_status_requires_explicit_boolean_true_checks() -> None:
+    assert _overall_status({"a": True, "b": True}) == "pass"
+    assert _overall_status({"a": True, "b": "yes"}) == "fail"
+    assert _overall_status({"a": "yes", "b": 1}) == "fail"
 
 
 def test_scheduled_routing_report_rejects_boolean_schedule_values(tmp_path: Path) -> None:

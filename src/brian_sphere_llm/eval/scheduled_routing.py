@@ -97,13 +97,17 @@ def make_scheduled_routing_report(
             "tolerance": tolerance,
         },
         "checks": checks,
-        "overall_status": "pass" if all(checks.values()) else "fail",
+        "overall_status": _overall_status(checks),
     }
     if output_path is None:
         output_path = run_dir / "scheduled_routing_report.json"
     output_path = Path(output_path)
     write_json(report, output_path)
     return output_path
+
+
+def _overall_status(checks: dict[str, bool]) -> str:
+    return "pass" if all(value is True for value in checks.values()) else "fail"
 
 
 def _schedule_points(schedule: list[Any]) -> list[dict[str, float | int]]:
