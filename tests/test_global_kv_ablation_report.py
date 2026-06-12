@@ -136,6 +136,7 @@ def test_global_kv_ablation_report_passes_with_manifest_runs_and_long_context(tm
     assert report["checks"]["no_sink_zero_sink_attention_measured"] is True
     assert report["checks"]["window_slots_vary"] is True
     assert report["checks"]["long_context_reports_match_run_config"] is True
+    assert report["checks"]["long_context_coverage_passed"] is True
     assert report["checks"]["per_block_adapter_candidate_present"] is True
     assert report["checks"]["head_delta_adapter_candidate_present"] is True
     assert report["checks"]["per_block_head_delta_adapter_candidate_present"] is True
@@ -150,6 +151,8 @@ def test_global_kv_ablation_report_passes_with_manifest_runs_and_long_context(tm
     assert [row["global_window_slots"] for row in report["comparisons"]["window_sweep"]] == [1, 6]
     assert report["comparisons"]["per_block_vs_compressed"]["global_adapter_scope_per_block"] == "per_block"
     assert report["comparisons"]["head_delta_vs_per_block"]["global_head_delta_rank_head_delta"] == 2
+    assert report["entries"][0]["long_context"]["task_family_coverage_passed"] is True
+    assert report["entries"][0]["long_context"]["coverage"]["missing_difficulties"] == []
 
 
 def test_global_kv_ablation_report_records_mismatched_long_context_provenance(tmp_path: Path) -> None:
@@ -184,6 +187,145 @@ def test_global_kv_ablation_report_records_mismatched_long_context_provenance(tm
     assert global_row["stage"] == "stage5_global_kv"
     assert global_row["long_context"]["stage"] == "stage4_output_action"
     assert global_row["long_context"]["global_kv_enabled"] is False
+
+
+def test_global_kv_ablation_report_warns_for_incomplete_long_context_coverage(tmp_path: Path) -> None:
+    runs = [
+        _write_run(tmp_path, "local", global_kv=False, sink_slots=0, window_slots=0, validation_loss=10.0),
+        _write_run(
+            tmp_path,
+            "uncompressed",
+            global_kv=True,
+            global_code_dim=64,
+            sink_slots=1,
+            window_slots=3,
+            validation_loss=10.1,
+            sink_mass=0.5,
+            window_mass=0.5,
+        ),
+        _write_run(
+            tmp_path,
+            "compressed",
+            global_kv=True,
+            global_code_dim=16,
+            sink_slots=1,
+            window_slots=3,
+            validation_loss=10.0,
+            sink_mass=0.6,
+            window_mass=0.4,
+        ),
+        _write_run(
+            tmp_path,
+            "no_sink",
+            global_kv=True,
+            global_code_dim=16,
+            sink_slots=0,
+            window_slots=3,
+            validation_loss=10.1,
+            sink_mass=0.0,
+            window_mass=1.0,
+        ),
+        _write_run(
+            tmp_path,
+            "with_sink",
+            global_kv=True,
+            global_code_dim=16,
+            sink_slots=1,
+            window_slots=3,
+            validation_loss=10.0,
+            sink_mass=0.6,
+            window_mass=0.4,
+        ),
+        _write_run(
+            tmp_path,
+            "window1",
+            global_kv=True,
+            global_code_dim=16,
+            sink_slots=1,
+            window_slots=1,
+            validation_loss=10.2,
+            sink_mass=0.7,
+            window_mass=0.3,
+        ),
+        _write_run(
+            tmp_path,
+            "window6",
+            global_kv=True,
+            global_code_dim=16,
+            sink_slots=1,
+            window_slots=6,
+            validation_loss=9.9,
+            sink_mass=0.4,
+            window_mass=0.6,
+        ),
+        _write_run(
+            tmp_path,
+            "per_block",
+            global_kv=True,
+            global_code_dim=16,
+            sink_slots=1,
+            window_slots=3,
+            global_adapter_scope="per_block",
+            validation_loss=9.95,
+            sink_mass=0.55,
+            window_mass=0.45,
+        ),
+        _write_run(
+            tmp_path,
+            "head_delta",
+            global_kv=True,
+            global_code_dim=16,
+            sink_slots=1,
+            window_slots=3,
+            global_head_delta_rank=2,
+            validation_loss=9.94,
+            sink_mass=0.55,
+            window_mass=0.45,
+        ),
+        _write_run(
+            tmp_path,
+            "per_block_head_delta",
+            global_kv=True,
+            global_code_dim=16,
+            sink_slots=1,
+            window_slots=3,
+            global_adapter_scope="per_block",
+            global_head_delta_rank=2,
+            validation_loss=9.93,
+            sink_mass=0.55,
+            window_mass=0.45,
+        ),
+    ]
+    incomplete_coverage = _passing_long_context_coverage() | {
+        "observed_difficulties": ["near", "middle"],
+        "missing_difficulties": ["far"],
+        "difficulty_coverage_passed": False,
+    }
+    long_context_reports = [
+        _write_long_context(
+            tmp_path,
+            run,
+            index,
+            exact=0.5 + index * 0.01,
+            teacher=0.6 + index * 0.01,
+            coverage=incomplete_coverage if index == 1 else None,
+        )
+        for index, run in enumerate(runs)
+    ]
+
+    output = make_global_kv_ablation_report(
+        "configs/experiments/tiny_global_kv.yaml",
+        runs,
+        output_path=tmp_path / "global_kv_ablation.json",
+        long_context_report_paths=long_context_reports,
+    )
+    report = json.loads(output.read_text(encoding="utf-8"))
+
+    assert report["overall_status"] == "warn"
+    assert report["checks"]["long_context_reports_match_run_config"] is True
+    assert report["checks"]["long_context_coverage_passed"] is False
+    assert report["entries"][1]["long_context"]["difficulty_coverage_passed"] is False
+    assert report["entries"][1]["long_context"]["coverage"]["missing_difficulties"] == ["far"]
 
 
 def test_global_kv_ablation_report_fails_without_window_sweep(tmp_path: Path) -> None:
@@ -344,6 +486,7 @@ def _write_long_context(
     stage: str | None = None,
     route_mode: str = "scheduled",
     global_kv_enabled: bool | None = None,
+    coverage: dict | None = None,
 ) -> Path:
     path = tmp_path / f"long_context_{index}.json"
     config = yaml.safe_load((run_dir / "config_resolved.yaml").read_text(encoding="utf-8"))
@@ -352,6 +495,8 @@ def _write_long_context(
         stage = str(config.get("stage", ""))
     if global_kv_enabled is None:
         global_kv_enabled = bool(model_config.get("global_kv", False))
+    if coverage is None:
+        coverage = _passing_long_context_coverage()
     report = {
         "run_dir": str(run_dir),
         "stage": stage,
@@ -362,6 +507,7 @@ def _write_long_context(
             "teacher_forced_token_accuracy": teacher,
             "truncation_rate": 0.0,
         },
+        "coverage": coverage,
         "memory_budget": {
             "global_kv_enabled": global_kv_enabled,
             "estimated_global_cache_capacity_to_local_context_ratio": 0.1 + index * 0.01,
@@ -370,3 +516,16 @@ def _write_long_context(
     }
     path.write_text(json.dumps(report), encoding="utf-8")
     return path
+
+
+def _passing_long_context_coverage() -> dict:
+    return {
+        "expected_task_families": ["needle_retrieval", "two_hop_tracing"],
+        "observed_task_families": ["needle_retrieval", "two_hop_tracing"],
+        "missing_task_families": [],
+        "task_family_coverage_passed": True,
+        "expected_difficulties": ["near", "middle", "far"],
+        "observed_difficulties": ["near", "middle", "far"],
+        "missing_difficulties": [],
+        "difficulty_coverage_passed": True,
+    }

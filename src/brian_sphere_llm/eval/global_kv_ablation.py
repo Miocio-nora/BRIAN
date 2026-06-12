@@ -146,6 +146,9 @@ def _optional_checks(rows: list[dict[str, Any]]) -> dict[str, bool]:
         "long_context_reports_match_run_config": bool(rows)
         and len(long_context_rows) == len(rows)
         and all(_long_context_matches_run(row) for row in long_context_rows),
+        "long_context_coverage_passed": bool(rows)
+        and len(long_context_rows) == len(rows)
+        and all(_long_context_coverage_passed(row) for row in long_context_rows),
         "long_context_quality_metrics_present": bool(rows)
         and len(long_context_rows) == len(rows)
         and all(_finite(row["long_context"].get("exact_match_accuracy")) for row in long_context_rows),
@@ -397,9 +400,13 @@ def _long_context_summary(report: dict[str, Any]) -> dict[str, Any]:
             "teacher_forced_token_accuracy": None,
             "global_cache_capacity_ratio": None,
             "global_cache_mean_ratio": None,
+            "task_family_coverage_passed": None,
+            "difficulty_coverage_passed": None,
+            "coverage": {},
         }
     overall = report.get("overall", {}) if isinstance(report.get("overall"), dict) else {}
     memory = report.get("memory_budget", {}) if isinstance(report.get("memory_budget"), dict) else {}
+    coverage = report.get("coverage", {}) if isinstance(report.get("coverage"), dict) else {}
     return {
         "present": True,
         "report_path": report.get("_report_path"),
@@ -412,6 +419,9 @@ def _long_context_summary(report: dict[str, Any]) -> dict[str, Any]:
         "truncation_rate": _num(overall.get("truncation_rate")),
         "global_cache_capacity_ratio": _num(memory.get("estimated_global_cache_capacity_to_local_context_ratio")),
         "global_cache_mean_ratio": _num(memory.get("estimated_global_cache_mean_to_local_context_ratio")),
+        "task_family_coverage_passed": coverage.get("task_family_coverage_passed") is True,
+        "difficulty_coverage_passed": coverage.get("difficulty_coverage_passed") is True,
+        "coverage": _coverage_summary(coverage),
     }
 
 
@@ -431,6 +441,28 @@ def _long_context_matches_run(row: dict[str, Any]) -> bool:
         and long_context.get("route_mode") == "scheduled"
         and long_context.get("global_kv_enabled") is row.get("global_kv_enabled")
     )
+
+
+def _long_context_coverage_passed(row: dict[str, Any]) -> bool:
+    long_context = row["long_context"]
+    return (
+        long_context.get("task_family_coverage_passed") is True
+        and long_context.get("difficulty_coverage_passed") is True
+    )
+
+
+def _coverage_summary(coverage: dict[str, Any]) -> dict[str, Any]:
+    keys = [
+        "expected_task_families",
+        "observed_task_families",
+        "missing_task_families",
+        "task_family_coverage_passed",
+        "expected_difficulties",
+        "observed_difficulties",
+        "missing_difficulties",
+        "difficulty_coverage_passed",
+    ]
+    return {key: coverage.get(key) for key in keys}
 
 
 def _sink_window_measured(row: dict[str, Any]) -> bool:
