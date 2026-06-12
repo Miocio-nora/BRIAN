@@ -546,7 +546,7 @@ def _gate_stage4(
             _routing_metric(stage4, "forced_max_step_exit_fraction")
         ),
         "cost_control_report_present": bool(cost_control_report),
-        "cost_control_passed": bool(cost_analysis.get("status") == "pass"),
+        "cost_control_passed": _status_with_checks_passed(cost_analysis),
         "cost_control_stage4_output_action_runs": _check_true(cost_checks, "stage4_output_action_runs"),
         "cost_control_hard_exit_enabled": _check_true(cost_checks, "hard_exit_enabled"),
         "cost_control_active_range_present": _check_true(cost_checks, "active_compute_range_present"),
@@ -554,7 +554,7 @@ def _gate_stage4(
         "cost_control_average_steps_not_increasing": _check_true(cost_checks, "average_steps_not_increasing_with_cost"),
         "cost_control_output_not_decreasing": _check_true(cost_checks, "output_probability_not_decreasing_with_cost"),
         "out_by_difficulty_report_present": bool(out_by_difficulty_report),
-        "out_by_difficulty_passed": bool(out_by_difficulty_report.get("overall_status") == "pass"),
+        "out_by_difficulty_passed": _report_with_checks_passed(out_by_difficulty_report),
         "out_by_difficulty_reasoning_report_present": _check_true(out_checks, "reasoning_report_present"),
         "out_by_difficulty_reasoning_report_passed": _check_true(out_checks, "reasoning_report_passed"),
         "out_by_difficulty_stage4_reasoning": _check_true(out_checks, "stage4_output_action_reasoning"),
@@ -660,7 +660,7 @@ def _gate_stage5(
         "global_read_gate_nonzero": _metric_at_least(stage5, "global_read_gate_mean", thresholds["global_read_gate_min"]),
         "global_cache_slots_present": _metric_at_least(stage5, "global_cache_slots_mean", 1.0),
         "global_kv_retention_report_present": bool(retention_report),
-        "global_kv_retention_passed": bool(retention_report.get("overall_status") == "pass"),
+        "global_kv_retention_passed": _report_with_checks_passed(retention_report),
         "global_kv_retention_stage5": _check_true(retention_checks, "stage5_global_kv_stage"),
         "global_kv_retention_enabled": _check_true(retention_checks, "global_kv_enabled"),
         "global_kv_retention_capacity_present": _check_true(retention_checks, "retention_capacity_present"),
@@ -749,7 +749,7 @@ def _gate_stage6(
         "parallel_branch_count_present": _metric_at_least(stage6, "parallel_branch_count_mean", 1.0),
         "parallel_score_margin_present": _finite(_routing_metric(stage6, "parallel_score_margin_mean")),
         "parallel_passing_report_present": bool(passing_report),
-        "parallel_passing_report_passed": bool(passing_report.get("overall_status") == "pass"),
+        "parallel_passing_report_passed": _report_with_checks_passed(passing_report),
         "parallel_passing_stage_reported": _check_true(passing_checks, "stage6_parallel_stage"),
         "parallel_passing_enabled": _check_true(passing_checks, "parallel_passing_enabled"),
         "parallel_route_selected": _check_true(passing_checks, "parallel_route_selected"),
@@ -852,6 +852,30 @@ def _comparison_checks(comparisons: Any) -> list[dict[str, Any]]:
 
 def _check_true(checks: Any, key: str) -> bool:
     return isinstance(checks, dict) and checks.get(key) is True
+
+
+def _report_with_checks_passed(report: Any) -> bool:
+    if not isinstance(report, dict):
+        return False
+    checks = report.get("checks")
+    return (
+        report.get("overall_status") == "pass"
+        and isinstance(checks, dict)
+        and bool(checks)
+        and all(value is True for value in checks.values())
+    )
+
+
+def _status_with_checks_passed(report: Any) -> bool:
+    if not isinstance(report, dict):
+        return False
+    checks = report.get("checks")
+    return (
+        report.get("status") == "pass"
+        and isinstance(checks, dict)
+        and bool(checks)
+        and all(value is True for value in checks.values())
+    )
 
 
 def _resume_event_checks(event: Any) -> dict[str, bool]:

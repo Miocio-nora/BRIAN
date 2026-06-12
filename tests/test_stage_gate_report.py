@@ -1605,7 +1605,7 @@ def test_stage4_gate_requires_out_by_difficulty_reasoning_report_to_pass(tmp_pat
     gate = json.loads(report_path.read_text(encoding="utf-8"))["gates"]["stage4_to_5"]
 
     assert gate["status"] == "warn"
-    assert gate["checks"]["out_by_difficulty_passed"] is True
+    assert gate["checks"]["out_by_difficulty_passed"] is False
     assert gate["checks"]["out_by_difficulty_reasoning_report_present"] is True
     assert gate["checks"]["out_by_difficulty_reasoning_report_passed"] is False
 
@@ -1671,11 +1671,11 @@ def test_stage4_gate_rejects_truthy_non_boolean_supplemental_checks(tmp_path: Pa
     gate = json.loads(report_path.read_text(encoding="utf-8"))["gates"]["stage4_to_5"]
 
     assert gate["status"] == "warn"
-    assert gate["checks"]["cost_control_passed"] is True
+    assert gate["checks"]["cost_control_passed"] is False
     assert gate["checks"]["cost_control_stage4_output_action_runs"] is False
     assert gate["checks"]["cost_control_hard_exit_enabled"] is False
     assert gate["checks"]["cost_control_average_steps_not_increasing"] is False
-    assert gate["checks"]["out_by_difficulty_passed"] is True
+    assert gate["checks"]["out_by_difficulty_passed"] is False
     assert gate["checks"]["out_by_difficulty_reasoning_report_present"] is False
     assert gate["checks"]["out_by_difficulty_reasoning_report_passed"] is False
     assert gate["checks"]["hard_compute_not_below_easy"] is False
@@ -2583,7 +2583,7 @@ def test_stage5_gate_requires_retention_enabled_and_capacity_evidence(tmp_path: 
     gate = json.loads(report_path.read_text(encoding="utf-8"))["gates"]["stage5_to_6"]
 
     assert gate["status"] != "pass"
-    assert gate["checks"]["global_kv_retention_passed"] is True
+    assert gate["checks"]["global_kv_retention_passed"] is False
     assert gate["checks"]["global_kv_retention_enabled"] is False
     assert gate["checks"]["global_kv_retention_capacity_present"] is False
     assert gate["checks"]["global_kv_retention_cache_slots_present"] is False
@@ -2924,7 +2924,7 @@ def test_stage5_gate_requires_local_global_adapter_diagnostics(tmp_path: Path) -
     gate = json.loads(report_path.read_text(encoding="utf-8"))["gates"]["stage5_to_6"]
 
     assert gate["status"] == "warn"
-    assert gate["checks"]["global_kv_retention_passed"] is True
+    assert gate["checks"]["global_kv_retention_passed"] is False
     assert gate["checks"]["local_global_read_ratio_measured"] is False
     assert gate["checks"]["global_cache_window_utilization_measured"] is False
 
@@ -2969,7 +2969,7 @@ def test_stage5_gate_rejects_truthy_non_boolean_retention_checks(tmp_path: Path)
     gate = json.loads(report_path.read_text(encoding="utf-8"))["gates"]["stage5_to_6"]
 
     assert gate["status"] == "warn"
-    assert gate["checks"]["global_kv_retention_passed"] is True
+    assert gate["checks"]["global_kv_retention_passed"] is False
     assert gate["checks"]["global_kv_retention_stage5"] is False
     assert gate["checks"]["global_kv_retention_enabled"] is False
     assert gate["checks"]["sink_window_retention_configured"] is False
@@ -3115,7 +3115,7 @@ def test_stage6_gate_requires_branch_score_and_delta_memory_checks(tmp_path: Pat
     gate = json.loads(report_path.read_text(encoding="utf-8"))["gates"]["stage6_to_scale"]
 
     assert gate["status"] == "warn"
-    assert gate["checks"]["parallel_passing_report_passed"] is True
+    assert gate["checks"]["parallel_passing_report_passed"] is False
     assert gate["checks"]["parallel_shared_base_global_memory_enabled"] is False
     assert gate["checks"]["parallel_score_margin_nonnegative"] is False
     assert gate["checks"]["parallel_branch_score_decay_configured"] is False
@@ -3152,7 +3152,7 @@ def test_stage6_gate_rejects_truthy_non_boolean_parallel_report_checks(tmp_path:
     gate = json.loads(report_path.read_text(encoding="utf-8"))["gates"]["stage6_to_scale"]
 
     assert gate["status"] == "warn"
-    assert gate["checks"]["parallel_passing_report_passed"] is True
+    assert gate["checks"]["parallel_passing_report_passed"] is False
     assert gate["checks"]["parallel_passing_stage_reported"] is False
     assert gate["checks"]["parallel_passing_enabled"] is False
     assert gate["checks"]["parallel_shared_base_global_memory_enabled"] is False
