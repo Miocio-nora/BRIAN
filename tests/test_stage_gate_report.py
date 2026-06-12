@@ -26,6 +26,7 @@ def _write_run(
     parallel_passing_report: dict | None = None,
     model_stats: dict | None = None,
     data_manifest_ref: dict | None = None,
+    routing: dict | None = None,
     write_data_manifest_ref: bool = True,
     default_routing_metrics: bool = True,
     write_checkpoint_best: bool = True,
@@ -52,7 +53,10 @@ def _write_run(
     } | train_row
     if default_routing_metrics and stage != "stage0_baseline":
         train_row = _routed_train_row() | train_row
-    (run_dir / "config_resolved.yaml").write_text(yaml.safe_dump({"stage": stage}), encoding="utf-8")
+    config = {"stage": stage}
+    if routing is not None:
+        config["routing"] = routing
+    (run_dir / "config_resolved.yaml").write_text(yaml.safe_dump(config), encoding="utf-8")
     eval_row = {
         "validation_loss": val_loss,
         "perplexity": 1.0,
@@ -409,6 +413,19 @@ def test_stage_gate_report_writes_json(tmp_path: Path) -> None:
             "block_load_entropy": 0.5,
             "top1_block_histogram": {"0": 2, "1": 2, "2": 1},
         },
+        routing={"mode": "pseudo", "pseudo_policy": "sequential"},
+    )
+    mixed_pseudo = _write_run(
+        tmp_path,
+        "stage3_pseudo",
+        stage="stage3_pseudo_skip_recur",
+        val_loss=10.2,
+        train_row={
+            "route_imitation_accuracy": 0.95,
+            "block_load_entropy": 0.5,
+            "top1_block_histogram": {"0": 2, "1": 2, "2": 1},
+        },
+        routing={"mode": "pseudo", "pseudo_policy": "mixed_skip_recur"},
         pseudo_route_curriculum_report={
             "overall_status": "pass",
             "checks": {
@@ -540,12 +557,12 @@ def test_stage_gate_report_writes_json(tmp_path: Path) -> None:
     )
     output = tmp_path / "gate.json"
     report_path = make_stage_gate_report(
-        [baseline, fixed, stage2, stage3, stage4, stage5],
+        [baseline, fixed, stage2, mixed_pseudo, stage3, stage4, stage5],
         output_path=output,
         long_context_compare_report_path=long_context_compare,
     )
     report = json.loads(report_path.read_text(encoding="utf-8"))
-    assert report["run_count"] == 6
+    assert report["run_count"] == 7
     assert report["gates"]["stage0_to_1"]["status"] == "pass"
     assert report["gates"]["stage0_to_1"]["checks"]["checkpoint_resume_event"] is True
     assert report["gates"]["stage0_to_1"]["checks"]["checkpoint_resume_event_valid"] is True
@@ -578,7 +595,12 @@ def test_stage_gate_report_writes_json(tmp_path: Path) -> None:
     assert report["gates"]["stage1_to_2"]["checks"]["routing_report_valid"] is True
     assert report["gates"]["stage1_to_2"]["checks"]["checkpoint_best_present"] is True
     assert report["gates"]["stage2_to_3"]["status"] == "pass"
+    assert report["gates"]["stage2_to_3"]["checks"]["sequential_pseudo_policy"] is True
+    assert report["gates"]["stage2_to_3"]["checks"]["mixed_pseudo_policy"] is True
+    assert report["gates"]["stage2_to_3"]["checks"]["pseudo_route_curriculum_mixed_policy"] is True
     assert report["gates"]["stage2_to_3"]["checks"]["pseudo_route_curriculum_passed"] is True
+    assert report["gates"]["stage2_to_3"]["sequential_stage"] == "stage2_router_imitation"
+    assert report["gates"]["stage2_to_3"]["mixed_stage"] == "stage3_pseudo_skip_recur"
     assert report["gates"]["stage3_to_4"]["status"] == "pass"
     assert report["gates"]["stage3_to_4"]["checks"]["scheduled_routing_passed"] is True
     assert report["gates"]["stage3_to_4"]["checks"]["difficulty_step_correlation_positive"] is True
@@ -1164,6 +1186,42 @@ def test_stage2_gate_rejects_boolean_block_histogram_counts(tmp_path: Path) -> N
 
     assert gate["checks"]["block_usage_non_degenerate"] is False
     assert gate["checks"]["block_load_entropy_present"] is True
+
+
+def test_stage2_gate_requires_mixed_pseudo_policy_for_curriculum(tmp_path: Path) -> None:
+    stage2 = _write_run(
+        tmp_path,
+        "stage2",
+        stage="stage2_router_imitation",
+        val_loss=10.0,
+        train_row={
+            "route_imitation_accuracy": 0.95,
+            "block_load_entropy": 0.5,
+            "top1_block_histogram": {"0": 2, "1": 2, "2": 1},
+        },
+        routing={"mode": "pseudo", "pseudo_policy": "sequential"},
+        pseudo_route_curriculum_report={
+            "overall_status": "pass",
+            "checks": {
+                "baseline_samples_present": True,
+                "difficulty_bins_present": True,
+                "mixed_skip_recur_policy": True,
+                "easy_has_skip_or_small_pool": True,
+                "hard_has_recur_transition": True,
+                "exit_action_supervised": True,
+                "easy_exits_no_later_than_hard": True,
+                "route_length_conditioned_by_difficulty": True,
+            },
+        },
+    )
+
+    report_path = make_stage_gate_report([stage2], output_path=tmp_path / "gate.json")
+    gate = json.loads(report_path.read_text(encoding="utf-8"))["gates"]["stage2_to_3"]
+
+    assert gate["status"] != "pass"
+    assert gate["checks"]["sequential_pseudo_policy"] is True
+    assert gate["checks"]["mixed_pseudo_policy"] is False
+    assert gate["checks"]["pseudo_route_curriculum_passed"] is True
 
 
 def test_stage4_gate_rejects_boolean_exit_histogram_counts(tmp_path: Path) -> None:

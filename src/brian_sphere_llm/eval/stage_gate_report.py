@@ -60,7 +60,11 @@ def make_stage_gate_report(
     gates = {
         "stage0_to_1": _gate_stage0(by_stage.get("stage0_baseline")),
         "stage1_to_2": _gate_stage1(by_stage.get("stage1_fixed_route"), by_stage.get("stage0_baseline"), thresholds),
-        "stage2_to_3": _gate_stage2(by_stage.get("stage2_router_imitation"), thresholds),
+        "stage2_to_3": _gate_stage2(
+            by_stage.get("stage2_router_imitation"),
+            by_stage.get("stage3_pseudo_skip_recur") or by_stage.get("stage2_router_imitation"),
+            thresholds,
+        ),
         "stage3_to_4": _gate_stage3(by_stage.get("stage3_scheduled_free_routing"), by_stage.get("stage1_fixed_route"), thresholds),
         "stage4_to_5": _gate_stage4(
             by_stage.get("stage4_output_action"),
@@ -154,9 +158,15 @@ def _summarize_run(run_dir: Path) -> dict[str, Any]:
     difficulty_corr = _num(difficulty_report.get("difficulty_step_correlation"))
     if difficulty_corr is None:
         difficulty_corr = _difficulty_step_corr(train_rows)
+    routing_config = config.get("routing") if isinstance(config.get("routing"), dict) else {}
     summary = {
         "run_dir": str(run_dir),
         "stage": stage,
+        "routing_config": {
+            "mode": routing_config.get("mode"),
+            "pseudo_policy": routing_config.get("pseudo_policy"),
+            "hard_exit": routing_config.get("hard_exit"),
+        },
         "config_resolved_present": bool(config),
         "model_name": model_stats.get("model_name", ""),
         "parameter_count": model_stats.get("parameter_count"),
@@ -310,32 +320,73 @@ def _gate_stage1(stage1: dict[str, Any] | None, stage0: dict[str, Any] | None, t
     )
 
 
-def _gate_stage2(stage2: dict[str, Any] | None, thresholds: dict[str, float]) -> dict[str, Any]:
+def _gate_stage2(
+    sequential_stage: dict[str, Any] | None,
+    mixed_stage: dict[str, Any] | None,
+    thresholds: dict[str, float],
+) -> dict[str, Any]:
+    curriculum_checks = mixed_stage.get("pseudo_route_curriculum_checks", {}) if mixed_stage else {}
     checks = {
-        "route_imitation_accuracy": _metric_at_least(stage2, "route_imitation_accuracy", thresholds["route_imitation_mixed_min"]),
-        "lm_loss_finite": _finite(stage2.get("validation_loss") if stage2 else None),
-        "block_usage_non_degenerate": _block_usage_non_degenerate(stage2),
-        "block_load_entropy_present": _metric_at_least(stage2, "block_load_entropy", thresholds["block_load_entropy_min"]),
-        "pseudo_route_curriculum_report_present": bool(stage2 and stage2.get("pseudo_route_curriculum_report_present")),
-        "pseudo_route_curriculum_passed": bool(stage2 and stage2.get("pseudo_route_curriculum_status") == "pass"),
-        "checkpoint_present": bool(stage2 and stage2["has_checkpoint_latest"]),
-        **_routed_run_artifact_gate_checks(stage2),
-        **_validation_report_gate_checks(stage2),
-        **_routing_report_gate_checks(stage2),
-        **_model_stats_gate_checks(stage2),
-        **_data_manifest_gate_checks(stage2),
+        "sequential_pseudo_run_present": bool(sequential_stage),
+        "sequential_pseudo_policy": _routing_policy_matches(sequential_stage, "sequential"),
+        "sequential_route_imitation_accuracy": _metric_at_least(
+            sequential_stage,
+            "route_imitation_accuracy",
+            thresholds["route_imitation_mixed_min"],
+        ),
+        "mixed_pseudo_run_present": bool(mixed_stage),
+        "mixed_pseudo_policy": _routing_policy_matches(mixed_stage, "mixed_skip_recur"),
+        "route_imitation_accuracy": _metric_at_least(
+            mixed_stage,
+            "route_imitation_accuracy",
+            thresholds["route_imitation_mixed_min"],
+        ),
+        "lm_loss_finite": _finite(mixed_stage.get("validation_loss") if mixed_stage else None),
+        "block_usage_non_degenerate": _block_usage_non_degenerate(mixed_stage),
+        "block_load_entropy_present": _metric_at_least(mixed_stage, "block_load_entropy", thresholds["block_load_entropy_min"]),
+        "pseudo_route_curriculum_report_present": bool(
+            mixed_stage and mixed_stage.get("pseudo_route_curriculum_report_present")
+        ),
+        "pseudo_route_curriculum_mixed_policy": bool(
+            isinstance(curriculum_checks, dict) and curriculum_checks.get("mixed_skip_recur_policy") is True
+        ),
+        "pseudo_route_curriculum_passed": bool(
+            mixed_stage
+            and mixed_stage.get("pseudo_route_curriculum_status") == "pass"
+            and isinstance(curriculum_checks, dict)
+            and curriculum_checks.get("mixed_skip_recur_policy") is True
+        ),
+        "checkpoint_present": bool(mixed_stage and mixed_stage["has_checkpoint_latest"]),
+        **_prefixed_checks("sequential", _routed_run_artifact_gate_checks(sequential_stage)),
+        **_prefixed_checks("sequential", _validation_report_gate_checks(sequential_stage)),
+        **_prefixed_checks("sequential", _routing_report_gate_checks(sequential_stage)),
+        **_prefixed_checks("sequential", _model_stats_gate_checks(sequential_stage)),
+        **_prefixed_checks("sequential", _data_manifest_gate_checks(sequential_stage)),
+        **_routed_run_artifact_gate_checks(mixed_stage),
+        **_validation_report_gate_checks(mixed_stage),
+        **_routing_report_gate_checks(mixed_stage),
+        **_model_stats_gate_checks(mixed_stage),
+        **_data_manifest_gate_checks(mixed_stage),
     }
     return _gate(
-        "Stage 2 mixed pseudo routing is stable and non-degenerate",
+        "Stage 2 sequential and mixed pseudo routing are stable and non-degenerate",
         checks,
         {
-            "pseudo_route_curriculum_status": stage2.get("pseudo_route_curriculum_status") if stage2 else None,
-            "pseudo_route_curriculum_checks": stage2.get("pseudo_route_curriculum_checks") if stage2 else {},
-            "pseudo_route_curriculum_by_difficulty": stage2.get("pseudo_route_curriculum_by_difficulty") if stage2 else {},
-            **_validation_report_gate_extras(stage2),
-            **_routing_report_gate_extras(stage2),
-            **_model_stats_gate_extras(stage2),
-            **_data_manifest_gate_extras(stage2),
+            "sequential_run_dir": sequential_stage.get("run_dir") if sequential_stage else None,
+            "sequential_stage": sequential_stage.get("stage") if sequential_stage else None,
+            "sequential_routing_config": sequential_stage.get("routing_config") if sequential_stage else {},
+            "mixed_run_dir": mixed_stage.get("run_dir") if mixed_stage else None,
+            "mixed_stage": mixed_stage.get("stage") if mixed_stage else None,
+            "mixed_routing_config": mixed_stage.get("routing_config") if mixed_stage else {},
+            "pseudo_route_curriculum_status": mixed_stage.get("pseudo_route_curriculum_status") if mixed_stage else None,
+            "pseudo_route_curriculum_checks": mixed_stage.get("pseudo_route_curriculum_checks") if mixed_stage else {},
+            "pseudo_route_curriculum_by_difficulty": (
+                mixed_stage.get("pseudo_route_curriculum_by_difficulty") if mixed_stage else {}
+            ),
+            **_validation_report_gate_extras(mixed_stage),
+            **_routing_report_gate_extras(mixed_stage),
+            **_model_stats_gate_extras(mixed_stage),
+            **_data_manifest_gate_extras(mixed_stage),
         },
     )
 
@@ -968,9 +1019,20 @@ def _routing_metric(summary: dict[str, Any] | None, key: str) -> float | None:
     return _num(value)
 
 
+def _routing_policy_matches(summary: dict[str, Any] | None, expected: str) -> bool:
+    if not summary:
+        return False
+    routing_config = summary.get("routing_config", {})
+    return isinstance(routing_config, dict) and routing_config.get("pseudo_policy") == expected
+
+
 def _metric_at_least(summary: dict[str, Any] | None, key: str, minimum: float) -> bool:
     value = _routing_metric(summary, key)
     return value is not None and value >= minimum
+
+
+def _prefixed_checks(prefix: str, checks: dict[str, bool]) -> dict[str, bool]:
+    return {f"{prefix}_{key}": value for key, value in checks.items()}
 
 
 def _block_usage_non_degenerate(summary: dict[str, Any] | None) -> bool:
