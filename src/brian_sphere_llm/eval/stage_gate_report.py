@@ -648,6 +648,10 @@ def _gate_stage5(
         "global_cache_slots_present": _metric_at_least(stage5, "global_cache_slots_mean", 1.0),
         "global_kv_retention_report_present": bool(retention_report),
         "global_kv_retention_passed": bool(retention_report.get("overall_status") == "pass"),
+        "global_kv_retention_stage5": bool(retention_checks.get("stage5_global_kv_stage", False)),
+        "global_kv_retention_enabled": bool(retention_checks.get("global_kv_enabled", False)),
+        "global_kv_retention_capacity_present": bool(retention_checks.get("retention_capacity_present", False)),
+        "global_kv_retention_cache_slots_present": bool(retention_checks.get("global_cache_slots_present", False)),
         "stage4_reference_validation_loss_present": loss_ratio is not None,
         "validation_loss_not_worse_than_stage4": loss_ratio is not None
         and loss_ratio <= thresholds["stage5_loss_ratio_max"],
