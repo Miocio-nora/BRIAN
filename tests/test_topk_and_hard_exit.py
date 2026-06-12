@@ -54,7 +54,7 @@ def test_later_top_k_enables_weighted_fusion_after_first_step() -> None:
     assert output["routing_summary"]["topk_block_histogram"]["1"] == 2
 
 
-def test_pseudo_route_targets_control_forward_even_when_router_prefers_out() -> None:
+def test_pseudo_route_targets_control_forward_and_supervise_out_even_when_router_prefers_out() -> None:
     cfg = BrianRouteConfig(
         base=BaselineConfig(vocab_size=64, context_length=8, layers=4, d_model=32, n_heads=4),
         pre_blocks=1,
@@ -62,7 +62,7 @@ def test_pseudo_route_targets_control_forward_even_when_router_prefers_out() -> 
         post_blocks=1,
         block_position_dim=8,
         max_route_steps=2,
-        hard_exit=True,
+        hard_exit=False,
     )
     model = BrianRouteCore(cfg)
     _set_router_bias(model, {cfg.route_pool_blocks: 10.0, 0: 0.0, 1: 0.0})
@@ -73,14 +73,14 @@ def test_pseudo_route_targets_control_forward_even_when_router_prefers_out() -> 
         targets=input_ids,
         route_mode="pseudo",
         pseudo_policy="sequential",
-        hard_exit=True,
+        hard_exit=False,
     )
 
     selected = [actions.tolist() for actions in output["route_info"]["selected_actions"]]
     targets = [actions.tolist() for actions in output["route_info"]["route_targets"]]
     assert selected == targets
-    assert selected == [[0, 0], [1, 1]]
-    assert output["routing_summary"]["first_exit_step_histogram"] == {"0": 2}
+    assert selected == [[0, 0], [1, 1], [2, 2]]
+    assert output["routing_summary"]["first_exit_step_histogram"] == {"3": 2}
 
 
 def test_hard_exit_stops_when_router_prefers_out() -> None:

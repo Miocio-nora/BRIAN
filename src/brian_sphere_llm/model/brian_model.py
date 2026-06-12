@@ -223,7 +223,7 @@ class BrianRouteCore(ModuleBase):
             "max_route_steps": self.config.max_route_steps,
         }
         route_targets = self._targets_for_mode(route_mode, pseudo_policy, batch_size, input_ids.device)
-        max_steps = len(route_targets) if route_mode == "fixed" else self.config.max_route_steps
+        max_steps = len(route_targets) if route_mode in {"fixed", "pseudo"} else self.config.max_route_steps
         exited = torch.zeros(batch_size, dtype=torch.bool, device=input_ids.device)
         global_state = None
         if self.config.global_kv:
