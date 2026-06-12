@@ -76,6 +76,9 @@ def make_reasoning_report(
     _write_jsonl(rows, sample_output_path)
     report = {
         "run_dir": str(run_dir),
+        "stage": str(config.get("stage", "")),
+        "route_mode": route_mode,
+        "hard_exit": _hard_exit_enabled(config),
         "checkpoint": str(checkpoint),
         "sample_count": len(rows),
         "seed": seed,
@@ -308,6 +311,15 @@ def _group_summary(rows: list[dict[str, Any]], key: str) -> dict[str, dict[str, 
 def _routing_summary(rows: list[dict[str, Any]]) -> dict[str, float | None]:
     keys = sorted({key for row in rows for key in row if key.startswith("routing_")})
     return {key.removeprefix("routing_"): _mean([row.get(key) for row in rows]) for key in keys}
+
+
+def _hard_exit_enabled(config: dict[str, Any]) -> bool | None:
+    routing_config = config.get("routing", {})
+    if isinstance(routing_config, Mapping) and isinstance(routing_config.get("hard_exit"), bool):
+        return bool(routing_config["hard_exit"])
+    if str(config.get("stage", "")) == "stage4_output_action":
+        return True
+    return None
 
 
 def _mean(values: list[Any]) -> float | None:

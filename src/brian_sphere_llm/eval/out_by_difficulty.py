@@ -40,6 +40,8 @@ def make_out_by_difficulty_report(
     checks = _checks(
         by_difficulty,
         deltas,
+        reasoning_report=reasoning_report,
+        reasoning_report_path=report_path,
         min_step_delta=min_step_delta,
         min_output_probability_delta=min_output_probability_delta,
     )
@@ -58,6 +60,9 @@ def make_out_by_difficulty_report(
             "reasoning_report": str(report_path) if report_path else None,
             "samples_path": str(sample_path),
             "reasoning_run_dir": reasoning_report.get("run_dir"),
+            "reasoning_stage": reasoning_report.get("stage"),
+            "reasoning_route_mode": reasoning_report.get("route_mode"),
+            "reasoning_hard_exit": reasoning_report.get("hard_exit"),
             "reasoning_checkpoint": reasoning_report.get("checkpoint"),
         },
     }
@@ -97,6 +102,8 @@ def _checks(
     by_difficulty: dict[str, dict[str, Any]],
     deltas: dict[str, float | None],
     *,
+    reasoning_report: dict[str, Any],
+    reasoning_report_path: Path | None,
     min_step_delta: float,
     min_output_probability_delta: float,
 ) -> dict[str, bool | None]:
@@ -107,6 +114,9 @@ def _checks(
     active_delta = deltas["hard_minus_easy_active_block_evals_per_token"]
     output_delta = deltas["easy_minus_hard_p_output"]
     return {
+        "reasoning_report_present": reasoning_report_path is not None,
+        "stage4_output_action_reasoning": reasoning_report.get("stage") == "stage4_output_action",
+        "hard_exit_reasoning": reasoning_report.get("hard_exit") is True,
         "easy_and_hard_present": easy_and_hard_present,
         "route_steps_non_decreasing_with_difficulty": _at_least(route_delta, min_step_delta),
         "active_compute_non_decreasing_with_difficulty": _at_least(active_delta, 0.0),
