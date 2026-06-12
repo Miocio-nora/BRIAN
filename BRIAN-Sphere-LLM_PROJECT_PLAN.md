@@ -1673,6 +1673,13 @@ The next decision should compare Package A evidence against the R125 go
 criteria before choosing a 5B R125 follow-up, R350 scaling, or additional
 route-core fixes. Only after that should the project add Global KV memory.
 
+The current experiment-level judgment is documented in
+`reports/package_a_r125_2b_experiment_judgment.md`. The local route-core
+mechanism is trainable and measurable, but the strict R125-to-R350 decision is
+still stop: OUT/hard-exit, cost-control, and difficulty-conditioned compute are
+not proven by Package A. The recommended next step is a minimal R125 follow-up,
+not R350, Global KV, or parallel passing.
+
 ---
 
 ## 26. One-Sentence Project Definition

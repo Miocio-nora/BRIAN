@@ -60,6 +60,12 @@ active layer compute than the fixed baseline, so the generic same-active-compute
 comparison view does not pass. Run artifacts, generated reports, data, and
 checkpoints are local outputs and remain git-ignored.
 
+The experiment-level judgment is tracked in
+[reports/package_a_r125_2b_experiment_judgment.md](./reports/package_a_r125_2b_experiment_judgment.md).
+In short: the local route-core mechanism is trainable and measurable, but R125
+has not yet passed the full go/no-go case for R350 because OUT/hard-exit,
+cost-control, and difficulty-conditioned compute are not proven.
+
 See [BRIAN-Sphere-LLM_PROJECT_PLAN.md](./BRIAN-Sphere-LLM_PROJECT_PLAN.md) for the full technical plan.
 See [CODEX_GUIDANCE.md](./CODEX_GUIDANCE.md) for implementation guidance.
 
