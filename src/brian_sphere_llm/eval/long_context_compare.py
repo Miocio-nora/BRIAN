@@ -84,6 +84,10 @@ def _compare_candidate(
     candidate_scheduled = candidate.get("route_mode") == "scheduled"
     baseline_local_kv = baseline_global_enabled is False
     candidate_global_kv = candidate_global_enabled is True
+    baseline_report_status = baseline.get("overall_status")
+    candidate_report_status = candidate.get("overall_status")
+    baseline_report_passed = _report_passed(baseline_report_status)
+    candidate_report_passed = _report_passed(candidate_report_status)
     global_active = (
         attention_mass is not None
         and attention_mass >= min_global_attention_mass
@@ -101,6 +105,8 @@ def _compare_candidate(
     candidate_task_family_coverage = _coverage_passed(candidate_coverage, "task_family_coverage_passed")
     candidate_difficulty_coverage = _coverage_passed(candidate_coverage, "difficulty_coverage_passed")
     checks = {
+        "baseline_report_passed": baseline_report_passed,
+        "candidate_report_passed": candidate_report_passed,
         "baseline_stage4_output_action": baseline_stage4,
         "baseline_scheduled_route_mode": baseline_scheduled,
         "baseline_local_kv": baseline_local_kv,
@@ -120,6 +126,8 @@ def _compare_candidate(
     return {
         "candidate_report": str(candidate_report_path),
         "baseline_report": str(baseline_report_path),
+        "candidate_report_status": candidate_report_status,
+        "baseline_report_status": baseline_report_status,
         "candidate_stage": candidate.get("stage"),
         "baseline_stage": baseline.get("stage"),
         "candidate_route_mode": candidate.get("route_mode"),
@@ -213,6 +221,10 @@ def _coverage_passed(coverage: Any, key: str) -> bool:
     if not isinstance(coverage, dict):
         return False
     return coverage.get(key) is True
+
+
+def _report_passed(status: Any) -> bool:
+    return status is None or status == "pass"
 
 
 def _coverage_summary(coverage: Any) -> dict[str, Any]:
