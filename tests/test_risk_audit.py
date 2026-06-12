@@ -143,6 +143,12 @@ def test_risk_audit_passes_with_clear_evidence(tmp_path: Path) -> None:
                         "candidate_parallel_route_mode": True,
                         "candidate_parallel_passing_enabled": True,
                         "candidate_global_kv_enabled": True,
+                        "parallel_branch_active": True,
+                        "parallel_score_margin_present": True,
+                        "quality_not_worse": True,
+                        "active_compute_bounded": True,
+                        "estimated_flops_bounded": True,
+                        "throughput_not_collapsed": True,
                         "parallel_branch_benefit_proxy": True,
                     },
                 }
@@ -459,6 +465,12 @@ def test_risk_audit_requires_parallel_compare_stage_roles(tmp_path: Path) -> Non
                         "candidate_parallel_route_mode": True,
                         "candidate_parallel_passing_enabled": True,
                         "candidate_global_kv_enabled": True,
+                        "parallel_branch_active": True,
+                        "parallel_score_margin_present": True,
+                        "quality_not_worse": True,
+                        "active_compute_bounded": True,
+                        "estimated_flops_bounded": True,
+                        "throughput_not_collapsed": True,
                         "parallel_branch_benefit_proxy": True,
                     },
                 }
@@ -512,6 +524,12 @@ def test_risk_audit_requires_topk_weighted_parallel_baseline(tmp_path: Path) -> 
                         "candidate_parallel_route_mode": True,
                         "candidate_parallel_passing_enabled": True,
                         "candidate_global_kv_enabled": True,
+                        "parallel_branch_active": True,
+                        "parallel_score_margin_present": True,
+                        "quality_not_worse": True,
+                        "active_compute_bounded": True,
+                        "estimated_flops_bounded": True,
+                        "throughput_not_collapsed": True,
                         "parallel_branch_benefit_proxy": True,
                     },
                 }
@@ -565,6 +583,12 @@ def test_risk_audit_requires_parallel_branch_score_decay(tmp_path: Path) -> None
                         "candidate_parallel_route_mode": True,
                         "candidate_parallel_passing_enabled": True,
                         "candidate_global_kv_enabled": True,
+                        "parallel_branch_active": True,
+                        "parallel_score_margin_present": True,
+                        "quality_not_worse": True,
+                        "active_compute_bounded": True,
+                        "estimated_flops_bounded": True,
+                        "throughput_not_collapsed": True,
                         "parallel_branch_benefit_proxy": True,
                     },
                 }
@@ -615,6 +639,12 @@ def test_risk_audit_requires_passing_parallel_compare_report_for_branch_credit_c
                         "candidate_parallel_route_mode": True,
                         "candidate_parallel_passing_enabled": True,
                         "candidate_global_kv_enabled": True,
+                        "parallel_branch_active": True,
+                        "parallel_score_margin_present": True,
+                        "quality_not_worse": True,
+                        "active_compute_bounded": True,
+                        "estimated_flops_bounded": True,
+                        "throughput_not_collapsed": True,
                         "parallel_branch_benefit_proxy": True,
                     },
                 }
@@ -636,6 +666,60 @@ def test_risk_audit_requires_passing_parallel_compare_report_for_branch_credit_c
     assert candidate["report_passed"] is False
     assert candidate["role_contract_passed"] is True
     assert candidate["parallel_branch_benefit_proxy"] is True
+    assert candidate["passes_parallel_compare_contract"] is False
+
+
+def test_risk_audit_requires_parallel_compare_key_checks(tmp_path: Path) -> None:
+    passing = _write_json(
+        tmp_path / "parallel_passing.json",
+        {
+            "checks": {
+                "branch_count_bounded_by_beam": True,
+                "delta_cache_bounded_by_window": True,
+                "score_margin_measured": True,
+                "branch_score_decay_configured": True,
+            },
+        },
+    )
+    compare = _write_json(
+        tmp_path / "parallel_compare.json",
+        {
+            "overall_status": "pass",
+            "comparisons": [
+                {
+                    "candidate_run": "parallel",
+                    "status": "pass",
+                    "checks": {
+                        "baseline_stage5_global_kv": True,
+                        "baseline_scheduled_route_mode": True,
+                        "baseline_global_kv_enabled": True,
+                        "baseline_parallel_passing_disabled": True,
+                        "baseline_topk_weighted_fusion": True,
+                        "candidate_parallel_stage": True,
+                        "candidate_parallel_route_mode": True,
+                        "candidate_parallel_passing_enabled": True,
+                        "candidate_global_kv_enabled": True,
+                        "parallel_branch_benefit_proxy": True,
+                    },
+                }
+            ],
+        },
+    )
+
+    output = make_risk_audit_report(
+        output_path=tmp_path / "risk.json",
+        parallel_passing_report_path=passing,
+        parallel_compare_report_path=compare,
+    )
+    report = json.loads(output.read_text(encoding="utf-8"))
+    unstable = _symptom(report, "parallel_passing_cost_explosion", "branch_credit_assignment_unstable")
+    candidate = unstable["evidence"]["parallel_compare_candidates"][0]
+
+    assert report["risks"]["parallel_passing_cost_explosion"]["status"] == "fail"
+    assert unstable["triggered"] is True
+    assert candidate["role_contract_passed"] is True
+    assert candidate["evidence_checks"]["parallel_branch_active"] is None
+    assert candidate["evidence_contract_passed"] is False
     assert candidate["passes_parallel_compare_contract"] is False
 
 

@@ -35,6 +35,16 @@ PARALLEL_COMPARE_ROLE_CHECKS = [
     "candidate_global_kv_enabled",
 ]
 
+PARALLEL_COMPARE_EVIDENCE_CHECKS = [
+    "parallel_branch_active",
+    "parallel_score_margin_present",
+    "quality_not_worse",
+    "active_compute_bounded",
+    "estimated_flops_bounded",
+    "throughput_not_collapsed",
+    "parallel_branch_benefit_proxy",
+]
+
 
 LONG_CONTEXT_STAGE5_ROLE_CHECKS = [
     "baseline_stage4_output_action",
@@ -666,20 +676,24 @@ def _parallel_compare_benefit(report: dict[str, Any]) -> tuple[bool | None, list
         checks = _dict(row.get("checks"))
         role_checks = _selected_checks(checks, PARALLEL_COMPARE_ROLE_CHECKS)
         role_contract_passed = all(value is True for value in role_checks.values())
+        evidence_checks = _selected_checks(checks, PARALLEL_COMPARE_EVIDENCE_CHECKS)
+        evidence_contract_passed = all(value is True for value in evidence_checks.values())
         benefit = checks.get("parallel_branch_benefit_proxy")
-        value = report_passed and benefit is True and role_contract_passed
-        if isinstance(benefit, bool):
+        row_passed = row.get("status") == "pass"
+        value = report_passed and row_passed and role_contract_passed and evidence_contract_passed
+        if isinstance(benefit, bool) or row.get("status") in {"pass", "fail"}:
             values.append(value)
-        elif row.get("status") == "fail":
-            values.append(False)
         else:
             evidence.append(
                 {
                     "candidate_run": row.get("candidate_run"),
                     "status": row.get("status"),
                     "report_passed": report_passed,
+                    "row_passed": row_passed,
                     "role_checks": role_checks,
                     "role_contract_passed": role_contract_passed,
+                    "evidence_checks": evidence_checks,
+                    "evidence_contract_passed": evidence_contract_passed,
                     "parallel_branch_benefit_proxy": benefit,
                     "passes_parallel_compare_contract": None,
                 }
@@ -690,8 +704,11 @@ def _parallel_compare_benefit(report: dict[str, Any]) -> tuple[bool | None, list
                 "candidate_run": row.get("candidate_run"),
                 "status": row.get("status"),
                 "report_passed": report_passed,
+                "row_passed": row_passed,
                 "role_checks": role_checks,
                 "role_contract_passed": role_contract_passed,
+                "evidence_checks": evidence_checks,
+                "evidence_contract_passed": evidence_contract_passed,
                 "parallel_branch_benefit_proxy": benefit,
                 "passes_parallel_compare_contract": value,
             }
