@@ -15,13 +15,14 @@ def _write_run(
     inference_time_seconds: float,
     inference_latency_ms_per_token: float,
     average_route_steps: float,
+    stage: str | None = None,
 ) -> Path:
     run_dir = root / name
     run_dir.mkdir(parents=True)
     (run_dir / "config_resolved.yaml").write_text(
         yaml.safe_dump(
             {
-                "stage": "stage4_output_action" if hard_exit else "stage4_scheduled_free_routing",
+                "stage": stage or ("stage4_output_action" if hard_exit else "stage4_scheduled_free_routing"),
                 "batch_size": 2,
                 "data_config_resolved": {"sequence_length": 8},
                 "routing": {"mode": "scheduled", "hard_exit": hard_exit},
@@ -105,6 +106,8 @@ def test_hard_exit_compare_passes_when_timing_and_route_steps_improve(tmp_path: 
     assert report["overall_status"] == "pass"
     assert report["baseline"]["hard_exit_enabled"] is False
     assert row["candidate"]["hard_exit_enabled"] is True
+    assert row["checks"]["baseline_stage4_scheduled_free_routing"] is True
+    assert row["checks"]["candidate_stage4_output_action"] is True
     assert row["checks"]["inference_timing_present"] is True
     assert row["baseline_comparison"]["inference_latency_ms_per_token_ratio"] == 0.5
     assert row["baseline_comparison"]["inference_time_seconds_ratio"] == 0.5
@@ -142,6 +145,43 @@ def test_hard_exit_compare_warns_when_candidate_does_not_enable_hard_exit(tmp_pa
     assert report["overall_status"] == "warn"
     assert row["checks"]["candidate_with_hard_exit"] is False
     assert row["checks"]["latency_ratio_within_threshold"] is True
+
+
+def test_hard_exit_compare_requires_stage4_baseline_and_candidate_stages(tmp_path: Path) -> None:
+    baseline = _write_run(
+        tmp_path,
+        "stage3_without_hard_exit",
+        hard_exit=False,
+        validation_loss=10.0,
+        inference_time_seconds=1.0,
+        inference_latency_ms_per_token=0.50,
+        average_route_steps=4.0,
+        stage="stage3_scheduled_free_routing",
+    )
+    candidate = _write_run(
+        tmp_path,
+        "stage5_with_hard_exit",
+        hard_exit=True,
+        validation_loss=10.0,
+        inference_time_seconds=0.5,
+        inference_latency_ms_per_token=0.25,
+        average_route_steps=2.0,
+        stage="stage5_output_action",
+    )
+
+    output = make_hard_exit_comparison_report(
+        baseline,
+        [candidate],
+        output_path=tmp_path / "hard_exit_compare.json",
+    )
+    report = json.loads(output.read_text(encoding="utf-8"))
+    row = report["comparisons"][0]
+
+    assert report["overall_status"] == "warn"
+    assert row["checks"]["baseline_without_hard_exit"] is True
+    assert row["checks"]["candidate_with_hard_exit"] is True
+    assert row["checks"]["baseline_stage4_scheduled_free_routing"] is False
+    assert row["checks"]["candidate_stage4_output_action"] is False
 
 
 def test_hard_exit_compare_rejects_boolean_numeric_metrics(tmp_path: Path) -> None:

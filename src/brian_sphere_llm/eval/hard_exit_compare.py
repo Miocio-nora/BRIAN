@@ -67,7 +67,9 @@ def _compare_candidate(
     )
     route_step_ratio = _ratio(candidate_routing.get("average_route_steps"), baseline_routing.get("average_route_steps"))
     checks = {
+        "baseline_stage4_scheduled_free_routing": baseline.get("stage") == "stage4_scheduled_free_routing",
         "baseline_without_hard_exit": baseline.get("hard_exit_enabled") is False,
+        "candidate_stage4_output_action": candidate.get("stage") == "stage4_output_action",
         "candidate_with_hard_exit": candidate.get("hard_exit_enabled") is True,
         "inference_timing_present": _num(baseline.get("inference_time_seconds_latest")) is not None
         and _num(candidate.get("inference_time_seconds_latest")) is not None

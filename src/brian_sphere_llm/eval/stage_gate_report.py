@@ -470,7 +470,9 @@ def _gate_stage4(
     cost_checks = cost_analysis.get("checks", {}) if isinstance(cost_analysis.get("checks"), dict) else {}
     out_checks = out_by_difficulty_report.get("checks", {}) if isinstance(out_by_difficulty_report.get("checks"), dict) else {}
     hard_exit_key_checks = [
+        "baseline_stage4_scheduled_free_routing",
         "baseline_without_hard_exit",
+        "candidate_stage4_output_action",
         "candidate_with_hard_exit",
         "inference_timing_present",
         "latency_ratio_within_threshold",
