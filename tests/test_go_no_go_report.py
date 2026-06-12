@@ -894,6 +894,9 @@ def test_go_no_go_r1b_success_passes_with_compute_adjusted_advantage(tmp_path: P
                     "validation_loss": 10.2,
                     "inference_latency_ms_per_token_latest": 1.5,
                     "baseline_comparison": {
+                        "same_parameter_count_view": True,
+                        "same_active_compute_view": True,
+                        "similar_training_flops_view": True,
                         "estimated_flops_per_token_ratio": 0.9,
                         "inference_latency_ms_per_token_ratio": 1.5,
                         "validation_loss_delta": 0.2,
@@ -927,7 +930,60 @@ def test_go_no_go_r1b_success_passes_with_compute_adjusted_advantage(tmp_path: P
     assert memory[0]["global_cache_capacity_ratio"] == 0.25
     assert latency[0]["inference_latency_ms_per_token_ratio"] == 1.5
     assert adjusted["passed"] is True
+    assert adjusted["evidence"]["candidates"][0]["comparison_view_contract_passed"] is True
     assert adjusted["evidence"]["candidates"][0]["compute_adjusted_loss_delta"] < 0.0
+
+
+def test_go_no_go_r1b_success_requires_compute_baseline_views(tmp_path: Path) -> None:
+    stage_gate = _write_json(tmp_path / "stage_gate.json", _passing_stage_gate())
+    compute = _write_json(
+        tmp_path / "compute.json",
+        {
+            "run_count": 2,
+            "baseline_run": "baseline",
+            "runs": [
+                {
+                    "run_dir": "baseline",
+                    "validation_loss": 10.0,
+                    "inference_latency_ms_per_token_latest": 1.0,
+                },
+                {
+                    "run_dir": "r1b_candidate",
+                    "stage": "stage6_parallel_passing",
+                    "validation_loss": 9.8,
+                    "inference_latency_ms_per_token_latest": 1.5,
+                    "baseline_comparison": {
+                        "estimated_flops_per_token_ratio": 0.9,
+                        "inference_latency_ms_per_token_ratio": 1.5,
+                        "validation_loss_delta": -0.2,
+                    },
+                },
+            ],
+        },
+    )
+    long_context = _write_json(tmp_path / "long_context.json", _controlled_memory_compare())
+
+    output = make_go_no_go_report(
+        stage_gate_report_path=stage_gate,
+        compute_report_path=compute,
+        long_context_compare_report_path=long_context,
+        phase="r1b_success",
+        output_path=tmp_path / "go.json",
+    )
+    report = json.loads(output.read_text(encoding="utf-8"))
+    criteria = {item["name"]: item for item in report["phases"]["r1b_success"]["criteria"]}
+    compute_present = criteria["compute_adjusted_eval_present"]
+    adjusted = criteria["at_least_one_core_advantage_stable"]["evidence"]["better_compute_adjusted_perplexity"]
+    candidate = adjusted["evidence"]["candidates"][0]
+
+    assert report["overall_status"] == "fail"
+    assert compute_present["status"] == "fail"
+    assert candidate["comparison_view_checks"]["same_parameter_count_view"] is None
+    assert candidate["comparison_view_checks"]["same_active_compute_view"] is None
+    assert candidate["comparison_view_checks"]["similar_training_flops_view"] is None
+    assert candidate["comparison_view_contract_passed"] is False
+    assert candidate["compute_adjusted_loss_delta"] < 0.0
+    assert candidate["passes_compute_adjusted_loss_proxy"] is False
 
 
 def test_go_no_go_r1b_success_fails_explicit_routing_collapse(tmp_path: Path) -> None:
@@ -950,6 +1006,9 @@ def test_go_no_go_r1b_success_fails_explicit_routing_collapse(tmp_path: Path) ->
                     "validation_loss": 10.2,
                     "inference_latency_ms_per_token_latest": 1.5,
                     "baseline_comparison": {
+                        "same_parameter_count_view": True,
+                        "same_active_compute_view": True,
+                        "similar_training_flops_view": True,
                         "estimated_flops_per_token_ratio": 0.9,
                         "inference_latency_ms_per_token_ratio": 1.5,
                     },
@@ -992,6 +1051,9 @@ def test_go_no_go_r1b_success_requires_stage5_long_context_memory_roles(tmp_path
                     "validation_loss": 10.2,
                     "inference_latency_ms_per_token_latest": 1.5,
                     "baseline_comparison": {
+                        "same_parameter_count_view": True,
+                        "same_active_compute_view": True,
+                        "similar_training_flops_view": True,
                         "estimated_flops_per_token_ratio": 0.9,
                         "inference_latency_ms_per_token_ratio": 1.5,
                         "validation_loss_delta": 0.2,
@@ -1041,6 +1103,9 @@ def test_go_no_go_r1b_success_requires_long_context_memory_coverage(tmp_path: Pa
                     "validation_loss": 10.2,
                     "inference_latency_ms_per_token_latest": 1.5,
                     "baseline_comparison": {
+                        "same_parameter_count_view": True,
+                        "same_active_compute_view": True,
+                        "similar_training_flops_view": True,
                         "estimated_flops_per_token_ratio": 0.9,
                         "inference_latency_ms_per_token_ratio": 1.5,
                         "validation_loss_delta": 0.2,
@@ -1089,6 +1154,9 @@ def test_go_no_go_r1b_success_accepts_less_visible_cot_advantage(tmp_path: Path)
                     "validation_loss": 10.1,
                     "inference_latency_ms_per_token_latest": 1.1,
                     "baseline_comparison": {
+                        "same_parameter_count_view": True,
+                        "same_active_compute_view": True,
+                        "similar_training_flops_view": True,
                         "estimated_flops_per_token_ratio": 1.0,
                         "inference_latency_ms_per_token_ratio": 1.1,
                     },

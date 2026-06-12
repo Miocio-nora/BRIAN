@@ -23,6 +23,12 @@ LONG_CONTEXT_COVERAGE_CHECKS = [
     "candidate_difficulty_coverage",
 ]
 
+BASELINE_COMPARISON_VIEW_CHECKS = [
+    "same_parameter_count_view",
+    "same_active_compute_view",
+    "similar_training_flops_view",
+]
+
 
 def make_go_no_go_report(
     *,
@@ -828,7 +834,11 @@ def _compute_adjusted_eval_present(report: dict[str, Any]) -> bool | None:
     candidates = _compute_adjusted_candidates(report, max_compute_adjusted_loss_delta=0.0)
     if not candidates:
         return None
-    return any(candidate["compute_adjusted_loss_delta"] is not None for candidate in candidates)
+    return any(
+        candidate["comparison_view_contract_passed"] is True
+        and candidate["compute_adjusted_loss_delta"] is not None
+        for candidate in candidates
+    )
 
 
 def _better_compute_adjusted_perplexity(report: dict[str, Any], max_compute_adjusted_loss_delta: float) -> bool | None:
@@ -871,6 +881,8 @@ def _compute_adjusted_candidates(
         comparison = row["baseline_comparison"]
         flops_ratio = _num(comparison.get("estimated_flops_per_token_ratio"))
         validation_loss = _num(row.get("validation_loss"))
+        view_checks = _baseline_comparison_view_checks(comparison)
+        view_contract_passed = all(value is True for value in view_checks.values())
         adjusted_delta = None
         if validation_loss is not None and flops_ratio is not None:
             adjusted_delta = validation_loss * flops_ratio - baseline_loss
@@ -880,10 +892,13 @@ def _compute_adjusted_candidates(
                 "stage": row.get("stage"),
                 "validation_loss": validation_loss,
                 "baseline_validation_loss": baseline_loss,
+                "comparison_view_checks": view_checks,
+                "comparison_view_contract_passed": view_contract_passed,
                 "estimated_flops_per_token_ratio": flops_ratio,
                 "validation_loss_delta": _num(comparison.get("validation_loss_delta")),
                 "compute_adjusted_loss_delta": adjusted_delta,
-                "passes_compute_adjusted_loss_proxy": adjusted_delta is not None
+                "passes_compute_adjusted_loss_proxy": view_contract_passed
+                and adjusted_delta is not None
                 and adjusted_delta <= max_compute_adjusted_loss_delta,
             }
         )
@@ -975,13 +990,15 @@ def _compute_report_has_not_worse_candidate(report: dict[str, Any]) -> bool | No
         if not isinstance(comparison, dict):
             continue
         found = True
-        same_parameter_count = comparison.get("same_parameter_count_view") is True
-        same_active = comparison.get("same_active_compute_view") is True
-        similar_flops = comparison.get("similar_training_flops_view") is True
+        view_contract_passed = all(value is True for value in _baseline_comparison_view_checks(comparison).values())
         loss_delta = _num(comparison.get("validation_loss_delta"))
-        if same_parameter_count and same_active and similar_flops and loss_delta is not None and loss_delta <= 0.0:
+        if view_contract_passed and loss_delta is not None and loss_delta <= 0.0:
             return True
     return False if found else None
+
+
+def _baseline_comparison_view_checks(comparison: dict[str, Any]) -> dict[str, Any]:
+    return {name: comparison.get(name) for name in BASELINE_COMPARISON_VIEW_CHECKS}
 
 
 def _compute_report_evidence(report: dict[str, Any]) -> dict[str, Any]:

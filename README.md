@@ -317,7 +317,7 @@ python scripts/eval.py \
   --runs <stage0_baseline_run> <routed_run_1> <routed_run_2>
 ```
 
-This writes `reports/compute_report.json` with parameter ratios, active layer eval ratios, estimated FLOPs/token, estimated GPU-hours, validation loss deltas, throughput ratios, latency/token, train step time, inference timing, and CUDA memory snapshots when available.
+This writes `reports/compute_report.json` with parameter ratios, active layer eval ratios, estimated FLOPs/token, estimated GPU-hours, validation loss deltas, throughput ratios, latency/token, train step time, inference timing, and CUDA memory snapshots when available. Go/No-Go compute criteria require every compute-adjusted candidate to satisfy the same-parameter-count, same-active-compute, and similar-training-FLOPs baseline comparison views.
 
 Compare inference timing with and without hard `OUT` exits:
 
@@ -520,7 +520,7 @@ python scripts/eval.py \
   --long-context-compare-report reports/long_context_compare.json
 ```
 
-The `r1b_success` phase requires non-collapsed routing, compute-adjusted evaluation evidence, controlled Global KV memory, acceptable inference latency, and at least one stable core advantage: compute-adjusted validation loss, reasoning accuracy, long-context memory efficiency, or lower visible-CoT token use at similar reasoning accuracy.
+The `r1b_success` phase requires non-collapsed routing, compute-adjusted evaluation evidence with all three baseline comparison views present and passing, controlled Global KV memory, acceptable inference latency, and at least one stable core advantage: compute-adjusted validation loss, reasoning accuracy, long-context memory efficiency, or lower visible-CoT token use at similar reasoning accuracy.
 
 Audit the project plan's Risk Register against collected evidence:
 
