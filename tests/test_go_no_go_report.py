@@ -72,6 +72,12 @@ def _controlled_memory_compare() -> dict:
                     },
                 },
                 "checks": {
+                    "baseline_stage4_output_action": True,
+                    "baseline_scheduled_route_mode": True,
+                    "baseline_local_kv": True,
+                    "candidate_stage5_global_kv": True,
+                    "candidate_scheduled_route_mode": True,
+                    "candidate_global_kv_enabled": True,
                     "global_kv_active": True,
                     "quality_not_worse": True,
                     "memory_budget_present": True,
@@ -428,6 +434,58 @@ def test_go_no_go_r350_rejects_empty_passing_long_context_report(tmp_path: Path)
     assert report["overall_status"] == "fail"
     assert global_kv["status"] == "fail"
     assert global_kv["evidence"]["long_context_compare"]["benefit_candidates"] == []
+
+
+def test_go_no_go_r350_requires_stage5_long_context_roles(tmp_path: Path) -> None:
+    stage_gate = _write_json(tmp_path / "stage_gate.json", _passing_stage_gate())
+    compute = _write_json(
+        tmp_path / "compute.json",
+        {
+            "run_count": 2,
+            "baseline_run": "baseline",
+            "runs": [
+                {"run_dir": "baseline"},
+                {
+                    "run_dir": "routed",
+                    "stage": "stage4_output_action",
+                    "validation_loss": 9.9,
+                    "baseline_comparison": {
+                        "same_parameter_count_view": True,
+                        "same_active_compute_view": True,
+                        "similar_training_flops_view": True,
+                        "validation_loss_delta": -0.1,
+                    },
+                },
+            ],
+        },
+    )
+    reasoning_baseline = _write_json(tmp_path / "reasoning_base.json", {"overall": {"exact_match_accuracy": 0.2}})
+    reasoning_candidate = _write_json(tmp_path / "reasoning_candidate.json", {"overall": {"exact_match_accuracy": 0.3}})
+    out = _write_json(tmp_path / "out.json", _passing_out_by_difficulty())
+    long_context_data = _controlled_memory_compare()
+    long_context_data["comparisons"][0]["checks"]["candidate_stage5_global_kv"] = False
+    long_context = _write_json(tmp_path / "long_context.json", long_context_data)
+
+    output = make_go_no_go_report(
+        stage_gate_report_path=stage_gate,
+        compute_report_path=compute,
+        reasoning_baseline_report_path=reasoning_baseline,
+        reasoning_candidate_report_paths=[reasoning_candidate],
+        out_by_difficulty_report_path=out,
+        long_context_compare_report_path=long_context,
+        phase="r350_to_1b",
+        output_path=tmp_path / "go.json",
+    )
+    report = json.loads(output.read_text(encoding="utf-8"))
+    criteria = {item["name"]: item for item in report["phases"]["r350_to_1b"]["criteria"]}
+    global_kv = criteria["global_kv_long_context_benefit_if_tested"]
+    candidate = global_kv["evidence"]["long_context_compare"]["benefit_candidates"][0]
+
+    assert report["overall_status"] == "fail"
+    assert global_kv["status"] == "fail"
+    assert candidate["role_checks"]["candidate_stage5_global_kv"] is False
+    assert candidate["role_contract_passed"] is False
+    assert candidate["passes_memory_quality_proxy"] is False
 
 
 def test_go_no_go_r350_rejects_empty_passing_out_by_difficulty_report(tmp_path: Path) -> None:
@@ -826,6 +884,55 @@ def test_go_no_go_r1b_success_fails_explicit_routing_collapse(tmp_path: Path) ->
 
     assert report["overall_status"] == "fail"
     assert criteria["routing_does_not_collapse"]["status"] == "fail"
+
+
+def test_go_no_go_r1b_success_requires_stage5_long_context_memory_roles(tmp_path: Path) -> None:
+    stage_gate = _write_json(tmp_path / "stage_gate.json", _passing_stage_gate())
+    compute = _write_json(
+        tmp_path / "compute.json",
+        {
+            "run_count": 2,
+            "baseline_run": "baseline",
+            "runs": [
+                {
+                    "run_dir": "baseline",
+                    "validation_loss": 10.0,
+                    "inference_latency_ms_per_token_latest": 1.0,
+                },
+                {
+                    "run_dir": "r1b_candidate",
+                    "stage": "stage6_parallel_passing",
+                    "validation_loss": 10.2,
+                    "inference_latency_ms_per_token_latest": 1.5,
+                    "baseline_comparison": {
+                        "estimated_flops_per_token_ratio": 0.9,
+                        "inference_latency_ms_per_token_ratio": 1.5,
+                        "validation_loss_delta": 0.2,
+                    },
+                },
+            ],
+        },
+    )
+    long_context_data = _controlled_memory_compare()
+    long_context_data["comparisons"][0]["checks"]["baseline_local_kv"] = False
+    long_context = _write_json(tmp_path / "long_context.json", long_context_data)
+
+    output = make_go_no_go_report(
+        stage_gate_report_path=stage_gate,
+        compute_report_path=compute,
+        long_context_compare_report_path=long_context,
+        phase="r1b_success",
+        output_path=tmp_path / "go.json",
+    )
+    report = json.loads(output.read_text(encoding="utf-8"))
+    criteria = {item["name"]: item for item in report["phases"]["r1b_success"]["criteria"]}
+    memory = criteria["kv_memory_remains_controlled"]["evidence"]["long_context_compare"]["memory_candidates"][0]
+
+    assert report["overall_status"] == "fail"
+    assert criteria["kv_memory_remains_controlled"]["status"] == "fail"
+    assert memory["role_checks"]["baseline_local_kv"] is False
+    assert memory["role_contract_passed"] is False
+    assert memory["passes_memory_control_proxy"] is False
 
 
 def test_go_no_go_r1b_success_accepts_less_visible_cot_advantage(tmp_path: Path) -> None:

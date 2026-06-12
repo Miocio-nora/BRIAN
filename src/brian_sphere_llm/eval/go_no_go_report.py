@@ -7,6 +7,16 @@ from typing import Any
 from brian_sphere_llm.utils.logging import write_json
 
 
+LONG_CONTEXT_STAGE5_ROLE_CHECKS = [
+    "baseline_stage4_output_action",
+    "baseline_scheduled_route_mode",
+    "baseline_local_kv",
+    "candidate_stage5_global_kv",
+    "candidate_scheduled_route_mode",
+    "candidate_global_kv_enabled",
+]
+
+
 def make_go_no_go_report(
     *,
     stage_gate_report_path: str | Path,
@@ -486,8 +496,11 @@ def _long_context_benefit_candidates(report: dict[str, Any]) -> list[dict[str, A
         if not isinstance(row, dict):
             continue
         checks = row.get("checks", {}) if isinstance(row.get("checks"), dict) else {}
+        role_checks = _selected_checks(checks, LONG_CONTEXT_STAGE5_ROLE_CHECKS)
+        role_contract_passed = all(value is True for value in role_checks.values())
         passes = (
             row.get("status") == "pass"
+            and role_contract_passed
             and checks.get("global_kv_active") is True
             and checks.get("quality_not_worse") is True
             and checks.get("memory_budget_present") is True
@@ -498,6 +511,8 @@ def _long_context_benefit_candidates(report: dict[str, Any]) -> list[dict[str, A
                 "candidate_report": row.get("candidate_report"),
                 "candidate_run_dir": row.get("candidate_run_dir"),
                 "status": row.get("status"),
+                "role_checks": role_checks,
+                "role_contract_passed": role_contract_passed,
                 "global_kv_active": checks.get("global_kv_active"),
                 "quality_not_worse": checks.get("quality_not_worse"),
                 "memory_budget_present": checks.get("memory_budget_present"),
@@ -679,17 +694,22 @@ def _long_context_memory_candidates(
         memory_budget = row.get("memory_budget", {})
         candidate_memory = memory_budget.get("candidate", {}) if isinstance(memory_budget, dict) else {}
         checks = row.get("checks", {}) if isinstance(row.get("checks"), dict) else {}
+        role_checks = _selected_checks(checks, LONG_CONTEXT_STAGE5_ROLE_CHECKS)
+        role_contract_passed = all(value is True for value in role_checks.values())
         capacity_ratio = _num(candidate_memory.get("estimated_global_cache_capacity_to_local_context_ratio"))
         passes = (
             capacity_ratio is not None
             and capacity_ratio <= max_global_kv_cache_capacity_ratio
-            and bool(checks.get("memory_budget_present", True))
+            and checks.get("memory_budget_present") is True
+            and role_contract_passed
         )
         candidates.append(
             {
                 "candidate_report": row.get("candidate_report"),
                 "candidate_run_dir": row.get("candidate_run_dir"),
                 "status": row.get("status"),
+                "role_checks": role_checks,
+                "role_contract_passed": role_contract_passed,
                 "global_cache_capacity_ratio": capacity_ratio,
                 "memory_budget_present": checks.get("memory_budget_present"),
                 "global_budget_below_local_context": checks.get("global_budget_below_local_context"),
@@ -697,6 +717,10 @@ def _long_context_memory_candidates(
             }
         )
     return candidates
+
+
+def _selected_checks(checks: dict[str, Any], names: list[str]) -> dict[str, Any]:
+    return {name: checks.get(name) for name in names}
 
 
 def _global_kv_ablation_memory_candidates(
