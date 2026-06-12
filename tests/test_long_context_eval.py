@@ -1,3 +1,6 @@
+import json
+from pathlib import Path
+
 import pytest
 
 torch = pytest.importorskip("torch")
@@ -14,6 +17,7 @@ from brian_sphere_llm.eval.long_context import (
     _memory_budget_summary,
     evaluate_long_context_sample,
     generate_long_context_samples,
+    make_long_context_report,
     summarize_long_context_rows,
 )
 
@@ -195,6 +199,64 @@ def test_long_context_bool_config_rejects_non_boolean_values() -> None:
     assert _as_bool("false") is False
     with pytest.raises(ValueError, match="Boolean config"):
         _as_bool(1)
+
+
+def test_make_long_context_report_records_stage_and_route_mode(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeModel:
+        def eval(self) -> None:
+            return None
+
+    run_dir = Path(tmp_path) / "run"
+    run_dir.mkdir()
+    config = {
+        "stage": "stage5_global_kv",
+        "model_config_resolved": {
+            "base": {"layers": 4, "d_model": 64},
+            "global_kv": True,
+            "global_code_dim": 16,
+            "global_sink_slots": 1,
+            "global_window_slots": 3,
+        },
+        "data_config_resolved": {"sequence_length": 8},
+    }
+    sample = LongContextSample(
+        task_family="needle_retrieval",
+        difficulty="near",
+        prompt="ctx K1=42. Q K1? A:",
+        answer=" 42",
+        key="K1",
+    )
+    row = {
+        "sample_id": 0,
+        "task_family": "needle_retrieval",
+        "difficulty": "near",
+        "exact_match": True,
+        "teacher_forced_token_accuracy": 1.0,
+        "truncated": False,
+        "routing_global_attention_mass": 0.2,
+        "routing_global_sink_attention_mass": 0.05,
+        "routing_global_window_attention_mass": 0.15,
+        "routing_global_read_gate_mean": 0.1,
+        "routing_global_cache_slots_mean": 2.0,
+    }
+
+    monkeypatch.setattr(long_context_eval, "load_config", lambda path: config)
+    monkeypatch.setattr(long_context_eval, "_load_tokenizer_from_run_config", lambda config: object())
+    monkeypatch.setattr(long_context_eval, "_device", lambda device_name: torch.device("cpu"))
+    monkeypatch.setattr(long_context_eval, "_load_model_for_run", lambda *args, **kwargs: FakeModel())
+    monkeypatch.setattr(long_context_eval, "_checkpoint_step", lambda *args, **kwargs: 7)
+    monkeypatch.setattr(long_context_eval, "generate_long_context_samples", lambda *args, **kwargs: [sample])
+    monkeypatch.setattr(long_context_eval, "evaluate_long_context_sample", lambda *args, **kwargs: row)
+
+    output = make_long_context_report(run_dir, sample_count=1, output_path=tmp_path / "report.json")
+    report = json.loads(output.read_text(encoding="utf-8"))
+
+    assert report["stage"] == "stage5_global_kv"
+    assert report["route_mode"] == "scheduled"
+    assert report["checkpoint"] == "checkpoint_best"
 
 
 def test_long_context_coverage_summary_reports_missing_families_and_difficulties() -> None:

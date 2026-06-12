@@ -73,7 +73,15 @@ def _compare_candidate(
     exact_delta = _delta(candidate_exact, baseline_exact)
     candidate_memory = candidate.get("memory_budget", {})
     baseline_memory = baseline.get("memory_budget", {})
+    baseline_global_enabled = _bool_value(baseline_memory.get("global_kv_enabled"))
+    candidate_global_enabled = _bool_value(candidate_memory.get("global_kv_enabled"))
     candidate_capacity_ratio = _num(candidate_memory.get("estimated_global_cache_capacity_to_local_context_ratio"))
+    baseline_stage4 = baseline.get("stage") == "stage4_output_action"
+    candidate_stage5 = candidate.get("stage") == "stage5_global_kv"
+    baseline_scheduled = baseline.get("route_mode") == "scheduled"
+    candidate_scheduled = candidate.get("route_mode") == "scheduled"
+    baseline_local_kv = baseline_global_enabled is False
+    candidate_global_kv = candidate_global_enabled is True
     global_active = (
         attention_mass is not None
         and attention_mass >= min_global_attention_mass
@@ -84,9 +92,15 @@ def _compare_candidate(
     )
     quality_metrics_present = teacher_delta is not None and exact_delta is not None
     quality_not_worse = quality_metrics_present and teacher_delta >= -quality_tolerance and exact_delta >= -quality_tolerance
-    memory_budget_present = bool(candidate_memory.get("global_kv_enabled")) and candidate_capacity_ratio is not None
+    memory_budget_present = candidate_global_kv and candidate_capacity_ratio is not None
     global_budget_below_local_context = memory_budget_present and candidate_capacity_ratio < 1.0
     checks = {
+        "baseline_stage4_output_action": baseline_stage4,
+        "baseline_scheduled_route_mode": baseline_scheduled,
+        "baseline_local_kv": baseline_local_kv,
+        "candidate_stage5_global_kv": candidate_stage5,
+        "candidate_scheduled_route_mode": candidate_scheduled,
+        "candidate_global_kv_enabled": candidate_global_kv,
         "global_kv_active": global_active,
         "quality_metrics_present": quality_metrics_present,
         "quality_not_worse": quality_not_worse,
@@ -96,6 +110,10 @@ def _compare_candidate(
     return {
         "candidate_report": str(candidate_report_path),
         "baseline_report": str(baseline_report_path),
+        "candidate_stage": candidate.get("stage"),
+        "baseline_stage": baseline.get("stage"),
+        "candidate_route_mode": candidate.get("route_mode"),
+        "baseline_route_mode": baseline.get("route_mode"),
         "candidate_run_dir": candidate.get("run_dir"),
         "baseline_run_dir": baseline.get("run_dir"),
         "baseline_sample_count": _num(baseline.get("sample_count")),
@@ -154,6 +172,12 @@ def _num(value: Any) -> float | None:
         return None
     if isinstance(value, (int, float)):
         return float(value)
+    return None
+
+
+def _bool_value(value: Any) -> bool | None:
+    if isinstance(value, bool):
+        return value
     return None
 
 

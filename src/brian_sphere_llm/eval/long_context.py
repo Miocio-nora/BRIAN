@@ -101,6 +101,8 @@ def make_long_context_report(
     _write_jsonl(rows, sample_output_path)
     report = {
         "run_dir": str(run_dir),
+        "stage": str(config.get("stage", "")),
+        "route_mode": route_mode,
         "checkpoint": str(checkpoint),
         "sample_count": len(rows),
         "seed": seed,

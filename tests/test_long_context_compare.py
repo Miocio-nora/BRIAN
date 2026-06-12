@@ -10,18 +10,25 @@ def _write_long_context_report(
     path: Path,
     *,
     run_dir: str,
+    stage: str,
     exact_match: float,
     teacher_accuracy: float,
+    route_mode: str = "scheduled",
     attention_mass: float | None = None,
     read_gate: float | None = None,
     cache_slots: float | None = None,
     sink_attention_mass: float | None = None,
     window_attention_mass: float | None = None,
+    global_kv_enabled: bool | None = None,
 ) -> Path:
+    if global_kv_enabled is None:
+        global_kv_enabled = attention_mass is not None
     path.write_text(
         json.dumps(
             {
                 "run_dir": run_dir,
+                "stage": stage,
+                "route_mode": route_mode,
                 "sample_count": 4,
                 "overall": {
                     "exact_match_accuracy": exact_match,
@@ -36,7 +43,7 @@ def _write_long_context_report(
                     "global_cache_slots_mean": cache_slots,
                 },
                 "memory_budget": {
-                    "global_kv_enabled": attention_mass is not None,
+                    "global_kv_enabled": global_kv_enabled,
                     "estimated_local_raw_kv_context_bytes_fp16": 8192.0,
                     "estimated_global_cache_capacity_bytes_fp16": 128.0 if attention_mass is not None else 0.0,
                     "estimated_global_cache_mean_bytes_fp16": 64.0 if attention_mass is not None else 0.0,
@@ -58,12 +65,14 @@ def test_long_context_compare_passes_active_global_kv_not_worse(tmp_path: Path) 
     baseline = _write_long_context_report(
         tmp_path / "local.json",
         run_dir="runs/local",
+        stage="stage4_output_action",
         exact_match=0.25,
         teacher_accuracy=0.50,
     )
     candidate = _write_long_context_report(
         tmp_path / "global.json",
         run_dir="runs/global",
+        stage="stage5_global_kv",
         exact_match=0.25,
         teacher_accuracy=0.55,
         attention_mass=0.1,
@@ -78,6 +87,14 @@ def test_long_context_compare_passes_active_global_kv_not_worse(tmp_path: Path) 
     assert report["overall_status"] == "pass"
     assert row["candidate_report"] == str(candidate)
     assert row["baseline_report"] == str(baseline)
+    assert row["baseline_stage"] == "stage4_output_action"
+    assert row["candidate_stage"] == "stage5_global_kv"
+    assert row["checks"]["baseline_stage4_output_action"] is True
+    assert row["checks"]["baseline_scheduled_route_mode"] is True
+    assert row["checks"]["baseline_local_kv"] is True
+    assert row["checks"]["candidate_stage5_global_kv"] is True
+    assert row["checks"]["candidate_scheduled_route_mode"] is True
+    assert row["checks"]["candidate_global_kv_enabled"] is True
     assert row["checks"]["global_kv_active"] is True
     assert row["checks"]["quality_metrics_present"] is True
     assert row["checks"]["quality_not_worse"] is True
@@ -93,12 +110,14 @@ def test_long_context_compare_warns_for_inactive_and_worse_candidate(tmp_path: P
     baseline = _write_long_context_report(
         tmp_path / "local.json",
         run_dir="runs/local",
+        stage="stage4_output_action",
         exact_match=0.5,
         teacher_accuracy=0.8,
     )
     candidate = _write_long_context_report(
         tmp_path / "global.json",
         run_dir="runs/global",
+        stage="stage5_global_kv",
         exact_match=0.25,
         teacher_accuracy=0.6,
         attention_mass=0.0,
@@ -118,16 +137,57 @@ def test_long_context_compare_warns_for_inactive_and_worse_candidate(tmp_path: P
     assert row["checks"]["quality_not_worse"] is False
 
 
+def test_long_context_compare_requires_stage4_local_to_stage5_global_roles(tmp_path: Path) -> None:
+    baseline = _write_long_context_report(
+        tmp_path / "wrong_baseline.json",
+        run_dir="runs/wrong-baseline",
+        stage="stage5_global_kv",
+        route_mode="parallel",
+        exact_match=0.25,
+        teacher_accuracy=0.50,
+        global_kv_enabled=True,
+    )
+    candidate = _write_long_context_report(
+        tmp_path / "wrong_candidate.json",
+        run_dir="runs/wrong-candidate",
+        stage="stage4_output_action",
+        route_mode="fixed",
+        exact_match=0.25,
+        teacher_accuracy=0.55,
+        attention_mass=0.1,
+        sink_attention_mass=0.03,
+        window_attention_mass=0.07,
+        read_gate=0.2,
+        cache_slots=3.0,
+        global_kv_enabled=False,
+    )
+
+    output = make_long_context_comparison_report(baseline, [candidate], output_path=tmp_path / "compare.json")
+    row = json.loads(output.read_text(encoding="utf-8"))["comparisons"][0]
+
+    assert row["status"] == "warn"
+    assert row["checks"]["baseline_stage4_output_action"] is False
+    assert row["checks"]["baseline_scheduled_route_mode"] is False
+    assert row["checks"]["baseline_local_kv"] is False
+    assert row["checks"]["candidate_stage5_global_kv"] is False
+    assert row["checks"]["candidate_scheduled_route_mode"] is False
+    assert row["checks"]["candidate_global_kv_enabled"] is False
+    assert row["checks"]["global_kv_active"] is True
+    assert row["checks"]["memory_budget_present"] is False
+
+
 def test_long_context_compare_rejects_boolean_metrics(tmp_path: Path) -> None:
     baseline = _write_long_context_report(
         tmp_path / "local.json",
         run_dir="runs/local",
+        stage="stage4_output_action",
         exact_match=False,
         teacher_accuracy=False,
     )
     candidate = _write_long_context_report(
         tmp_path / "global.json",
         run_dir="runs/global",
+        stage="stage5_global_kv",
         exact_match=True,
         teacher_accuracy=True,
         attention_mass=True,

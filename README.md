@@ -289,7 +289,7 @@ python scripts/eval.py \
   --output reports/long_context_compare.json
 ```
 
-The comparison report checks that Global KV is active, the estimated Global KV code budget is below the local raw-KV context budget, and exact-match / teacher-forced quality is not worse than the local-KV report beyond `quality_tolerance`. Pass it into the Stage 5 gate:
+The comparison report checks that the baseline is a scheduled Stage 4 local-KV report, candidates are scheduled Stage 5 Global KV reports, Global KV is active, the estimated Global KV code budget is below the local raw-KV context budget, and exact-match / teacher-forced quality is not worse than the local-KV report beyond `quality_tolerance`. Pass it into the Stage 5 gate:
 
 ```bash
 python scripts/eval.py \
