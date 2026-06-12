@@ -803,9 +803,9 @@ def _gate_stage6(
 def _gate(description: str, checks: dict[str, bool], extras: dict[str, Any] | None = None) -> dict[str, Any]:
     if not checks:
         status = "unknown"
-    elif all(checks.values()):
+    elif all(value is True for value in checks.values()):
         status = "pass"
-    elif any(checks.values()):
+    elif any(value is True for value in checks.values()):
         status = "warn"
     else:
         status = "fail"

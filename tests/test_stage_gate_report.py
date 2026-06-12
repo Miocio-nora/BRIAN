@@ -7,6 +7,7 @@ import pytest
 from brian_sphere_llm.eval.difficulty import difficulty_step_correlation
 from brian_sphere_llm.eval.stage_gate_report import (
     _data_manifest_gate_checks,
+    _gate,
     _model_stats_gate_checks,
     make_stage_gate_report,
     pearson_correlation,
@@ -130,6 +131,12 @@ def test_pearson_and_difficulty_step_correlation() -> None:
     assert pearson_correlation([1.0, 2.0, 3.0], [1.0, 2.0, 3.0]) == pytest.approx(1.0)
     assert difficulty_step_correlation([1.0, 2.0, 3.0], [3.0, 2.0, 1.0]) == pytest.approx(-1.0)
     assert difficulty_step_correlation([1.0], [1.0]) is None
+
+
+def test_stage_gate_status_requires_explicit_boolean_true_checks() -> None:
+    assert _gate("test", {"a": True, "b": True})["status"] == "pass"
+    assert _gate("test", {"a": True, "b": "yes"})["status"] == "warn"
+    assert _gate("test", {"a": "yes", "b": 1})["status"] == "fail"
 
 
 def _baseline_difficulty_report() -> dict:
