@@ -15,6 +15,7 @@ from brian_sphere_llm.eval.long_context import (
     _global_kv_summary,
     _load_tokenizer_from_run_config,
     _memory_budget_summary,
+    _overall_status,
     evaluate_long_context_sample,
     generate_long_context_samples,
     make_long_context_report,
@@ -151,6 +152,18 @@ def test_long_context_summary_rejects_boolean_numeric_metrics() -> None:
     assert memory["base_layer_count"] is None
     assert memory["global_code_dim"] is None
     assert memory["estimated_global_cache_capacity_bytes_fp16"] is None
+
+
+def test_long_context_status_requires_explicit_boolean_true_checks() -> None:
+    checks = {
+        "samples_present": True,
+        "exact_match_accuracy_present": True,
+        "teacher_forced_token_accuracy_present": True,
+        "coverage_present": True,
+    }
+    assert _overall_status(checks) == "pass"
+    assert _overall_status(checks | {"coverage_present": "yes"}) == "warn"
+    assert _overall_status(checks | {"samples_present": "yes"}) == "fail"
 
 
 def test_long_context_tokenizer_config_parses_string_booleans(monkeypatch: pytest.MonkeyPatch) -> None:

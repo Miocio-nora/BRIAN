@@ -735,10 +735,14 @@ def _requirement_row(spec: dict[str, Any], matches: list[dict[str, Any]]) -> dic
     return {
         "id": spec["entry_id"],
         "description": spec["description"],
-        "status": "pass" if all(checks.values()) else "fail",
+        "status": _requirement_status(checks),
         "matched_entry_ids": [entry["id"]] if entry else [],
         "checks": checks,
     }
+
+
+def _requirement_status(checks: dict[str, bool]) -> str:
+    return "pass" if all(value is True for value in checks.values()) else "fail"
 
 
 def _check_stage(entry: dict[str, Any] | None, expected: str | None) -> bool:

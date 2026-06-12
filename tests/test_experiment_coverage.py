@@ -3,7 +3,11 @@ from pathlib import Path
 
 import yaml
 
-from brian_sphere_llm.eval.experiment_coverage import _overall_status, make_experiment_coverage_report
+from brian_sphere_llm.eval.experiment_coverage import (
+    _overall_status,
+    _requirement_status,
+    make_experiment_coverage_report,
+)
 from brian_sphere_llm.utils.config import load_config
 
 
@@ -53,6 +57,9 @@ def test_r125_formal_package_coverage_passes(tmp_path: Path) -> None:
 def test_experiment_coverage_status_requires_boolean_checks() -> None:
     assert _overall_status({"profile_known": "yes"}, []) == "fail"
     assert _overall_status({"profile_known": True, "train_configs_exist": "yes"}, []) == "warn"
+    assert _requirement_status({"entry_present": True, "stage_matches": True}) == "pass"
+    assert _requirement_status({"entry_present": True, "stage_matches": "yes"}) == "fail"
+    assert _requirement_status({"entry_present": "yes", "stage_matches": 1}) == "fail"
 
 
 def test_r350_scaling_package_coverage_passes(tmp_path: Path) -> None:

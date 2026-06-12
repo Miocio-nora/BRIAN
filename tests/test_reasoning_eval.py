@@ -95,6 +95,12 @@ def test_reasoning_report_checks_and_status() -> None:
     warn_checks = {**checks, "visible_cot_tokens_present": False}
     assert _overall_status(warn_checks) == "warn"
 
+    truthy_optional_checks = {**checks, "visible_cot_tokens_present": "yes"}
+    assert _overall_status(truthy_optional_checks) == "warn"
+
+    truthy_required_checks = {**checks, "samples_present": "yes"}
+    assert _overall_status(truthy_required_checks) == "fail"
+
     fail_checks = {**checks, "exact_match_accuracy_present": False}
     assert _overall_status(fail_checks) == "fail"
 

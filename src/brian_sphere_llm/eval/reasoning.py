@@ -341,7 +341,7 @@ def _overall_status(checks: dict[str, bool]) -> str:
     ]
     if not all(checks.get(key) is True for key in required):
         return "fail"
-    if all(checks.values()):
+    if all(value is True for value in checks.values()):
         return "pass"
     return "warn"
 
