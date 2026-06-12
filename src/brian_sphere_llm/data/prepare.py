@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from collections import deque
 from collections.abc import Iterator
+from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import ExitStack, contextmanager
 from dataclasses import asdict
 import hashlib
@@ -37,6 +39,7 @@ def prepare_data(config_path: str | Path) -> Path:
         tokenization_worker_threads = _int_config(tokenization_cfg, "worker_threads", minimum=1)
         os.environ["RAYON_NUM_THREADS"] = str(tokenization_worker_threads)
     tokenization_batch_size = _int_config(tokenization_cfg, "batch_size", default=512, minimum=1)
+    tokenization_prefetch_batches = _int_config(tokenization_cfg, "prefetch_batches", default=1, minimum=1)
     tokenizer_cfg = config["tokenizer"]
     tokenizer = load_tokenizer(
         tokenizer_cfg["name"],
@@ -101,18 +104,12 @@ def prepare_data(config_path: str | Path) -> Path:
         )
         manifest_handles = stack.enter_context(_open_manifest_writers(output_manifest_path, manifest_path))
         try:
-            for sample_batch in _sample_batches(samples, batch_size=tokenization_batch_size):
-                pending: list[tuple[int, dict[str, Any], str]] = []
-                texts: list[str] = []
-                for index, sample in sample_batch:
-                    text = normalize_text(sample["text"])
-                    if not keep_text(text):
-                        continue
-                    pending.append((index, sample, text))
-                    texts.append(text)
-                if not pending:
-                    continue
-                token_batch = _encode_text_batch(tokenizer, texts)
+            for pending, token_batch in _encoded_sample_batches(
+                samples,
+                tokenizer,
+                batch_size=tokenization_batch_size,
+                prefetch_batches=tokenization_prefetch_batches,
+            ):
                 for (index, sample, text), tokens in zip(pending, token_batch, strict=True):
                     if not tokens:
                         continue
@@ -171,6 +168,7 @@ def prepare_data(config_path: str | Path) -> Path:
         "source_mixture_realized_share": source_mixture_realized_share,
         "sha256_manifest": manifest_hash.hexdigest(),
         "tokenization_batch_size": tokenization_batch_size,
+        "tokenization_prefetch_batches": tokenization_prefetch_batches,
         "tokenization_parallelism": tokenization_parallelism,
         "tokenization_worker_threads": tokenization_worker_threads,
         **manifest_audit,
@@ -253,6 +251,49 @@ def _sample_batches(samples: Iterator[dict[str, Any]], *, batch_size: int) -> It
             batch = []
     if batch:
         yield batch
+
+
+def _normalized_sample_batches(
+    samples: Iterator[dict[str, Any]],
+    *,
+    batch_size: int,
+) -> Iterator[tuple[list[tuple[int, dict[str, Any], str]], list[str]]]:
+    for sample_batch in _sample_batches(samples, batch_size=batch_size):
+        pending: list[tuple[int, dict[str, Any], str]] = []
+        texts: list[str] = []
+        for index, sample in sample_batch:
+            text = normalize_text(sample["text"])
+            if not keep_text(text):
+                continue
+            pending.append((index, sample, text))
+            texts.append(text)
+        if pending:
+            yield pending, texts
+
+
+def _encoded_sample_batches(
+    samples: Iterator[dict[str, Any]],
+    tokenizer: Any,
+    *,
+    batch_size: int,
+    prefetch_batches: int,
+) -> Iterator[tuple[list[tuple[int, dict[str, Any], str]], list[list[int]]]]:
+    normalized_batches = _normalized_sample_batches(samples, batch_size=batch_size)
+    if prefetch_batches <= 1:
+        for pending, texts in normalized_batches:
+            yield pending, _encode_text_batch(tokenizer, texts)
+        return
+
+    in_flight: deque[tuple[list[tuple[int, dict[str, Any], str]], Future[list[list[int]]]]] = deque()
+    with ThreadPoolExecutor(max_workers=prefetch_batches, thread_name_prefix="tokenize-batch") as executor:
+        for pending, texts in normalized_batches:
+            in_flight.append((pending, executor.submit(_encode_text_batch, tokenizer, texts)))
+            if len(in_flight) >= prefetch_batches:
+                next_pending, future = in_flight.popleft()
+                yield next_pending, future.result()
+        while in_flight:
+            next_pending, future = in_flight.popleft()
+            yield next_pending, future.result()
 
 
 def _encode_text_batch(tokenizer: Any, texts: list[str]) -> list[list[int]]:

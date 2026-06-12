@@ -5,3 +5,7 @@ validation_tokens: 200000000
 sequence_length: 4096
 output_dir: data/tokenized/r1b_main_50b
 manifest_path: data/manifests/r1b_main_50b.jsonl
+tokenization:
+  batch_size: 512
+  parallelism: true
+  prefetch_batches: 2

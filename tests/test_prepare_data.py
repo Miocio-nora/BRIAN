@@ -10,6 +10,7 @@ from brian_sphere_llm.data.prepare import (
     DEFAULT_MANIFEST_CREATED_AT,
     _audit_prepared_manifest,
     _bool_config,
+    _encoded_sample_batches,
     _encode_text_batch,
     _mixture_rows,
     prepare_data,
@@ -326,3 +327,46 @@ def test_encode_text_batch_prefers_batch_tokenizer_call() -> None:
 
     assert _encode_text_batch(tokenizer, ["aa", "bbb"]) == [[2, 1], [3, 1]]
     assert tokenizer.calls == 1
+
+
+def test_encoded_sample_batches_prefetch_preserves_order() -> None:
+    class BatchTokenizer:
+        def __call__(self, texts, *, add_special_tokens: bool, padding: bool, truncation: bool):
+            return {"input_ids": [[len(text)] for text in texts]}
+
+    samples = (
+        {
+            "sample_id": f"sample-{index}",
+            "text": f"sample text {index}",
+            "source_dataset": "synthetic",
+            "source_url_or_id": str(index),
+            "mixture_tag": "synthetic",
+        }
+        for index in range(6)
+    )
+
+    batches = list(
+        _encoded_sample_batches(
+            samples,
+            BatchTokenizer(),
+            batch_size=2,
+            prefetch_batches=2,
+        )
+    )
+
+    assert [sample["sample_id"] for pending, _tokens in batches for _index, sample, _text in pending] == [
+        "sample-0",
+        "sample-1",
+        "sample-2",
+        "sample-3",
+        "sample-4",
+        "sample-5",
+    ]
+    assert [tokens for _pending, token_batch in batches for tokens in token_batch] == [
+        [13],
+        [13],
+        [13],
+        [13],
+        [13],
+        [13],
+    ]
