@@ -1079,6 +1079,53 @@ def test_stage0_gate_requires_valid_validation_report(tmp_path: Path) -> None:
     assert gate["validation_report_checks"]["perplexity_present"] is False
 
 
+def test_stage0_gate_rechecks_validation_report_metric_values(tmp_path: Path) -> None:
+    baseline = _write_run(
+        tmp_path,
+        "baseline",
+        stage="stage0_baseline",
+        val_loss=10.0,
+        train_row={},
+        determinism_status="pass",
+        resume_event={
+            "checkpoint": "checkpoint_latest",
+            "resumed_from_step": 1,
+            "target_max_steps": 2,
+            "optimizer_state_loaded": True,
+        },
+        baseline_difficulty_report=_baseline_difficulty_report(),
+    )
+    (baseline / "lm_eval_report.json").write_text(
+        json.dumps(
+            {
+                "overall_status": "pass",
+                "checks": {
+                    "eval_log_present": True,
+                    "validation_loss_present": True,
+                    "perplexity_present": True,
+                    "requested_metrics_present": True,
+                },
+                "metrics": {
+                    "validation_loss": 10.0,
+                    "perplexity": 1.0,
+                    "tokens_per_second": None,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    report_path = make_stage_gate_report([baseline], output_path=tmp_path / "gate.json")
+    gate = json.loads(report_path.read_text(encoding="utf-8"))["gates"]["stage0_to_1"]
+
+    assert gate["status"] == "warn"
+    assert gate["checks"]["validation_report_present"] is True
+    assert gate["checks"]["validation_report_valid"] is False
+    assert gate["checks"]["validation_report_metrics_valid"] is False
+    assert gate["checks"]["validation_metric_tokens_per_second_finite"] is False
+    assert gate["validation_report_status"] == "pass"
+
+
 def test_stage1_gate_requires_valid_routing_report(tmp_path: Path) -> None:
     baseline = _write_run(
         tmp_path,
@@ -1173,12 +1220,12 @@ def test_stage1_gate_requires_active_compute_in_validation_report(tmp_path: Path
     (fixed / "lm_eval_report.json").write_text(
         json.dumps(
             {
-                "overall_status": "fail",
+                "overall_status": "pass",
                 "checks": {
                     "eval_log_present": True,
                     "validation_loss_present": True,
                     "perplexity_present": True,
-                    "requested_metrics_present": False,
+                    "requested_metrics_present": True,
                 },
                 "metrics": {
                     "validation_loss": 10.1,
@@ -1197,7 +1244,9 @@ def test_stage1_gate_requires_active_compute_in_validation_report(tmp_path: Path
     assert gate["status"] == "warn"
     assert gate["checks"]["validation_report_present"] is True
     assert gate["checks"]["validation_report_valid"] is False
-    assert gate["validation_report_checks"]["requested_metrics_present"] is False
+    assert gate["checks"]["validation_report_metrics_valid"] is False
+    assert gate["checks"]["validation_metric_active_block_evals_per_token_finite"] is False
+    assert gate["validation_report_checks"]["requested_metrics_present"] is True
     assert gate["validation_report_metrics"]["active_block_evals_per_token"] is None
 
 

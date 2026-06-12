@@ -1011,6 +1011,9 @@ def _validation_report_metrics(stage: str) -> list[str]:
 
 def _validation_report_gate_checks(summary: dict[str, Any] | None) -> dict[str, bool]:
     checks = summary.get("lm_eval_report_checks", {}) if summary else {}
+    metrics = summary.get("lm_eval_report_metrics", {}) if summary else {}
+    required_metric_checks = _validation_report_metric_checks(summary)
+    metrics_valid = isinstance(metrics, dict) and all(required_metric_checks.values())
     required = [
         "eval_log_present",
         "validation_loss_present",
@@ -1021,8 +1024,28 @@ def _validation_report_gate_checks(summary: dict[str, Any] | None) -> dict[str, 
         "validation_report_present": bool(summary and summary.get("lm_eval_report_present")),
         "validation_report_valid": bool(summary and summary.get("lm_eval_report_status") == "pass")
         and isinstance(checks, dict)
-        and all(checks.get(key) is True for key in required),
+        and all(checks.get(key) is True for key in required)
+        and metrics_valid,
+        "validation_report_metrics_valid": metrics_valid,
+        **required_metric_checks,
     }
+
+
+def _validation_report_metric_checks(summary: dict[str, Any] | None) -> dict[str, bool]:
+    stage = summary.get("stage") if summary else None
+    metrics = summary.get("lm_eval_report_metrics", {}) if summary else {}
+    if not isinstance(metrics, dict):
+        metrics = {}
+    checks = {
+        "validation_metric_loss_finite": _finite(metrics.get("validation_loss")),
+        "validation_metric_perplexity_finite": _finite(metrics.get("perplexity")),
+        "validation_metric_tokens_per_second_finite": _finite(metrics.get("tokens_per_second")),
+    }
+    if stage != "stage0_baseline":
+        checks["validation_metric_active_block_evals_per_token_finite"] = _finite(
+            metrics.get("active_block_evals_per_token")
+        )
+    return checks
 
 
 def _validation_report_gate_extras(summary: dict[str, Any] | None) -> dict[str, Any]:
