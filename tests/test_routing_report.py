@@ -26,6 +26,9 @@ def test_routing_report_preserves_latest_route_examples_and_trajectories(tmp_pat
                 "position_norm_mean": 1.0,
                 "location_distance_mean": 0.5,
                 "p_output_mean": 0.25,
+                "cost_loss": 0.02,
+                "balance_loss": 0.03,
+                "location_loss": 0.04,
                 "global_read_gate_mean": 0.25,
                 "local_read_fraction_mean": 0.75,
                 "global_to_local_read_ratio": 1 / 3,
@@ -37,6 +40,7 @@ def test_routing_report_preserves_latest_route_examples_and_trajectories(tmp_pat
                 "train_step_time_seconds": 0.2,
                 "train_latency_ms_per_token": 20.0,
                 "top1_block_histogram": {"0": 1, "1": 1, "2": 0},
+                "topk_block_histogram": {"0": 2, "1": 1, "2": 1},
                 "exit_step_distribution": [0, 1],
                 "first_exit_step_histogram": {"2": 1},
                 "route_path_examples": [{"sample_index": 0, "actions": [0, 1]}],
@@ -57,6 +61,9 @@ def test_routing_report_preserves_latest_route_examples_and_trajectories(tmp_pat
                 "position_norm_mean": 0.5,
                 "location_distance_mean": 0.1,
                 "p_output_mean": 0.75,
+                "cost_loss": 0.01,
+                "balance_loss": 0.02,
+                "location_loss": 0.03,
                 "global_read_gate_mean": 0.75,
                 "local_read_fraction_mean": 0.25,
                 "global_to_local_read_ratio": 3.0,
@@ -68,6 +75,7 @@ def test_routing_report_preserves_latest_route_examples_and_trajectories(tmp_pat
                 "train_step_time_seconds": 0.1,
                 "train_latency_ms_per_token": 5.0,
                 "top1_block_histogram": {"0": 0, "1": 1, "2": 1},
+                "topk_block_histogram": {"0": 1, "1": 1, "2": 2},
                 "exit_step_distribution": [1, 1],
                 "first_exit_step_histogram": {"1": 1},
                 "route_path_examples": [{"sample_index": 0, "actions": [2]}],
@@ -99,6 +107,8 @@ def test_routing_report_preserves_latest_route_examples_and_trajectories(tmp_pat
     assert report["checks"]["route_transition_ratios_present"] is True
     assert report["checks"]["position_location_metrics_present"] is True
     assert report["checks"]["exit_distribution_present"] is True
+    assert report["checks"]["topk_block_histogram_present"] is True
+    assert report["checks"]["output_probability_present"] is True
     assert report["checks"]["route_path_examples_present"] is True
     assert report["checks"]["position_trajectory_present"] is True
     assert report["checks"]["location_trajectory_present"] is True
@@ -106,6 +116,7 @@ def test_routing_report_preserves_latest_route_examples_and_trajectories(tmp_pat
     assert report["checks"]["cost_quality_eval_points_present"] is True
     assert report["checks"]["training_timing_metrics_present"] is True
     assert report["checks"]["inference_timing_metrics_present"] is True
+    assert report["checks"]["route_loss_terms_present"] is True
     assert report["summary"]["global_read_gate_mean"] == 0.5
     assert report["summary"]["local_read_fraction_mean"] == 0.5
     assert report["summary"]["global_to_local_read_ratio"] == pytest.approx((1 / 3 + 3.0) / 2)
@@ -114,6 +125,7 @@ def test_routing_report_preserves_latest_route_examples_and_trajectories(tmp_pat
     assert report["summary"]["forced_max_step_exit_count"] == 0.5
     assert report["summary"]["forced_max_step_exit_fraction"] == 0.25
     assert report["latest_block_histogram"] == {"0": 0, "1": 1, "2": 1}
+    assert report["latest_topk_block_histogram"] == {"0": 1, "1": 1, "2": 2}
     assert report["latest_exit_step_distribution"] == [1, 1]
     assert report["latest_first_exit_step_histogram"] == {"1": 1}
     assert report["latest_route_path_examples"] == [{"sample_index": 0, "actions": [2]}]
@@ -177,6 +189,8 @@ def test_routing_report_warns_when_route_behavior_is_missing(tmp_path: Path) -> 
     assert report["checks"]["route_transition_ratios_present"] is False
     assert report["checks"]["position_location_metrics_present"] is False
     assert report["checks"]["block_histogram_present"] is False
+    assert report["checks"]["topk_block_histogram_present"] is False
+    assert report["checks"]["output_probability_present"] is False
     assert report["checks"]["exit_distribution_present"] is False
     assert report["checks"]["route_path_examples_present"] is False
     assert report["checks"]["position_trajectory_present"] is False
@@ -185,6 +199,7 @@ def test_routing_report_warns_when_route_behavior_is_missing(tmp_path: Path) -> 
     assert report["checks"]["cost_quality_eval_points_present"] is False
     assert report["checks"]["training_timing_metrics_present"] is False
     assert report["checks"]["inference_timing_metrics_present"] is False
+    assert report["checks"]["route_loss_terms_present"] is False
 
 
 def test_routing_report_rejects_boolean_route_metrics(tmp_path: Path) -> None:
@@ -206,10 +221,15 @@ def test_routing_report_rejects_boolean_route_metrics(tmp_path: Path) -> None:
                 "recur_ratio": True,
                 "position_norm_mean": True,
                 "location_distance_mean": True,
+                "p_output_mean": True,
+                "cost_loss": True,
+                "balance_loss": True,
+                "location_loss": True,
                 "tokens_per_second": 10.0,
                 "train_step_time_seconds": 0.2,
                 "train_latency_ms_per_token": 20.0,
                 "top1_block_histogram": {"0": 1, "1": 1, "2": 1},
+                "topk_block_histogram": {"0": 1, "1": 1, "2": 1},
                 "exit_step_distribution": [1, 1],
                 "route_path_examples": [{"sample_index": 0, "actions": [0, 1]}],
                 "position_norm_trajectory": [1.0],
@@ -238,6 +258,8 @@ def test_routing_report_rejects_boolean_route_metrics(tmp_path: Path) -> None:
     assert report["checks"]["core_route_metrics_present"] is False
     assert report["checks"]["route_transition_ratios_present"] is False
     assert report["checks"]["position_location_metrics_present"] is False
+    assert report["checks"]["output_probability_present"] is False
+    assert report["checks"]["route_loss_terms_present"] is False
 
 
 def test_routing_report_matches_eval_curve_to_previous_train_step(tmp_path: Path) -> None:

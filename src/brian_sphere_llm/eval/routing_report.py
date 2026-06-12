@@ -40,6 +40,9 @@ ROUTING_KEYS = {
     "max_route_steps",
     "forced_max_step_exit_count",
     "forced_max_step_exit_fraction",
+    "cost_loss",
+    "balance_loss",
+    "location_loss",
 }
 
 
@@ -49,6 +52,7 @@ def make_routing_report(run_dir: str | Path) -> Path:
     eval_rows = _read_jsonl(run_dir / "eval_log.jsonl")
     aggregates: dict[str, list[float]] = defaultdict(list)
     latest_histogram: dict[str, Any] | None = None
+    latest_topk_histogram: dict[str, Any] | None = None
     latest_exit_distribution: list[int] | None = None
     latest_first_exit_histogram: dict[str, Any] | None = None
     latest_route_path_examples: list[Any] | None = None
@@ -61,6 +65,8 @@ def make_routing_report(run_dir: str | Path) -> Path:
                 aggregates[key].append(value)
         if isinstance(row.get("top1_block_histogram"), dict):
             latest_histogram = row["top1_block_histogram"]
+        if isinstance(row.get("topk_block_histogram"), dict):
+            latest_topk_histogram = row["topk_block_histogram"]
         if isinstance(row.get("exit_step_distribution"), list):
             latest_exit_distribution = row["exit_step_distribution"]
         if isinstance(row.get("first_exit_step_histogram"), dict):
@@ -78,6 +84,7 @@ def make_routing_report(run_dir: str | Path) -> Path:
         eval_rows=eval_rows,
         summary=summary,
         latest_histogram=latest_histogram,
+        latest_topk_histogram=latest_topk_histogram,
         latest_exit_distribution=latest_exit_distribution,
         latest_first_exit_histogram=latest_first_exit_histogram,
         latest_route_path_examples=latest_route_path_examples,
@@ -89,6 +96,7 @@ def make_routing_report(run_dir: str | Path) -> Path:
         "run_dir": str(run_dir),
         "summary": summary,
         "latest_block_histogram": latest_histogram or {},
+        "latest_topk_block_histogram": latest_topk_histogram or {},
         "latest_exit_step_distribution": latest_exit_distribution or [],
         "latest_first_exit_step_histogram": latest_first_exit_histogram or {},
         "latest_route_path_examples": latest_route_path_examples or [],
@@ -110,6 +118,7 @@ def _report_checks(
     eval_rows: list[dict[str, Any]],
     summary: dict[str, float],
     latest_histogram: dict[str, Any] | None,
+    latest_topk_histogram: dict[str, Any] | None,
     latest_exit_distribution: list[int] | None,
     latest_first_exit_histogram: dict[str, Any] | None,
     latest_route_path_examples: list[Any] | None,
@@ -142,6 +151,8 @@ def _report_checks(
             _finite(summary.get(key)) for key in ["position_norm_mean", "location_distance_mean"]
         ),
         "block_histogram_present": bool(latest_histogram),
+        "topk_block_histogram_present": bool(latest_topk_histogram),
+        "output_probability_present": _finite(summary.get("p_output_mean")),
         "exit_distribution_present": _numeric_sequence_present(latest_exit_distribution)
         or bool(latest_first_exit_histogram),
         "route_path_examples_present": bool(latest_route_path_examples),
@@ -156,6 +167,9 @@ def _report_checks(
         "inference_timing_metrics_present": _points_have_metrics(
             eval_points,
             ["inference_time_seconds", "inference_tokens_per_second", "inference_latency_ms_per_token"],
+        ),
+        "route_loss_terms_present": all(
+            _finite(summary.get(key)) for key in ["cost_loss", "balance_loss", "location_loss"]
         ),
     }
 
