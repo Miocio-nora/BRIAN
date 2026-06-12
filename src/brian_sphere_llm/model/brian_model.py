@@ -554,7 +554,7 @@ class BrianRouteCore(ModuleBase):
         if policy == "top1":
             return top_actions[..., 0] == self.out_action
         if policy == "any_topk":
-            return torch.any(top_actions == self.out_action, dim=-1)
+            return top_actions[..., 0] == self.out_action
         raise ValueError(f"Unknown parallel_exit_policy: {policy}")
 
     def _scheduled_select(

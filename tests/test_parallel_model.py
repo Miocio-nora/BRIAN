@@ -73,7 +73,7 @@ def test_parallel_top1_exit_policy_stops_when_out_is_top1() -> None:
     assert output["routing_summary"]["first_exit_step_histogram"] == {"1": 2}
 
 
-def test_parallel_any_topk_exit_policy_stops_when_out_is_in_topk() -> None:
+def test_parallel_any_topk_exit_policy_respects_top1_terminal_rule() -> None:
     any_topk_model = BrianRouteCore(_parallel_cfg("any_topk"))
     top1_model = BrianRouteCore(_parallel_cfg("top1"))
     for model in (any_topk_model, top1_model):
@@ -81,8 +81,11 @@ def test_parallel_any_topk_exit_policy_stops_when_out_is_in_topk() -> None:
     input_ids = torch.randint(0, 64, (2, 8))
     any_topk = any_topk_model(input_ids, targets=input_ids, route_mode="parallel", hard_exit=True)
     top1 = top1_model(input_ids, targets=input_ids, route_mode="parallel", hard_exit=True)
-    assert len(any_topk["route_info"]["selected_actions"]) == 1
-    assert any_topk["routing_summary"]["first_exit_step_histogram"] == {"1": 2}
+    assert len(any_topk["route_info"]["selected_actions"]) == any_topk_model.config.max_route_steps
+    assert any_topk["routing_summary"]["first_exit_step_histogram"] == {"0": 2}
+    for topk_actions in any_topk["route_info"]["topk_actions"]:
+        assert torch.all(topk_actions[:, 0] == 0)
+        assert torch.all(topk_actions[:, 1] == any_topk_model.config.route_pool_blocks)
     assert len(top1["route_info"]["selected_actions"]) == top1_model.config.max_route_steps
     assert top1["routing_summary"]["first_exit_step_histogram"] == {"0": 2}
 
