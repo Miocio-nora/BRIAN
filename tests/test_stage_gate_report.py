@@ -342,6 +342,13 @@ def _data_manifest_ref() -> dict:
         "tokenizer_artifacts_present": True,
         "tokenizer_artifact_hashes": {"tokenizer.json": "abc", "tokenizer_config.json": "def"},
         "tokenizer_artifact_hashes_present": True,
+        "tokenizer": {
+            "name": "simple-byte-tokenizer",
+            "revision": "local",
+            "license": "internal-test",
+            "vocab_size": 259,
+            "special_tokens": {"bos": 256, "eos": 257, "pad": 0, "unk": 258},
+        },
         "stats_recipe_name_matches_config": True,
         "stats_sequence_length_matches_config": True,
         "source_mixture_expected": {"unit": 1.0},
@@ -914,6 +921,12 @@ def test_stage0_gate_requires_valid_data_manifest_ref(tmp_path: Path) -> None:
     assert gate["data_manifest_ref_checks"]["tokenizer_artifact_hashes_present"] is False
     assert gate["data_manifest_ref_checks"]["tokenizer_artifact_hashes_flag"] is False
     assert gate["data_manifest_ref_checks"]["tokenizer_artifact_hash_count_matches"] is False
+    assert gate["data_manifest_ref_checks"]["tokenizer_metadata_present"] is False
+    assert gate["data_manifest_ref_checks"]["tokenizer_name_present"] is False
+    assert gate["data_manifest_ref_checks"]["tokenizer_revision_present"] is False
+    assert gate["data_manifest_ref_checks"]["tokenizer_license_present"] is False
+    assert gate["data_manifest_ref_checks"]["tokenizer_vocab_size_positive"] is False
+    assert gate["data_manifest_ref_checks"]["tokenizer_special_tokens_present"] is False
     assert gate["data_manifest_ref_checks"]["stats_recipe_name_matches_config"] is False
     assert gate["data_manifest_ref_checks"]["stats_sequence_length_matches_config"] is False
     assert gate["data_manifest_ref_checks"]["source_mixture_present"] is False
@@ -954,6 +967,46 @@ def test_stage0_gate_requires_manifest_hash_failure_counts_and_tokenizer_hash_co
     assert gate["data_manifest_ref_checks"]["manifest_token_hash_failure_count_zero"] is False
     assert gate["data_manifest_ref_checks"]["tokenizer_artifact_hashes_present"] is True
     assert gate["data_manifest_ref_checks"]["tokenizer_artifact_hash_count_matches"] is False
+
+
+def test_stage0_gate_requires_tokenizer_metadata(tmp_path: Path) -> None:
+    manifest_ref = _data_manifest_ref()
+    manifest_ref["tokenizer"] = {
+        "name": "",
+        "revision": "",
+        "license": "",
+        "vocab_size": 0,
+        "special_tokens": {},
+    }
+    baseline = _write_run(
+        tmp_path,
+        "baseline",
+        stage="stage0_baseline",
+        val_loss=10.0,
+        train_row={},
+        determinism_status="pass",
+        resume_event={
+            "checkpoint": "checkpoint_latest",
+            "resumed_from_step": 1,
+            "target_max_steps": 2,
+            "optimizer_state_loaded": True,
+        },
+        baseline_difficulty_report=_baseline_difficulty_report(),
+        data_manifest_ref=manifest_ref,
+    )
+
+    report_path = make_stage_gate_report([baseline], output_path=tmp_path / "gate.json")
+    gate = json.loads(report_path.read_text(encoding="utf-8"))["gates"]["stage0_to_1"]
+
+    assert gate["status"] == "warn"
+    assert gate["checks"]["data_manifest_ref_valid"] is False
+    assert gate["data_manifest_ref_checks"]["tokenizer_artifact_hashes_present"] is True
+    assert gate["data_manifest_ref_checks"]["tokenizer_metadata_present"] is True
+    assert gate["data_manifest_ref_checks"]["tokenizer_name_present"] is False
+    assert gate["data_manifest_ref_checks"]["tokenizer_revision_present"] is False
+    assert gate["data_manifest_ref_checks"]["tokenizer_license_present"] is False
+    assert gate["data_manifest_ref_checks"]["tokenizer_vocab_size_positive"] is False
+    assert gate["data_manifest_ref_checks"]["tokenizer_special_tokens_present"] is False
 
 
 def test_stage0_gate_requires_valid_model_stats(tmp_path: Path) -> None:

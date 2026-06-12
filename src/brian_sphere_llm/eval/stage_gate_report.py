@@ -1079,6 +1079,12 @@ def _data_manifest_ref_checks(ref: Any) -> dict[str, bool]:
         "tokenizer_artifact_hashes_present": _positive_string_mapping(ref.get("tokenizer_artifact_hashes")),
         "tokenizer_artifact_hashes_flag": ref.get("tokenizer_artifact_hashes_present") is True,
         "tokenizer_artifact_hash_count_matches": _tokenizer_artifact_hash_count_matches(ref),
+        "tokenizer_metadata_present": isinstance(ref.get("tokenizer"), dict) and bool(ref.get("tokenizer")),
+        "tokenizer_name_present": _nonempty_string(_dict(ref.get("tokenizer")).get("name")),
+        "tokenizer_revision_present": _nonempty_string(_dict(ref.get("tokenizer")).get("revision")),
+        "tokenizer_license_present": _nonempty_string(_dict(ref.get("tokenizer")).get("license")),
+        "tokenizer_vocab_size_positive": _positive_number(_dict(ref.get("tokenizer")).get("vocab_size")),
+        "tokenizer_special_tokens_present": _tokenizer_special_tokens_present(ref),
         "stats_recipe_name_matches_config": ref.get("stats_recipe_name_matches_config") is True,
         "stats_sequence_length_matches_config": ref.get("stats_sequence_length_matches_config") is True,
         "source_mixture_present": isinstance(ref.get("source_mixture_realized"), dict)
@@ -1124,6 +1130,16 @@ def _tokenizer_artifact_hash_count_matches(ref: dict[str, Any]) -> bool:
     if not _positive_number(count) or not _positive_string_mapping(hashes):
         return False
     return int(count) == len(hashes)
+
+
+def _tokenizer_special_tokens_present(ref: dict[str, Any]) -> bool:
+    tokenizer = ref.get("tokenizer")
+    if not isinstance(tokenizer, dict):
+        return False
+    special_tokens = tokenizer.get("special_tokens")
+    if not isinstance(special_tokens, dict) or not special_tokens:
+        return False
+    return all(_nonempty_string(key) for key in special_tokens)
 
 
 def _source_mixture_realized_share_matches_counts(ref: dict[str, Any]) -> bool:

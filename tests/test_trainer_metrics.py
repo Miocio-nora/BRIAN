@@ -509,6 +509,10 @@ def test_train_from_config_writes_routing_report_on_checkpoint(tmp_path: Path) -
     assert manifest_ref["source_mixture_realized"] == {"unit": 32}
     assert manifest_ref["source_mixture_realized_share"] == {"unit": 1.0}
     assert manifest_ref["tokenizer"]["name"] == "unit-tokenizer"
+    assert manifest_ref["tokenizer"]["revision"] == "local"
+    assert manifest_ref["tokenizer"]["license"] == "test"
+    assert manifest_ref["tokenizer"]["vocab_size"] == 32
+    assert manifest_ref["tokenizer"]["special_tokens"] == {"bos": None, "eos": None, "pad": 0, "unk": None}
     report = json.loads((run_dir / "routing_report.json").read_text(encoding="utf-8"))
     assert report["latest_eval"]["validation_loss"] >= 0.0
     assert report["cost_quality_curve"]["summary"]["train_point_count"] == 1
