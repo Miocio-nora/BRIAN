@@ -34,7 +34,13 @@ def make_pseudo_route_curriculum_report(
     route_pool_blocks = int(model_config["route_pool_blocks"])
     max_route_steps = int(model_config["max_route_steps"])
     routing_config = config.get("routing", {})
-    pseudo_policy = str(routing_config.get("pseudo_policy", "mixed_skip_recur")) if isinstance(routing_config, dict) else "mixed_skip_recur"
+    stage = str(config.get("stage", ""))
+    routing_mode = str(routing_config.get("mode", "")) if isinstance(routing_config, dict) else ""
+    pseudo_policy = (
+        str(routing_config.get("pseudo_policy", "mixed_skip_recur"))
+        if isinstance(routing_config, dict)
+        else "mixed_skip_recur"
+    )
 
     baseline_report_path = Path(baseline_difficulty_report_path)
     baseline_report = _read_json(baseline_report_path)
@@ -53,9 +59,18 @@ def make_pseudo_route_curriculum_report(
     )
     rows = _sample_rows(samples, actions, out_action=route_pool_blocks)
     by_difficulty = {label: _difficulty_summary(rows, label) for label in DIFFICULTY_TO_ID}
-    checks = _checks(rows, by_difficulty, route_pool_blocks=route_pool_blocks, pseudo_policy=pseudo_policy)
+    checks = _checks(
+        rows,
+        by_difficulty,
+        route_pool_blocks=route_pool_blocks,
+        stage=stage,
+        routing_mode=routing_mode,
+        pseudo_policy=pseudo_policy,
+    )
     report = {
         "run_dir": str(run_dir),
+        "stage": stage,
+        "routing_mode": routing_mode,
         "baseline_difficulty_report": str(baseline_report_path),
         "samples_path": str(samples_path),
         "pseudo_policy": pseudo_policy,
@@ -137,6 +152,8 @@ def _checks(
     by_difficulty: dict[str, dict[str, Any]],
     *,
     route_pool_blocks: int,
+    stage: str,
+    routing_mode: str,
     pseudo_policy: str,
 ) -> dict[str, bool]:
     easy = by_difficulty["easy"]
@@ -151,6 +168,8 @@ def _checks(
     medium_steps = _num(medium.get("mean_internal_route_steps"))
     hard_steps = _num(hard.get("mean_internal_route_steps"))
     return {
+        "stage3_pseudo_skip_recur_stage": stage == "stage3_pseudo_skip_recur",
+        "pseudo_routing_mode": routing_mode == "pseudo",
         "baseline_samples_present": bool(rows),
         "baseline_cross_entropy_numeric": bool(rows) and all(row["baseline_cross_entropy"] is not None for row in rows),
         "baseline_cross_entropy_ordered_by_difficulty": (

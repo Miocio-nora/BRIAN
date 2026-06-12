@@ -350,11 +350,19 @@ def _gate_stage2(
         "pseudo_route_curriculum_mixed_policy": bool(
             isinstance(curriculum_checks, dict) and curriculum_checks.get("mixed_skip_recur_policy") is True
         ),
+        "pseudo_route_curriculum_correct_stage": bool(
+            isinstance(curriculum_checks, dict) and curriculum_checks.get("stage3_pseudo_skip_recur_stage") is True
+        ),
+        "pseudo_route_curriculum_pseudo_mode": bool(
+            isinstance(curriculum_checks, dict) and curriculum_checks.get("pseudo_routing_mode") is True
+        ),
         "pseudo_route_curriculum_passed": bool(
             mixed_stage
             and mixed_stage.get("pseudo_route_curriculum_status") == "pass"
             and isinstance(curriculum_checks, dict)
             and curriculum_checks.get("mixed_skip_recur_policy") is True
+            and curriculum_checks.get("stage3_pseudo_skip_recur_stage") is True
+            and curriculum_checks.get("pseudo_routing_mode") is True
         ),
         "checkpoint_present": bool(mixed_stage and mixed_stage["has_checkpoint_latest"]),
         **_prefixed_checks("sequential", _routed_run_artifact_gate_checks(sequential_stage)),
