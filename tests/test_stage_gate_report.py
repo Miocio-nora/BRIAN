@@ -1105,6 +1105,8 @@ def test_stage_gate_report_uses_cost_control_report(tmp_path: Path) -> None:
                     "status": "pass",
                     "active_block_evals_range": 0.4,
                     "checks": {
+                        "stage4_output_action_runs": True,
+                        "hard_exit_enabled": True,
                         "active_compute_range_present": True,
                         "active_compute_not_increasing_with_cost": True,
                         "average_steps_not_increasing_with_cost": True,
@@ -1148,6 +1150,8 @@ def test_stage_gate_report_uses_cost_control_report(tmp_path: Path) -> None:
     gate = report["gates"]["stage4_to_5"]
     assert gate["status"] == "pass"
     assert gate["checks"]["cost_control_report_present"] is True
+    assert gate["checks"]["cost_control_stage4_output_action_runs"] is True
+    assert gate["checks"]["cost_control_hard_exit_enabled"] is True
     assert gate["checks"]["cost_control_active_range_present"] is True
     assert gate["checks"]["cost_control_average_steps_not_increasing"] is True
     assert gate["checks"]["out_by_difficulty_report_present"] is True
@@ -1275,6 +1279,8 @@ def test_stage4_gate_requires_forced_max_step_fallback_metric(tmp_path: Path) ->
                 "analysis": {
                     "status": "pass",
                     "checks": {
+                        "stage4_output_action_runs": True,
+                        "hard_exit_enabled": True,
                         "active_compute_range_present": True,
                         "active_compute_not_increasing_with_cost": True,
                         "average_steps_not_increasing_with_cost": True,
@@ -1335,6 +1341,8 @@ def test_stage4_gate_requires_hard_exit_compare_report(tmp_path: Path) -> None:
                 "analysis": {
                     "status": "pass",
                     "checks": {
+                        "stage4_output_action_runs": True,
+                        "hard_exit_enabled": True,
                         "active_compute_range_present": True,
                         "active_compute_not_increasing_with_cost": True,
                         "average_steps_not_increasing_with_cost": True,
@@ -1395,6 +1403,8 @@ def test_stage4_gate_requires_passing_hard_exit_compare_report(tmp_path: Path) -
                 "analysis": {
                     "status": "pass",
                     "checks": {
+                        "stage4_output_action_runs": True,
+                        "hard_exit_enabled": True,
                         "active_compute_range_present": True,
                         "active_compute_not_increasing_with_cost": True,
                         "average_steps_not_increasing_with_cost": True,
@@ -1465,6 +1475,8 @@ def test_stage4_gate_warns_when_model_never_exits(tmp_path: Path) -> None:
                 "analysis": {
                     "status": "pass",
                     "checks": {
+                        "stage4_output_action_runs": True,
+                        "hard_exit_enabled": True,
                         "active_compute_range_present": True,
                         "active_compute_not_increasing_with_cost": True,
                         "average_steps_not_increasing_with_cost": True,
@@ -1523,6 +1535,8 @@ def test_stage4_gate_requires_average_steps_cost_control_trend(tmp_path: Path) -
                 "analysis": {
                     "status": "warn",
                     "checks": {
+                        "stage4_output_action_runs": True,
+                        "hard_exit_enabled": True,
                         "active_compute_range_present": True,
                         "active_compute_not_increasing_with_cost": True,
                         "average_steps_not_increasing_with_cost": False,

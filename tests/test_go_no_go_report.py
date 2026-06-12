@@ -41,6 +41,8 @@ def _passing_stage_gate() -> dict:
                 "cost_control_active_block_evals_range": 0.5,
                 "checks": {
                     "cost_control_report_present": True,
+                    "cost_control_stage4_output_action_runs": True,
+                    "cost_control_hard_exit_enabled": True,
                     "cost_control_active_range_present": True,
                     "cost_control_active_not_increasing": True,
                     "cost_control_average_steps_not_increasing": True,
@@ -167,6 +169,32 @@ def test_go_no_go_r125_requires_average_steps_cost_control(tmp_path: Path) -> No
     assert criteria["route_steps_controlled_by_cost_loss"]["status"] == "fail"
     assert criteria["route_steps_controlled_by_cost_loss"]["evidence"]["checks"][
         "cost_control_average_steps_not_increasing"
+    ] is False
+
+
+def test_go_no_go_r125_requires_stage4_hard_exit_cost_sweep(tmp_path: Path) -> None:
+    data = _passing_stage_gate()
+    data["gates"]["stage4_to_5"]["checks"]["cost_control_stage4_output_action_runs"] = False
+    data["gates"]["stage4_to_5"]["checks"]["cost_control_hard_exit_enabled"] = False
+    stage_gate = _write_json(tmp_path / "stage_gate.json", data)
+    position = _write_json(tmp_path / "position.json", _passing_position_ablation())
+
+    output = make_go_no_go_report(
+        stage_gate_report_path=stage_gate,
+        position_ablation_report_path=position,
+        output_path=tmp_path / "go_no_go.json",
+        phase="r125_to_r350",
+    )
+    report = json.loads(output.read_text(encoding="utf-8"))
+    criteria = {item["name"]: item for item in report["phases"]["r125_to_r350"]["criteria"]}
+
+    assert report["overall_status"] == "fail"
+    assert criteria["route_steps_controlled_by_cost_loss"]["status"] == "fail"
+    assert criteria["route_steps_controlled_by_cost_loss"]["evidence"]["checks"][
+        "cost_control_stage4_output_action_runs"
+    ] is False
+    assert criteria["route_steps_controlled_by_cost_loss"]["evidence"]["checks"][
+        "cost_control_hard_exit_enabled"
     ] is False
 
 

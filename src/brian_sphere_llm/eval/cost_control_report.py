@@ -36,6 +36,7 @@ def _summarize_run(run_dir: Path) -> dict[str, Any]:
     if not (run_dir / "routing_report.json").exists() and (run_dir / "train_log.jsonl").exists():
         make_routing_report(run_dir)
     config = _read_yaml_if_exists(run_dir / "config_resolved.yaml")
+    routing_config = config.get("routing", {}) if isinstance(config.get("routing"), dict) else {}
     routing_report = _read_json_if_exists(run_dir / "routing_report.json")
     eval_rows = _read_jsonl(run_dir / "eval_log.jsonl")
     routing_summary = routing_report.get("summary", {}) if isinstance(routing_report.get("summary"), dict) else {}
@@ -43,6 +44,8 @@ def _summarize_run(run_dir: Path) -> dict[str, Any]:
     return {
         "run_dir": str(run_dir),
         "stage": str(config.get("stage", "")),
+        "routing_mode": routing_config.get("mode"),
+        "hard_exit": routing_config.get("hard_exit"),
         "cost_weight": _num(config.get("loss_weights", {}).get("cost") if isinstance(config.get("loss_weights"), dict) else None),
         "validation_loss": _num(latest_eval.get("validation_loss")),
         "perplexity": _num(latest_eval.get("perplexity")),
@@ -70,6 +73,8 @@ def _analyze_cost_sweep(rows: list[dict[str, Any]], *, min_active_compute_range:
     step_corr = _corr(step_pairs)
     output_corr = _corr(output_pairs)
     checks = {
+        "stage4_output_action_runs": bool(rows) and all(row.get("stage") == "stage4_output_action" for row in rows),
+        "hard_exit_enabled": bool(rows) and all(row.get("hard_exit") is True for row in rows),
         "has_multiple_cost_weights": len(set(cost_values)) >= 2,
         "active_compute_range_present": active_range is not None and active_range >= min_active_compute_range,
         "active_compute_not_increasing_with_cost": active_corr is not None and active_corr <= 0.0,
@@ -94,6 +99,8 @@ def _analyze_cost_sweep(rows: list[dict[str, Any]], *, min_active_compute_range:
 
 
 def _status(checks: dict[str, bool]) -> str:
+    if checks.get("has_multiple_cost_weights") is False:
+        return "fail"
     if all(checks.values()):
         return "pass"
     if any(checks.values()):

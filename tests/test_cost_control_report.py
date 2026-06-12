@@ -15,11 +15,19 @@ def _write_run(
     active: float,
     steps: float,
     p_output: float | None,
+    stage: str = "stage4_output_action",
+    hard_exit: bool = True,
 ) -> Path:
     run_dir = root / name
     run_dir.mkdir(parents=True)
     (run_dir / "config_resolved.yaml").write_text(
-        yaml.safe_dump({"stage": "stage4_output_action", "loss_weights": {"cost": cost}}),
+        yaml.safe_dump(
+            {
+                "stage": stage,
+                "routing": {"mode": "scheduled", "hard_exit": hard_exit},
+                "loss_weights": {"cost": cost},
+            }
+        ),
         encoding="utf-8",
     )
     (run_dir / "eval_log.jsonl").write_text(
@@ -52,6 +60,8 @@ def test_make_cost_control_report_orders_and_scores_sweep(tmp_path: Path) -> Non
     assert report["analysis"]["status"] == "pass"
     assert report["analysis"]["active_block_evals_range"] == 0.6000000000000001
     assert report["analysis"]["cost_vs_active_block_evals_correlation"] < 0.0
+    assert report["analysis"]["checks"]["stage4_output_action_runs"] is True
+    assert report["analysis"]["checks"]["hard_exit_enabled"] is True
     assert report["analysis"]["checks"]["average_steps_not_increasing_with_cost"] is True
     assert report["analysis"]["average_route_steps_monotonic_nonincreasing"] is True
     assert report["analysis"]["cost_vs_p_output_correlation"] > 0.0
@@ -87,6 +97,37 @@ def test_cost_control_report_rejects_boolean_metrics(tmp_path: Path) -> None:
     assert report["analysis"]["status"] == "fail"
     assert report["analysis"]["checks"]["has_multiple_cost_weights"] is False
     assert report["analysis"]["checks"]["active_compute_range_present"] is False
+
+
+def test_cost_control_report_requires_stage4_hard_exit_sweep(tmp_path: Path) -> None:
+    low = _write_run(
+        tmp_path,
+        "low",
+        cost=0.0,
+        active=0.8,
+        steps=3.0,
+        p_output=0.2,
+        stage="stage3_scheduled_free_routing",
+        hard_exit=False,
+    )
+    high = _write_run(
+        tmp_path,
+        "high",
+        cost=0.05,
+        active=0.2,
+        steps=1.0,
+        p_output=0.8,
+        stage="stage3_scheduled_free_routing",
+        hard_exit=False,
+    )
+
+    report_path = make_cost_control_report([high, low], output_path=tmp_path / "cost.json")
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+
+    assert report["analysis"]["status"] == "warn"
+    assert report["analysis"]["checks"]["stage4_output_action_runs"] is False
+    assert report["analysis"]["checks"]["hard_exit_enabled"] is False
+    assert report["analysis"]["checks"]["active_compute_not_increasing_with_cost"] is True
 
 
 def test_cost_control_configs_resolve() -> None:
