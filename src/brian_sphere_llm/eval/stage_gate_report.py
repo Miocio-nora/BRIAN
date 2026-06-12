@@ -540,6 +540,7 @@ def _gate_stage4(
             _routing_metric(stage4, "forced_max_step_exit_fraction")
         ),
         "cost_control_report_present": bool(cost_control_report),
+        "cost_control_passed": bool(cost_analysis.get("status") == "pass"),
         "cost_control_stage4_output_action_runs": bool(cost_checks.get("stage4_output_action_runs", False)),
         "cost_control_hard_exit_enabled": bool(cost_checks.get("hard_exit_enabled", False)),
         "cost_control_active_range_present": bool(cost_checks.get("active_compute_range_present", False)),

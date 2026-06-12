@@ -163,6 +163,7 @@ def _r125_decision(stage_gate_report: dict[str, Any], *, position_ablation_repor
                 "stage4_to_5",
                 [
                     "cost_control_report_present",
+                    "cost_control_passed",
                     "cost_control_stage4_output_action_runs",
                     "cost_control_hard_exit_enabled",
                     "cost_control_active_range_present",

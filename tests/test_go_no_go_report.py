@@ -41,6 +41,7 @@ def _passing_stage_gate() -> dict:
                 "cost_control_active_block_evals_range": 0.5,
                 "checks": {
                     "cost_control_report_present": True,
+                    "cost_control_passed": True,
                     "cost_control_stage4_output_action_runs": True,
                     "cost_control_hard_exit_enabled": True,
                     "cost_control_active_range_present": True,
@@ -243,6 +244,29 @@ def test_go_no_go_r125_requires_stage4_hard_exit_cost_sweep(tmp_path: Path) -> N
     assert criteria["route_steps_controlled_by_cost_loss"]["evidence"]["checks"][
         "cost_control_hard_exit_enabled"
     ] is False
+
+
+def test_go_no_go_r125_requires_passing_cost_control_report(tmp_path: Path) -> None:
+    data = _passing_stage_gate()
+    data["gates"]["stage4_to_5"]["checks"]["cost_control_passed"] = False
+    data["gates"]["stage4_to_5"]["cost_control_status"] = "warn"
+    stage_gate = _write_json(tmp_path / "stage_gate.json", data)
+    position = _write_json(tmp_path / "position.json", _passing_position_ablation())
+
+    output = make_go_no_go_report(
+        stage_gate_report_path=stage_gate,
+        position_ablation_report_path=position,
+        output_path=tmp_path / "go_no_go.json",
+        phase="r125_to_r350",
+    )
+    report = json.loads(output.read_text(encoding="utf-8"))
+    criteria = {item["name"]: item for item in report["phases"]["r125_to_r350"]["criteria"]}
+    cost_control = criteria["route_steps_controlled_by_cost_loss"]
+
+    assert report["overall_status"] == "fail"
+    assert cost_control["status"] == "fail"
+    assert cost_control["evidence"]["checks"]["cost_control_passed"] is False
+    assert cost_control["evidence"]["cost_control_status"] == "warn"
 
 
 def test_go_no_go_r125_fails_when_output_action_never_exits(tmp_path: Path) -> None:
