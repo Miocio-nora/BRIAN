@@ -36,9 +36,15 @@ def init_distributed(device: Any | None = None) -> bool:
         raise ModuleNotFoundError("PyTorch distributed support is required for WORLD_SIZE > 1.")
     if torch.distributed.is_initialized():
         return True
+    device_id = None
     if device is not None and getattr(device, "type", None) == "cuda":
         torch.cuda.set_device(local_rank())
-    torch.distributed.init_process_group(backend=_backend_for_device(device), init_method="env://")
+        device_id = torch.device("cuda", local_rank())
+    torch.distributed.init_process_group(
+        backend=_backend_for_device(device),
+        init_method="env://",
+        device_id=device_id,
+    )
     return True
 
 
@@ -48,7 +54,15 @@ def is_initialized() -> bool:
 
 def barrier() -> None:
     if is_initialized():
+        if torch.distributed.get_backend() == "nccl":
+            torch.distributed.barrier(device_ids=[local_rank()])
+            return
         torch.distributed.barrier()
+
+
+def destroy_distributed() -> None:
+    if is_initialized():
+        torch.distributed.destroy_process_group()
 
 
 def mean_scalar(value: float, device: Any | None = None) -> float:

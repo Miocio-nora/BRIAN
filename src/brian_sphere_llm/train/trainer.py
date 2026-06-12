@@ -350,6 +350,7 @@ def train_from_config(config_path: str | Path) -> Path:
     if is_main_process and not (run_dir / "routing_report.json").exists():
         make_routing_report(run_dir)
     dist_utils.barrier()
+    dist_utils.destroy_distributed()
     return run_dir
 
 

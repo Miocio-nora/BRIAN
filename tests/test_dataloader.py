@@ -31,6 +31,18 @@ def test_validation_dataloader_preserves_fixed_order(tmp_path: Path) -> None:
     assert second_batches == first_batches
 
 
+def test_packed_dataset_memory_maps_uint32_tokens_and_returns_long(tmp_path: Path) -> None:
+    tokenized = tmp_path / "tokenized"
+    write_token_bin([[1, 2, 3], [4, 5, 6]], tokenized / "train.bin")
+    write_index(tokenized / "train.idx", sequence_length=3, num_sequences=2)
+
+    dataset = PackedTokenDataset(tokenized / "train.bin", tokenized / "train.idx")
+
+    assert dataset.tokens.dtype == torch.int32
+    assert dataset[0].dtype == torch.long
+    assert dataset[0].tolist() == [1, 2, 3]
+
+
 def test_train_dataloader_uses_distributed_sampler_when_requested(tmp_path: Path) -> None:
     tokenized = tmp_path / "tokenized"
     sequences = [

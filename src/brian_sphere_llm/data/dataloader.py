@@ -3,8 +3,6 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from brian_sphere_llm.data.pack import read_token_bin
-
 try:
     import torch
     from torch.utils.data import DataLoader, Dataset
@@ -25,10 +23,18 @@ class PackedTokenDataset(Dataset):
         with self.idx_path.open("r", encoding="utf-8") as handle:
             self.index = json.load(handle)
         self.sequence_length = int(self.index["sequence_length"])
-        self.tokens = torch.tensor(read_token_bin(self.bin_path), dtype=torch.long)
         expected = int(self.index["num_sequences"]) * self.sequence_length
-        if self.tokens.numel() != expected:
-            raise ValueError(f"Token file has {self.tokens.numel()} tokens; expected {expected}")
+        actual = self.bin_path.stat().st_size // 4
+        if self.bin_path.stat().st_size % 4 != 0:
+            raise ValueError(f"Token file byte size must be divisible by 4: {self.bin_path}")
+        if actual != expected:
+            raise ValueError(f"Token file has {actual} tokens; expected {expected}")
+        self.tokens = torch.from_file(
+            str(self.bin_path),
+            shared=False,
+            size=actual,
+            dtype=torch.int32,
+        )
 
     def __len__(self) -> int:
         return int(self.index["num_sequences"])
@@ -36,7 +42,7 @@ class PackedTokenDataset(Dataset):
     def __getitem__(self, index: int) -> torch.Tensor:
         start = index * self.sequence_length
         end = start + self.sequence_length
-        return self.tokens[start:end]
+        return self.tokens[start:end].to(dtype=torch.long)
 
 
 def build_dataloader(
