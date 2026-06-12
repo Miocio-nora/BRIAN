@@ -383,13 +383,16 @@ def _parallel_passing_cost_explosion(reports: dict[str, dict[str, Any]]) -> dict
     branch_bounded = _report_check(passing_report, "branch_count_bounded_by_beam")
     delta_cache_bounded = _report_check(passing_report, "delta_cache_bounded_by_window")
     score_margin_measured = _report_check(passing_report, "score_margin_measured")
+    score_decay_configured = _report_check(passing_report, "branch_score_decay_configured")
     compare_benefit, compare_benefit_evidence = _parallel_compare_benefit(compare_report)
 
-    if score_margin_measured is False:
+    if score_decay_configured is False:
+        credit_unstable = True
+    elif score_margin_measured is False:
         credit_unstable = True
     elif compare_benefit is False:
         credit_unstable = True
-    elif score_margin_measured is True or compare_benefit is True:
+    elif score_decay_configured is True and (score_margin_measured is True or compare_benefit is True):
         credit_unstable = False
     else:
         credit_unstable = None
@@ -417,6 +420,7 @@ def _parallel_passing_cost_explosion(reports: dict[str, dict[str, Any]]) -> dict
             "branch_credit_assignment_unstable",
             credit_unstable,
             {
+                "branch_score_decay_configured": score_decay_configured,
                 "score_margin_measured": score_margin_measured,
                 "parallel_compare_benefit_proxy": compare_benefit,
                 "parallel_compare_status": compare_report.get("overall_status") if compare_report else None,

@@ -3,3 +3,4 @@ model_name: brian_r125_parallel
 parallel_passing: true
 beam_size: 2
 branch_cost: 0.01
+branch_score_decay: 0.99

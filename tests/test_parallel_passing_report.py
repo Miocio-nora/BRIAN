@@ -37,6 +37,7 @@ def test_parallel_passing_report_passes_bounded_beam_and_cost(tmp_path: Path) ->
     assert report["checks"]["shared_base_global_memory_enabled"] is True
     assert report["checks"]["beam_size_within_limit"] is True
     assert report["checks"]["branch_cost_enabled"] is True
+    assert report["checks"]["branch_score_decay_configured"] is True
     assert report["checks"]["branch_count_bounded_by_beam"] is True
     assert report["checks"]["score_margin_nonnegative"] is True
     assert report["checks"]["branch_delta_memory_measured"] is True
@@ -45,6 +46,7 @@ def test_parallel_passing_report_passes_bounded_beam_and_cost(tmp_path: Path) ->
     assert report["checks"]["delta_cache_bounded_by_window"] is True
     assert report["model"]["memory_policy"] == "shared_base_global_kv_with_branch_delta"
     assert report["model"]["parallel_exit_policy"] == "branch"
+    assert report["model"]["branch_score_decay"] == 0.99
     assert report["routing"]["parallel_branch_count"]["max"] == 2.0
     assert report["routing"]["parallel_delta_cache_slots"]["max"] == 2.0
 
@@ -71,6 +73,30 @@ def test_parallel_passing_report_fails_unbounded_branch_and_delta_cache(tmp_path
     assert report["checks"]["branch_cost_enabled"] is False
     assert report["checks"]["branch_count_bounded_by_beam"] is False
     assert report["checks"]["delta_cache_bounded_by_window"] is False
+
+
+def test_parallel_passing_report_requires_branch_score_decay(tmp_path: Path) -> None:
+    run_dir = _write_run(
+        tmp_path,
+        beam_size=2,
+        branch_cost=0.01,
+        branch_score_decay=1.0,
+        window_slots=3,
+        train_rows=[
+            {
+                "parallel_branch_count_mean": 2.0,
+                "parallel_score_margin_mean": 0.2,
+                "parallel_delta_cache_slots_max": 1.0,
+            },
+        ],
+    )
+
+    report_path = make_parallel_passing_report(run_dir)
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+
+    assert report["overall_status"] == "fail"
+    assert report["model"]["branch_score_decay"] == 1.0
+    assert report["checks"]["branch_score_decay_configured"] is False
 
 
 def test_parallel_passing_report_fails_negative_margin_or_delta_cache(tmp_path: Path) -> None:
@@ -132,6 +158,7 @@ def test_parallel_passing_report_rejects_boolean_numeric_metrics(tmp_path: Path)
             "parallel_passing": True,
             "beam_size": True,
             "branch_cost": True,
+            "branch_score_decay": True,
             "global_kv": True,
             "global_sink_slots": True,
             "global_window_slots": True,
@@ -153,9 +180,11 @@ def test_parallel_passing_report_rejects_boolean_numeric_metrics(tmp_path: Path)
     assert report["overall_status"] == "fail"
     assert report["model"]["beam_size"] == 0
     assert report["model"]["branch_cost"] is None
+    assert report["model"]["branch_score_decay"] is None
     assert report["routing"]["parallel_branch_count"]["count"] == 0
     assert report["checks"]["beam_size_present"] is False
     assert report["checks"]["branch_cost_enabled"] is False
+    assert report["checks"]["branch_score_decay_configured"] is False
     assert report["checks"]["branch_metrics_present"] is False
     assert report["checks"]["score_margin_measured"] is False
     assert report["checks"]["branch_delta_memory_measured"] is False
@@ -197,6 +226,7 @@ def _write_run(
     branch_cost: float,
     window_slots: int,
     train_rows: list[dict],
+    branch_score_decay: float = 0.99,
     include_eval_delta: bool = True,
 ) -> Path:
     run_dir = root / "parallel"
@@ -208,6 +238,7 @@ def _write_run(
             "parallel_passing": True,
             "beam_size": beam_size,
             "branch_cost": branch_cost,
+            "branch_score_decay": branch_score_decay,
             "global_kv": True,
             "global_sink_slots": 1,
             "global_window_slots": window_slots,

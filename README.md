@@ -475,7 +475,7 @@ python scripts/eval.py \
   --output reports/parallel_compare.json
 ```
 
-The safety report checks beam size, branch cost, branch count pruning, score-margin diagnostics, and per-branch delta-cache slots against the configured Global KV window. The comparison report checks that the baseline is a scheduled Stage 5 Global KV top-k run, candidates are Stage 6/7 parallel Global KV runs, parallel branches are active, branch score margins are logged, validation loss is not worse than the baseline beyond `max_validation_loss_delta`, and active compute / estimated FLOPs stay under the configured ratios. Pass both into the Stage 6 gate:
+The safety report checks beam size, branch cost, branch score decay, branch count pruning, score-margin diagnostics, and per-branch delta-cache slots against the configured Global KV window. The comparison report checks that the baseline is a scheduled Stage 5 Global KV top-k run, candidates are Stage 6/7 parallel Global KV runs, parallel branches are active, branch score margins are logged, validation loss is not worse than the baseline beyond `max_validation_loss_delta`, and active compute / estimated FLOPs stay under the configured ratios. Pass both into the Stage 6 gate:
 
 ```bash
 python scripts/eval.py \
@@ -550,7 +550,7 @@ python scripts/run_experiment.py \
 The fast smoke manifest is `configs/experiments/tiny_parallel_passing.yaml`;
 the BRIAN-R125 sweep manifest is `configs/experiments/route_core_parallel_passing.yaml`.
 These cover PP0 top-k weighted fusion, PP1 beam-2 independent branch passing, PP2 beam-4 capacity,
-PP3/PP4 branch-cost off/on ablations, PP5/PP6 top-1-vs-top-k OUT terminal rules,
+PP3/PP4 branch-cost off/on ablations with inherited branch score decay, PP5/PP6 top-1-vs-top-k OUT terminal rules,
 and PP7/D5 shared base Global KV plus branch delta memory checks.
 
 Resolve the first BRIAN-R350 scaling package:

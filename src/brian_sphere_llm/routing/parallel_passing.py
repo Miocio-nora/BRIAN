@@ -21,13 +21,18 @@ def score_branch_actions(
     actions: "torch.Tensor",
     out_action: int,
     cost_penalty: float,
+    branch_score_decay: float = 1.0,
 ) -> BranchScores:
     """Score candidate branch actions as latent beam-search transitions."""
     if torch is None:
         raise ModuleNotFoundError("PyTorch is required for parallel passing.")
     gathered = route_log_probs.gather(dim=-1, index=actions)
     internal = actions != out_action
-    scores = parent_score.unsqueeze(-1) + gathered - float(cost_penalty) * internal.float()
+    scores = (
+        parent_score.unsqueeze(-1) * float(branch_score_decay)
+        + gathered
+        - float(cost_penalty) * internal.float()
+    )
     return BranchScores(actions=actions, scores=scores)
 
 

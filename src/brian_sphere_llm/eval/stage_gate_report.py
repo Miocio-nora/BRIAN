@@ -688,6 +688,7 @@ def _gate_stage6(
         "parallel_branch_active": bool(passing_checks.get("parallel_branch_active", False)),
         "parallel_branch_count_bounded_by_beam": bool(passing_checks.get("branch_count_bounded_by_beam", False)),
         "parallel_branch_cost_enabled": bool(passing_checks.get("branch_cost_enabled", False)),
+        "parallel_branch_score_decay_configured": bool(passing_checks.get("branch_score_decay_configured", False)),
         "parallel_score_margin_nonnegative": bool(passing_checks.get("score_margin_nonnegative", False)),
         "parallel_branch_delta_memory_measured": bool(passing_checks.get("branch_delta_memory_measured", False)),
         "parallel_delta_cache_nonnegative": bool(passing_checks.get("delta_cache_nonnegative", False)),

@@ -268,6 +268,7 @@ def _parallel_passing_report(*, checks: dict[str, bool] | None = None) -> dict:
         "delta_cache_nonnegative": True,
         "delta_memory_policy_present": True,
         "delta_cache_bounded_by_window": True,
+        "branch_score_decay_configured": True,
     }
     if checks is not None:
         report_checks |= checks
@@ -277,6 +278,7 @@ def _parallel_passing_report(*, checks: dict[str, bool] | None = None) -> dict:
         "model": {
             "beam_size": 2,
             "branch_cost": 0.01,
+            "branch_score_decay": 0.99,
             "memory_policy": "shared_base_global_kv_with_branch_delta",
         },
         "routing": {"parallel_branch_count": {"max": 2.0}, "parallel_delta_cache_slots": {"max": 2.0}},
@@ -2161,6 +2163,7 @@ def test_stage6_gate_uses_parallel_compare_report(tmp_path: Path) -> None:
     assert gate["checks"]["parallel_delta_memory_policy_present"] is True
     assert gate["checks"]["parallel_branch_count_bounded_by_beam"] is True
     assert gate["checks"]["parallel_delta_cache_bounded"] is True
+    assert gate["checks"]["parallel_branch_score_decay_configured"] is True
     assert gate["checks"]["parallel_compare_report_present"] is True
     assert gate["checks"]["parallel_branch_benefit_proxy"] is True
     assert report["supplemental_reports"]["parallel_compare_report"] == str(compare_report)
@@ -2170,6 +2173,7 @@ def test_stage6_gate_requires_branch_score_and_delta_memory_checks(tmp_path: Pat
     passing_report = _parallel_passing_report()
     passing_report["checks"]["shared_base_global_memory_enabled"] = False
     passing_report["checks"]["score_margin_nonnegative"] = False
+    passing_report["checks"]["branch_score_decay_configured"] = False
     passing_report["checks"]["branch_delta_memory_measured"] = False
     passing_report["checks"]["delta_cache_nonnegative"] = False
     stage6 = _write_run(
@@ -2199,6 +2203,7 @@ def test_stage6_gate_requires_branch_score_and_delta_memory_checks(tmp_path: Pat
     assert gate["checks"]["parallel_passing_report_passed"] is True
     assert gate["checks"]["parallel_shared_base_global_memory_enabled"] is False
     assert gate["checks"]["parallel_score_margin_nonnegative"] is False
+    assert gate["checks"]["parallel_branch_score_decay_configured"] is False
     assert gate["checks"]["parallel_branch_delta_memory_measured"] is False
     assert gate["checks"]["parallel_delta_cache_nonnegative"] is False
 

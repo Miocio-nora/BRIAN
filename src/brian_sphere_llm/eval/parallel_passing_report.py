@@ -33,6 +33,7 @@ def make_parallel_passing_report(
     delta_cache_slots = _series(train_rows, eval_rows, summary, latest_eval, "parallel_delta_cache_slots_max")
     beam_size = int(_num(model_config.get("beam_size")) or 0)
     branch_cost = _num(model_config.get("branch_cost"))
+    branch_score_decay = _num(model_config.get("branch_score_decay"))
     global_kv_enabled = _bool_value(model_config.get("global_kv", False), "model_config_resolved.global_kv")
     parallel_passing_enabled = _bool_value(
         model_config.get("parallel_passing", False),
@@ -48,6 +49,7 @@ def make_parallel_passing_report(
         "beam_size_present": beam_size >= 1,
         "beam_size_within_limit": beam_size >= 1 and beam_size <= max_beam_size,
         "branch_cost_enabled": branch_cost is not None and branch_cost > min_branch_cost,
+        "branch_score_decay_configured": branch_score_decay is not None and 0.0 < branch_score_decay < 1.0,
         "branch_metrics_present": bool(branch_counts),
         "parallel_branch_active": _max(branch_counts) is not None and float(_max(branch_counts)) >= min_parallel_branch_count,
         "branch_count_bounded_by_beam": (
@@ -79,6 +81,7 @@ def make_parallel_passing_report(
             "parallel_passing_enabled": parallel_passing_enabled,
             "beam_size": beam_size,
             "branch_cost": branch_cost,
+            "branch_score_decay": branch_score_decay,
             "parallel_exit_policy": str(model_config.get("parallel_exit_policy", "branch")),
             "global_kv_enabled": global_kv_enabled,
             "global_sink_slots": int(_num(model_config.get("global_sink_slots")) or 0),

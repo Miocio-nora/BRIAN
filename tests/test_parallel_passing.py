@@ -19,3 +19,27 @@ def test_branch_scoring_and_pruning() -> None:
     assert pruned.actions.shape == (1, 2)
     assert pruned.scores.shape == (1, 2)
     assert pruned.scores[0, 0] >= pruned.scores[0, 1]
+
+
+def test_branch_scoring_applies_parent_score_decay() -> None:
+    route_log_probs = torch.log_softmax(torch.tensor([[2.0, 1.0, 0.5]]), dim=-1)
+    actions = torch.tensor([[0, 1]])
+    parent_score = torch.tensor([-2.0])
+
+    no_decay = score_branch_actions(
+        parent_score=parent_score,
+        route_log_probs=route_log_probs,
+        actions=actions,
+        out_action=2,
+        cost_penalty=0.0,
+    )
+    decayed = score_branch_actions(
+        parent_score=parent_score,
+        route_log_probs=route_log_probs,
+        actions=actions,
+        out_action=2,
+        cost_penalty=0.0,
+        branch_score_decay=0.5,
+    )
+
+    assert torch.all(decayed.scores > no_decay.scores)

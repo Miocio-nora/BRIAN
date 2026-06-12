@@ -61,6 +61,7 @@ class BrianRouteConfig:
     parallel_passing: bool = False
     beam_size: int = 2
     branch_cost: float = 0.01
+    branch_score_decay: float = 0.99
     parallel_exit_policy: str = "branch"
     block_position_mode: str = "open_arc"
     block_position_injection: str = "adapter"
@@ -107,6 +108,12 @@ class BrianRouteConfig:
             parallel_passing=_bool_value(data.get("parallel_passing", False), "parallel_passing"),
             beam_size=_int_value(data.get("beam_size", 2), "beam_size", minimum=1),
             branch_cost=_float_value(data.get("branch_cost", 0.01), "branch_cost", minimum=0.0),
+            branch_score_decay=_float_value(
+                data.get("branch_score_decay", 0.99),
+                "branch_score_decay",
+                minimum=0.0,
+                maximum=1.0,
+            ),
             parallel_exit_policy=str(data.get("parallel_exit_policy", "branch")),
             block_position_mode=str(data.get("block_position_mode", "open_arc")),
             block_position_injection=str(data.get("block_position_injection", "adapter")),
@@ -454,7 +461,11 @@ class BrianRouteCore(ModuleBase):
                 expanded_log_probs = torch.where(branch_exited.unsqueeze(-1), zeros, expanded_log_probs)
 
             internal = expanded_actions != self.out_action
-            candidate_scores = branch_scores.unsqueeze(-1) + expanded_log_probs - self.config.branch_cost * internal.float()
+            candidate_scores = (
+                branch_scores.unsqueeze(-1) * self.config.branch_score_decay
+                + expanded_log_probs
+                - self.config.branch_cost * internal.float()
+            )
             candidate_actions = expanded_actions.reshape(batch_size, current_beam * top_k)
             candidate_scores_flat = candidate_scores.reshape(batch_size, current_beam * top_k)
             pruned = prune_branches(candidate_actions, candidate_scores_flat, beam_size)
@@ -735,6 +746,7 @@ class BrianRouteCore(ModuleBase):
             "parallel_passing": str(self.config.parallel_passing),
             "beam_size": self.config.beam_size,
             "branch_cost": str(self.config.branch_cost),
+            "branch_score_decay": str(self.config.branch_score_decay),
             "parallel_exit_policy": self.config.parallel_exit_policy,
         }
 

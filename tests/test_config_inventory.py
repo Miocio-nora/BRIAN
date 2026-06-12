@@ -223,6 +223,7 @@ def test_parallel_passing_ablation_configs_keep_planned_branch_controls() -> Non
         assert model_config["model_name"] == expected_values["model_name"]
         assert model_config["beam_size"] == expected_values["beam_size"]
         assert model_config["branch_cost"] == expected_values["branch_cost"]
+        assert model_config["branch_score_decay"] == 0.99
         assert model_config.get("parallel_exit_policy", "branch") == expected_values["parallel_exit_policy"]
 
 
@@ -781,6 +782,15 @@ def _validate_parallel_model_config(config: dict[str, Any], path: Path, errors: 
             errors.append(f"{path}: beam_size must be <= 4 for planned parallel-passing configs")
     if _int_config_value(config.get("global_window_slots", 0), "global_window_slots", path, errors, minimum=1) is None:
         errors.append(f"{path}: parallel_passing configs must keep a positive global_window_slots delta window")
+    branch_score_decay = _float_config_value(
+        config.get("branch_score_decay", 1.0),
+        "branch_score_decay",
+        path,
+        errors,
+        minimum=0.0,
+    )
+    if branch_score_decay is not None and not 0.0 < branch_score_decay < 1.0:
+        errors.append(f"{path}: branch_score_decay must be > 0 and < 1 for planned parallel-passing configs")
     if config.get("parallel_exit_policy", "branch") not in {"branch", "top1", "any_topk"}:
         errors.append(f"{path}: parallel_exit_policy must be branch, top1, or any_topk")
 

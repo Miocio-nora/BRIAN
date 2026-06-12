@@ -33,6 +33,10 @@ def test_brian_route_config_rejects_boolean_numeric_fields() -> None:
         _config(top_k=True)
     with pytest.raises(ValueError, match="branch_cost"):
         _config(branch_cost=False)
+    with pytest.raises(ValueError, match="branch_score_decay"):
+        _config(branch_score_decay=False)
+    with pytest.raises(ValueError, match="branch_score_decay"):
+        _config(branch_score_decay=1.5)
     with pytest.raises(ValueError, match="global_window_slots"):
         _config(global_window_slots=True)
 

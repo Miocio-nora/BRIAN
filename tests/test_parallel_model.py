@@ -25,6 +25,7 @@ def test_parallel_route_forward_reports_branch_metrics() -> None:
         beam_size=2,
     )
     model = BrianRouteCore(cfg)
+    assert model.config.branch_score_decay == 0.99
     input_ids = torch.randint(0, 64, (2, 8))
     output = model(input_ids, targets=input_ids, route_mode="parallel", hard_exit=True)
     summary = output["routing_summary"]
@@ -42,6 +43,7 @@ def test_stage6_config_builds_parallel_model() -> None:
     model = build_model_from_config("configs/model/brian_tiny_parallel.yaml")
     assert model.config.parallel_passing is True
     assert model.config.beam_size == 2
+    assert model.config.branch_score_decay == 0.99
     assert train_mode_for_stage("stage6_parallel_passing") == "parallel"
 
 
@@ -53,6 +55,7 @@ def test_parallel_ablation_configs_build_models() -> None:
     assert beam4.config.parallel_passing is True
     assert beam4.config.beam_size == 4
     assert beam4.config.branch_cost == 0.01
+    assert beam4.config.branch_score_decay == 0.99
     assert no_cost.config.parallel_passing is True
     assert no_cost.config.beam_size == 2
     assert no_cost.config.branch_cost == 0.0

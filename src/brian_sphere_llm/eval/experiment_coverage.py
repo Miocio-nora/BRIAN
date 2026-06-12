@@ -631,7 +631,8 @@ def _parallel_requirements(entries: list[dict[str, Any]]) -> list[dict[str, Any]
             lambda entry: entry["id"] == "PP1"
             and entry["model"].get("parallel_passing") is True
             and int(_num(entry["model"].get("beam_size")) or 0) == 2
-            and (_num(entry["model"].get("branch_cost")) or 0.0) > 0.0,
+            and (_num(entry["model"].get("branch_cost")) or 0.0) > 0.0
+            and _branch_score_decay_enabled(entry),
         ),
         _group_requirement(
             "PP2",
@@ -639,7 +640,8 @@ def _parallel_requirements(entries: list[dict[str, Any]]) -> list[dict[str, Any]
             entries,
             lambda entry: entry["id"] == "PP2"
             and entry["model"].get("parallel_passing") is True
-            and int(_num(entry["model"].get("beam_size")) or 0) == 4,
+            and int(_num(entry["model"].get("beam_size")) or 0) == 4
+            and _branch_score_decay_enabled(entry),
         ),
         _group_requirement(
             "PP3",
@@ -648,6 +650,7 @@ def _parallel_requirements(entries: list[dict[str, Any]]) -> list[dict[str, Any]
             lambda entry: entry["id"] == "PP3"
             and entry["model"].get("parallel_passing") is True
             and _num(entry["model"].get("branch_cost")) == 0.0
+            and _branch_score_decay_enabled(entry)
             and _num(entry.get("loss_weights", {}).get("cost")) == 0.0,
         ),
         _group_requirement(
@@ -657,6 +660,7 @@ def _parallel_requirements(entries: list[dict[str, Any]]) -> list[dict[str, Any]
             lambda entry: entry["id"] == "PP4"
             and entry["model"].get("parallel_passing") is True
             and (_num(entry["model"].get("branch_cost")) or 0.0) > 0.0
+            and _branch_score_decay_enabled(entry)
             and (_num(entry.get("loss_weights", {}).get("cost")) or 0.0) > 0.0,
         ),
         _group_requirement(
@@ -665,6 +669,7 @@ def _parallel_requirements(entries: list[dict[str, Any]]) -> list[dict[str, Any]
             entries,
             lambda entry: entry["id"] == "PP5"
             and entry["model"].get("parallel_passing") is True
+            and _branch_score_decay_enabled(entry)
             and entry["model"].get("parallel_exit_policy") == "top1",
         ),
         _group_requirement(
@@ -673,6 +678,7 @@ def _parallel_requirements(entries: list[dict[str, Any]]) -> list[dict[str, Any]
             entries,
             lambda entry: entry["id"] == "PP6"
             and entry["model"].get("parallel_passing") is True
+            and _branch_score_decay_enabled(entry)
             and entry["model"].get("parallel_exit_policy") == "any_topk",
         ),
         _group_requirement(
@@ -681,10 +687,16 @@ def _parallel_requirements(entries: list[dict[str, Any]]) -> list[dict[str, Any]
             entries,
             lambda entry: entry["id"] == "PP7"
             and entry["model"].get("parallel_passing") is True
+            and _branch_score_decay_enabled(entry)
             and entry["model"].get("global_kv") is True
             and (_num(entry["model"].get("global_window_slots")) or 0) > 0,
         ),
     ]
+
+
+def _branch_score_decay_enabled(entry: dict[str, Any]) -> bool:
+    decay = _num(entry["model"].get("branch_score_decay"))
+    return decay is not None and 0.0 < decay < 1.0
 
 
 def _group_requirement(
@@ -898,6 +910,7 @@ def _model_summary(config: dict[str, Any], base_config: dict[str, Any]) -> dict[
         "parallel_passing",
         "beam_size",
         "branch_cost",
+        "branch_score_decay",
         "parallel_exit_policy",
     ]
     summary = {key: config.get(key) for key in keys if key in config}

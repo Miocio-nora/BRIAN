@@ -408,6 +408,48 @@ def test_parallel_package_coverage_passes_weighted_and_beam2_requirements(tmp_pa
     assert _requirement(report, "PP5")["status"] == "pass"
     assert _requirement(report, "PP6")["status"] == "pass"
     assert _requirement(report, "PP7")["status"] == "pass"
+    assert _entry(report, "PP1")["model"]["branch_score_decay"] == 0.99
+    assert _entry(report, "PP3")["model"]["branch_score_decay"] == 0.99
+
+
+def test_parallel_package_coverage_requires_branch_score_decay(tmp_path: Path) -> None:
+    manifest = tmp_path / "parallel_bad_decay.yaml"
+    source = load_config("configs/experiments/route_core_parallel_passing.yaml")
+    bad_model = tmp_path / "bad_parallel_model.yaml"
+    bad_model.write_text(
+        yaml.safe_dump(
+            {
+                "extends": str(Path("configs/model/brian_r125_parallel.yaml").resolve()),
+                "branch_score_decay": 1.0,
+            }
+        ),
+        encoding="utf-8",
+    )
+    bad_train = tmp_path / "bad_parallel_train.yaml"
+    bad_train.write_text(
+        yaml.safe_dump(
+            {
+                "extends": str(Path("configs/train/stage6_parallel_passing.yaml").resolve()),
+                "model_config": str(bad_model),
+            }
+        ),
+        encoding="utf-8",
+    )
+    for row in source["ablations"]:
+        if row["id"] == "PP1":
+            row["train_config"] = str(bad_train)
+    manifest.write_text(yaml.safe_dump(source), encoding="utf-8")
+
+    output = make_experiment_coverage_report(
+        manifest,
+        output_path=tmp_path / "coverage.json",
+        profile="parallel_passing_beta",
+    )
+    report = json.loads(output.read_text(encoding="utf-8"))
+
+    assert report["overall_status"] == "fail"
+    assert _requirement(report, "PP1")["status"] == "fail"
+    assert _entry(report, "PP1")["model"]["branch_score_decay"] == 1.0
 
 
 def test_experiment_coverage_fails_missing_required_entry(tmp_path: Path) -> None:
