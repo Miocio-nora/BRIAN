@@ -229,7 +229,7 @@ class BrianRouteCore(ModuleBase):
             "hard_exit_enabled": bool(hard_exit),
             "max_route_steps": self.config.max_route_steps,
         }
-        route_targets = self._targets_for_mode(route_mode, pseudo_policy, batch_size, input_ids.device)
+        route_targets = self._targets_for_mode(route_mode, pseudo_policy, input_ids)
         max_steps = len(route_targets) if route_mode in {"fixed", "pseudo"} else self.config.max_route_steps
         exited = torch.zeros(batch_size, dtype=torch.bool, device=input_ids.device)
         global_state = None
@@ -367,14 +367,16 @@ class BrianRouteCore(ModuleBase):
             }
         return output
 
-    def _targets_for_mode(self, route_mode: str, pseudo_policy: str, batch_size: int, device: torch.device) -> list[torch.Tensor]:
+    def _targets_for_mode(self, route_mode: str, pseudo_policy: str, input_ids: torch.Tensor) -> list[torch.Tensor]:
         if route_mode in {"fixed", "pseudo", "scheduled"}:
+            difficulty = _content_difficulty_ids(input_ids) if pseudo_policy == "mixed_skip_recur" else None
             return actions_for_policy(
                 pseudo_policy,
                 num_internal_blocks=self.config.route_pool_blocks,
                 max_route_steps=self.config.max_route_steps,
-                batch_size=batch_size,
-                device=device,
+                batch_size=input_ids.size(0),
+                device=input_ids.device,
+                difficulty=difficulty,
             )
         return []
 
@@ -773,3 +775,19 @@ def _loss_weights_mapping(loss_weights: Mapping[str, Any] | None) -> Mapping[str
 
 def _loss_weight(loss_weights: Mapping[str, Any], key: str) -> float:
     return _float_value(loss_weights.get(key, 0.0), f"loss_weights.{key}", minimum=0.0)
+
+
+def _content_difficulty_ids(input_ids: torch.Tensor) -> torch.Tensor:
+    batch_size = input_ids.size(0)
+    if batch_size <= 1:
+        return torch.zeros((batch_size,), dtype=torch.long, device=input_ids.device)
+    with torch.no_grad():
+        values = input_ids.detach().float()
+        mean_id = values.mean(dim=1)
+        spread = values.std(dim=1, unbiased=False) if values.size(1) > 1 else torch.zeros_like(mean_id)
+        score = mean_id + 0.01 * spread
+        order = torch.argsort(score)
+        ranks = torch.arange(batch_size, dtype=torch.long, device=input_ids.device)
+        difficulty = torch.empty((batch_size,), dtype=torch.long, device=input_ids.device)
+        difficulty[order] = torch.clamp((ranks * 3) // batch_size, max=2)
+        return difficulty

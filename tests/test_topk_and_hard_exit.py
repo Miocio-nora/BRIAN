@@ -83,6 +83,36 @@ def test_pseudo_route_targets_control_forward_and_supervise_out_even_when_router
     assert output["routing_summary"]["first_exit_step_histogram"] == {"3": 2}
 
 
+def test_mixed_skip_recur_targets_follow_content_not_batch_slot() -> None:
+    cfg = BrianRouteConfig(
+        base=BaselineConfig(vocab_size=64, context_length=8, layers=5, d_model=32, n_heads=4),
+        pre_blocks=1,
+        route_pool_blocks=3,
+        post_blocks=1,
+        block_position_dim=8,
+        max_route_steps=3,
+        hard_exit=False,
+    )
+    model = BrianRouteCore(cfg)
+    low = torch.full((8,), 2, dtype=torch.long)
+    medium = torch.full((8,), 24, dtype=torch.long)
+    high = torch.full((8,), 48, dtype=torch.long)
+
+    first = model(
+        torch.stack([low, medium, high]),
+        route_mode="pseudo",
+        pseudo_policy="mixed_skip_recur",
+    )
+    second = model(
+        torch.stack([high, low, medium]),
+        route_mode="pseudo",
+        pseudo_policy="mixed_skip_recur",
+    )
+
+    assert first["route_info"]["route_targets"][1].tolist() == [2, 1, 0]
+    assert second["route_info"]["route_targets"][1].tolist() == [0, 2, 1]
+
+
 def test_hard_exit_stops_when_router_prefers_out() -> None:
     cfg = BrianRouteConfig(
         base=BaselineConfig(vocab_size=64, context_length=8, layers=4, d_model=32, n_heads=4),
