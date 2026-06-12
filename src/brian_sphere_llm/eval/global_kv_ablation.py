@@ -141,35 +141,39 @@ def _required_checks(rows: list[dict[str, Any]], *, expected_entry_count: int) -
 
 def _optional_checks(rows: list[dict[str, Any]]) -> dict[str, bool]:
     long_context_rows = [row for row in rows if row["long_context"]["present"]]
+    long_context_all_present = bool(rows) and len(long_context_rows) == len(rows)
+    long_context_all_passed = long_context_all_present and all(
+        _long_context_report_passed(row) for row in long_context_rows
+    )
     window_rows = [row for row in rows if row["kind"] == "window_sweep"]
     global_quality_budget_rows = [
         row
         for row in rows
-        if row["global_kv_enabled"] and _quality_metrics_present(row) and _memory_budget_metrics_present(row)
+        if row["global_kv_enabled"]
+        and _long_context_report_passed(row)
+        and _quality_metrics_present(row)
+        and _memory_budget_metrics_present(row)
     ]
     distinct_global_capacity_ratios = {
         float(row["long_context"]["global_cache_capacity_ratio"]) for row in global_quality_budget_rows
     }
     return {
-        "long_context_reports_present": bool(rows) and len(long_context_rows) == len(rows),
-        "long_context_reports_match_run_config": bool(rows)
-        and len(long_context_rows) == len(rows)
+        "long_context_reports_present": long_context_all_present,
+        "long_context_reports_passed": long_context_all_passed,
+        "long_context_reports_match_run_config": long_context_all_present
         and all(_long_context_matches_run(row) for row in long_context_rows),
-        "long_context_coverage_passed": bool(rows)
-        and len(long_context_rows) == len(rows)
+        "long_context_coverage_passed": long_context_all_passed
         and all(_long_context_coverage_passed(row) for row in long_context_rows),
-        "long_context_quality_metrics_present": bool(rows)
-        and len(long_context_rows) == len(rows)
-        and all(_finite(row["long_context"].get("exact_match_accuracy")) for row in long_context_rows),
-        "memory_budget_metrics_present": bool(rows)
-        and len(long_context_rows) == len(rows)
+        "long_context_quality_metrics_present": long_context_all_passed
+        and all(_quality_metrics_present(row) for row in long_context_rows),
+        "memory_budget_metrics_present": long_context_all_passed
         and any(_finite(row["long_context"].get("global_cache_capacity_ratio")) for row in long_context_rows),
         "window_sweep_performance_curve_present": len(window_rows) >= 2
         and len({row["global_window_slots"] for row in window_rows}) >= 2
-        and all(_quality_metrics_present(row) for row in window_rows),
+        and all(_long_context_report_passed(row) and _quality_metrics_present(row) for row in window_rows),
         "window_sweep_memory_budget_curve_present": len(window_rows) >= 2
         and len({row["global_window_slots"] for row in window_rows}) >= 2
-        and all(_memory_budget_metrics_present(row) for row in window_rows)
+        and all(_long_context_report_passed(row) and _memory_budget_metrics_present(row) for row in window_rows)
         and len({float(row["long_context"]["global_cache_capacity_ratio"]) for row in window_rows}) >= 2,
         "kv_budget_quality_curve_present": len(global_quality_budget_rows) >= 2
         and len(distinct_global_capacity_ratios) >= 2,
@@ -412,6 +416,7 @@ def _long_context_summary(report: dict[str, Any]) -> dict[str, Any]:
     if not report:
         return {
             "present": False,
+            "overall_status": None,
             "stage": None,
             "route_mode": None,
             "global_kv_enabled": None,
@@ -429,6 +434,7 @@ def _long_context_summary(report: dict[str, Any]) -> dict[str, Any]:
     return {
         "present": True,
         "report_path": report.get("_report_path"),
+        "overall_status": report.get("overall_status"),
         "stage": report.get("stage"),
         "route_mode": report.get("route_mode"),
         "global_kv_enabled": memory.get("global_kv_enabled"),
@@ -460,6 +466,11 @@ def _long_context_matches_run(row: dict[str, Any]) -> bool:
         and long_context.get("route_mode") == "scheduled"
         and long_context.get("global_kv_enabled") is row.get("global_kv_enabled")
     )
+
+
+def _long_context_report_passed(row: dict[str, Any]) -> bool:
+    status = row["long_context"].get("overall_status")
+    return status is None or status == "pass"
 
 
 def _long_context_coverage_passed(row: dict[str, Any]) -> bool:

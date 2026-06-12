@@ -135,6 +135,7 @@ def test_global_kv_ablation_report_passes_with_manifest_runs_and_long_context(tm
     assert report["checks"]["with_sink_retention_measured"] is True
     assert report["checks"]["no_sink_zero_sink_attention_measured"] is True
     assert report["checks"]["window_slots_vary"] is True
+    assert report["checks"]["long_context_reports_passed"] is True
     assert report["checks"]["long_context_reports_match_run_config"] is True
     assert report["checks"]["long_context_coverage_passed"] is True
     assert report["checks"]["window_sweep_performance_curve_present"] is True
@@ -330,6 +331,39 @@ def test_global_kv_ablation_report_warns_for_incomplete_long_context_coverage(tm
     assert report["checks"]["long_context_coverage_passed"] is False
     assert report["entries"][1]["long_context"]["difficulty_coverage_passed"] is False
     assert report["entries"][1]["long_context"]["coverage"]["missing_difficulties"] == ["far"]
+
+
+def test_global_kv_ablation_report_warns_for_failed_long_context_report(tmp_path: Path) -> None:
+    runs = _write_complete_global_kv_runs(tmp_path)
+    long_context_reports = [
+        _write_long_context(
+            tmp_path,
+            run,
+            index,
+            exact=0.5 + index * 0.01,
+            teacher=0.6 + index * 0.01,
+            overall_status="fail" if index == 5 else None,
+        )
+        for index, run in enumerate(runs)
+    ]
+
+    output = make_global_kv_ablation_report(
+        "configs/experiments/tiny_global_kv.yaml",
+        runs,
+        output_path=tmp_path / "global_kv_ablation.json",
+        long_context_report_paths=long_context_reports,
+    )
+    report = json.loads(output.read_text(encoding="utf-8"))
+
+    assert report["overall_status"] == "warn"
+    assert report["checks"]["long_context_reports_present"] is True
+    assert report["checks"]["long_context_reports_passed"] is False
+    assert report["checks"]["long_context_reports_match_run_config"] is True
+    assert report["checks"]["long_context_coverage_passed"] is False
+    assert report["checks"]["long_context_quality_metrics_present"] is False
+    assert report["checks"]["window_sweep_performance_curve_present"] is False
+    assert report["checks"]["window_sweep_memory_budget_curve_present"] is False
+    assert report["entries"][5]["long_context"]["overall_status"] == "fail"
 
 
 def test_global_kv_ablation_report_warns_without_window_memory_curve(tmp_path: Path) -> None:
@@ -631,6 +665,7 @@ def _write_long_context(
     global_kv_enabled: bool | None = None,
     coverage: dict | None = None,
     omit_memory_ratios: bool = False,
+    overall_status: str | None = None,
 ) -> Path:
     path = tmp_path / f"long_context_{index}.json"
     config = yaml.safe_load((run_dir / "config_resolved.yaml").read_text(encoding="utf-8"))
@@ -662,6 +697,8 @@ def _write_long_context(
         "coverage": coverage,
         "memory_budget": memory_budget,
     }
+    if overall_status is not None:
+        report["overall_status"] = overall_status
     path.write_text(json.dumps(report), encoding="utf-8")
     return path
 
