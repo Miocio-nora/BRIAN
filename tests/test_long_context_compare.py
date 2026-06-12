@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from brian_sphere_llm.eval.long_context_compare import make_long_context_comparison_report
+from brian_sphere_llm.eval.long_context_compare import _status, make_long_context_comparison_report
 
 
 def _write_long_context_report(
@@ -149,6 +149,12 @@ def test_long_context_compare_passes_active_global_kv_not_worse(tmp_path: Path) 
     assert row["coverage"]["candidate"]["task_family_coverage_passed"] is True
     assert row["coverage"]["candidate"]["difficulty_coverage_passed"] is True
     assert row["teacher_forced_token_accuracy_delta"] == pytest.approx(0.05)
+
+
+def test_long_context_compare_status_requires_explicit_boolean_true_checks() -> None:
+    assert _status({"a": True, "b": True}) == "pass"
+    assert _status({"a": True, "b": "yes"}) == "warn"
+    assert _status({"a": "yes", "b": 1}) == "fail"
 
 
 def test_long_context_compare_warns_for_inactive_and_worse_candidate(tmp_path: Path) -> None:

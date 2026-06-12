@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from brian_sphere_llm.eval.global_kv_retention import make_global_kv_retention_report
+from brian_sphere_llm.eval.global_kv_retention import _overall_status, make_global_kv_retention_report
 
 
 def _write_run(
@@ -66,6 +66,12 @@ def test_global_kv_retention_report_passes_sink_window_policy(tmp_path: Path) ->
     assert report["metrics"]["global_cache_capacity_utilization"] == 0.5
     assert report["metric_sources"]["global_sink_attention_mass"] == "routing_summary"
     assert report["metric_sources"]["global_cache_window_utilization"] == "derived_from_global_cache_slots_mean"
+
+
+def test_global_kv_retention_status_requires_explicit_boolean_true_checks() -> None:
+    assert _overall_status({"a": True, "b": True}) == "pass"
+    assert _overall_status({"a": True, "b": "yes"}) == "fail"
+    assert _overall_status({"a": "yes", "b": 1}) == "fail"
 
 
 def test_global_kv_retention_report_fails_missing_sink_or_window_metrics(tmp_path: Path) -> None:

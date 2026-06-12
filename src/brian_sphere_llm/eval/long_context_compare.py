@@ -176,9 +176,9 @@ def _overall_status(rows: list[dict[str, Any]]) -> str:
 
 
 def _status(checks: dict[str, bool]) -> str:
-    if all(checks.values()):
+    if all(value is True for value in checks.values()):
         return "pass"
-    if any(checks.values()):
+    if any(value is True for value in checks.values()):
         return "warn"
     return "fail"
 

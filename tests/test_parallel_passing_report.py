@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from brian_sphere_llm.eval.parallel_passing_report import make_parallel_passing_report
+from brian_sphere_llm.eval.parallel_passing_report import _overall_status, make_parallel_passing_report
 from brian_sphere_llm.utils.config import load_config
 
 
@@ -49,6 +49,12 @@ def test_parallel_passing_report_passes_bounded_beam_and_cost(tmp_path: Path) ->
     assert report["model"]["branch_score_decay"] == 0.99
     assert report["routing"]["parallel_branch_count"]["max"] == 2.0
     assert report["routing"]["parallel_delta_cache_slots"]["max"] == 2.0
+
+
+def test_parallel_passing_status_requires_explicit_boolean_true_checks() -> None:
+    assert _overall_status({"a": True, "b": True}) == "pass"
+    assert _overall_status({"a": True, "b": "yes"}) == "fail"
+    assert _overall_status({"a": "yes", "b": 1}) == "fail"
 
 
 def test_parallel_passing_report_fails_unbounded_branch_and_delta_cache(tmp_path: Path) -> None:

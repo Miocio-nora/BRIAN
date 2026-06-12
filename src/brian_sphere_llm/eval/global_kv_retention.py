@@ -95,13 +95,17 @@ def make_global_kv_retention_report(
             "capacity_slack": capacity_slack,
         },
         "checks": checks,
-        "overall_status": "pass" if all(checks.values()) else "fail",
+        "overall_status": _overall_status(checks),
     }
     if output_path is None:
         output_path = run_dir / "global_kv_retention_report.json"
     output_path = Path(output_path)
     write_json(report, output_path)
     return output_path
+
+
+def _overall_status(checks: dict[str, bool]) -> str:
+    return "pass" if all(value is True for value in checks.values()) else "fail"
 
 
 def _model_config(config: dict[str, Any]) -> dict[str, Any]:

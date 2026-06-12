@@ -3,7 +3,7 @@ from pathlib import Path
 
 import yaml
 
-from brian_sphere_llm.eval.parallel_compare import make_parallel_comparison_report
+from brian_sphere_llm.eval.parallel_compare import _status, make_parallel_comparison_report
 
 
 def _write_run(
@@ -112,6 +112,12 @@ def test_parallel_compare_passes_bounded_parallel_candidate(tmp_path: Path) -> N
     assert row["baseline_weighted_fusion_ratio"] == 1.0
     assert report["baseline"]["top_k"] == 2.0
     assert row["baseline_comparison"]["validation_loss_delta"] < 0.0
+
+
+def test_parallel_compare_status_requires_explicit_boolean_true_checks() -> None:
+    assert _status({"a": True, "b": True}) == "pass"
+    assert _status({"a": True, "b": "yes"}) == "warn"
+    assert _status({"a": "yes", "b": 1}) == "fail"
 
 
 def test_parallel_compare_warns_without_parallel_metrics(tmp_path: Path) -> None:
