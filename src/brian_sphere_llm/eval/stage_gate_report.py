@@ -521,6 +521,7 @@ def _gate_stage4(
         "baseline_without_hard_exit",
         "candidate_stage4_output_action",
         "candidate_with_hard_exit",
+        "candidate_top1_hard_exit_rule",
         "inference_timing_present",
         "latency_ratio_within_threshold",
         "inference_time_ratio_within_threshold",

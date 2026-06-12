@@ -101,6 +101,7 @@ def summarize_run(
         "route_mode": routing_config.get("mode"),
         "global_kv_enabled": _model_bool_value(model_config, "global_kv", default=False),
         "parallel_passing_enabled": _model_bool_value(model_config, "parallel_passing", default=False),
+        "parallel_exit_policy": str(model_config.get("parallel_exit_policy", "")),
         "hard_exit_enabled": _hard_exit_enabled(config),
         "top_k": top_k,
         "distributed_world_size": _world_size(config),

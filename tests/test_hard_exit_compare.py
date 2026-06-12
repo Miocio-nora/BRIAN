@@ -16,9 +16,13 @@ def _write_run(
     inference_latency_ms_per_token: float,
     average_route_steps: float,
     stage: str | None = None,
+    model_config_overrides: dict | None = None,
 ) -> Path:
     run_dir = root / name
     run_dir.mkdir(parents=True)
+    model_config = {"top_k": 1, "hard_exit": hard_exit}
+    if model_config_overrides is not None:
+        model_config |= model_config_overrides
     (run_dir / "config_resolved.yaml").write_text(
         yaml.safe_dump(
             {
@@ -26,7 +30,7 @@ def _write_run(
                 "batch_size": 2,
                 "data_config_resolved": {"sequence_length": 8},
                 "routing": {"mode": "scheduled", "hard_exit": hard_exit},
-                "model_config_resolved": {"top_k": 1, "hard_exit": hard_exit},
+                "model_config_resolved": model_config,
             }
         ),
         encoding="utf-8",
@@ -108,10 +112,52 @@ def test_hard_exit_compare_passes_when_timing_and_route_steps_improve(tmp_path: 
     assert row["candidate"]["hard_exit_enabled"] is True
     assert row["checks"]["baseline_stage4_scheduled_free_routing"] is True
     assert row["checks"]["candidate_stage4_output_action"] is True
+    assert row["checks"]["candidate_top1_hard_exit_rule"] is True
+    assert row["candidate"]["hard_exit_top1_rule"] is True
     assert row["checks"]["inference_timing_present"] is True
     assert row["baseline_comparison"]["inference_latency_ms_per_token_ratio"] == 0.5
     assert row["baseline_comparison"]["inference_time_seconds_ratio"] == 0.5
     assert row["baseline_comparison"]["average_route_steps_ratio"] == 0.5
+
+
+def test_hard_exit_compare_requires_top1_exit_rule(tmp_path: Path) -> None:
+    baseline = _write_run(
+        tmp_path,
+        "without_hard_exit",
+        hard_exit=False,
+        validation_loss=10.0,
+        inference_time_seconds=1.0,
+        inference_latency_ms_per_token=0.50,
+        average_route_steps=4.0,
+    )
+    any_topk_exit = _write_run(
+        tmp_path,
+        "any_topk_exit",
+        hard_exit=True,
+        validation_loss=10.0,
+        inference_time_seconds=0.5,
+        inference_latency_ms_per_token=0.25,
+        average_route_steps=2.0,
+        model_config_overrides={
+            "top_k": 2,
+            "parallel_passing": True,
+            "parallel_exit_policy": "any_topk",
+        },
+    )
+
+    output = make_hard_exit_comparison_report(
+        baseline,
+        [any_topk_exit],
+        output_path=tmp_path / "hard_exit_compare.json",
+    )
+    report = json.loads(output.read_text(encoding="utf-8"))
+    row = report["comparisons"][0]
+
+    assert report["overall_status"] == "warn"
+    assert row["checks"]["candidate_with_hard_exit"] is True
+    assert row["checks"]["candidate_top1_hard_exit_rule"] is False
+    assert row["candidate"]["parallel_exit_policy"] == "any_topk"
+    assert row["candidate"]["hard_exit_top1_rule"] is False
 
 
 def test_hard_exit_compare_warns_when_candidate_does_not_enable_hard_exit(tmp_path: Path) -> None:

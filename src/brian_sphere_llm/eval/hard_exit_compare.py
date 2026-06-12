@@ -71,6 +71,7 @@ def _compare_candidate(
         "baseline_without_hard_exit": baseline.get("hard_exit_enabled") is False,
         "candidate_stage4_output_action": candidate.get("stage") == "stage4_output_action",
         "candidate_with_hard_exit": candidate.get("hard_exit_enabled") is True,
+        "candidate_top1_hard_exit_rule": _top1_hard_exit_rule(candidate),
         "inference_timing_present": _num(baseline.get("inference_time_seconds_latest")) is not None
         and _num(candidate.get("inference_time_seconds_latest")) is not None
         and _num(baseline.get("inference_latency_ms_per_token_latest")) is not None
@@ -104,6 +105,10 @@ def _summary_row(summary: dict[str, Any]) -> dict[str, Any]:
         "model_name": summary.get("model_name"),
         "route_mode": summary.get("route_mode"),
         "hard_exit_enabled": summary.get("hard_exit_enabled"),
+        "hard_exit_top1_rule": _top1_hard_exit_rule(summary),
+        "top_k": summary.get("top_k"),
+        "parallel_passing_enabled": summary.get("parallel_passing_enabled"),
+        "parallel_exit_policy": summary.get("parallel_exit_policy"),
         "validation_loss": summary.get("validation_loss"),
         "inference_time_seconds_latest": summary.get("inference_time_seconds_latest"),
         "inference_tokens_per_second_latest": summary.get("inference_tokens_per_second_latest"),
@@ -111,6 +116,14 @@ def _summary_row(summary: dict[str, Any]) -> dict[str, Any]:
         "average_route_steps": routing.get("average_route_steps"),
         "active_internal_decision_fraction": routing.get("active_internal_decision_fraction"),
     }
+
+
+def _top1_hard_exit_rule(summary: dict[str, Any]) -> bool:
+    if summary.get("hard_exit_enabled") is not True:
+        return False
+    if summary.get("parallel_passing_enabled") is True:
+        return summary.get("parallel_exit_policy") == "top1"
+    return True
 
 
 def _overall_status(rows: list[dict[str, Any]]) -> str:

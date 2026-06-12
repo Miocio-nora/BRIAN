@@ -328,7 +328,7 @@ python scripts/eval.py \
   --run <stage4_hard_exit_run>
 ```
 
-This writes `reports/hard_exit_compare.json` with hard-exit configuration checks, inference time and latency ratios, route-step ratios, and validation-loss deltas.
+This writes `reports/hard_exit_compare.json` with hard-exit configuration checks, top-1 OUT terminal-rule evidence, inference time and latency ratios, route-step ratios, and validation-loss deltas.
 
 Run the Stage 3 block-position smoke ablations:
 
