@@ -139,6 +139,10 @@ def test_stage_gate_status_requires_explicit_boolean_true_checks() -> None:
     assert _gate("test", {"a": "yes", "b": 1})["status"] == "fail"
 
 
+def _checks_all_true(checks: dict) -> bool:
+    return bool(checks) and all(value is True for value in checks.values())
+
+
 def _baseline_difficulty_report() -> dict:
     return {
         "sample_count": 3,
@@ -187,7 +191,7 @@ def _hard_exit_compare_report(*, overall_status: str = "pass", checks: dict[str,
                     "average_route_steps_ratio": 0.8,
                 },
                 "checks": comparison_checks,
-                "status": "pass" if all(comparison_checks.values()) else "warn",
+                "status": "pass" if _checks_all_true(comparison_checks) else "warn",
             }
         ],
         "thresholds": {
@@ -222,7 +226,7 @@ def _global_kv_retention_report(*, checks: dict[str, bool] | None = None) -> dic
     if checks is not None:
         report_checks |= checks
     return {
-        "overall_status": "pass" if all(report_checks.values()) else "fail",
+        "overall_status": "pass" if _checks_all_true(report_checks) else "fail",
         "model": {
             "global_kv_enabled": True,
             "global_sink_slots": 1,
@@ -262,10 +266,11 @@ def _long_context_compare_report(*, checks: dict[str, bool] | None = None) -> di
     }
     if checks is not None:
         comparison_checks |= checks
+    status = "pass" if _checks_all_true(comparison_checks) else "warn"
     return {
-        "overall_status": "pass" if all(comparison_checks.values()) else "warn",
+        "overall_status": status,
         "candidate_count": 1,
-        "comparisons": [{"status": "pass" if all(comparison_checks.values()) else "warn", "checks": comparison_checks}],
+        "comparisons": [{"status": status, "checks": comparison_checks}],
     }
 
 
@@ -292,7 +297,7 @@ def _parallel_passing_report(*, checks: dict[str, bool] | None = None) -> dict:
     if checks is not None:
         report_checks |= checks
     return {
-        "overall_status": "pass" if all(report_checks.values()) else "fail",
+        "overall_status": "pass" if _checks_all_true(report_checks) else "fail",
         "checks": report_checks,
         "model": {
             "beam_size": 2,
@@ -325,10 +330,11 @@ def _parallel_compare_report(*, checks: dict[str, bool] | None = None) -> dict:
     }
     if checks is not None:
         comparison_checks |= checks
+    status = "pass" if _checks_all_true(comparison_checks) else "warn"
     return {
-        "overall_status": "pass" if all(comparison_checks.values()) else "warn",
+        "overall_status": status,
         "candidate_count": 1,
-        "comparisons": [{"status": "pass" if all(comparison_checks.values()) else "warn", "checks": comparison_checks}],
+        "comparisons": [{"status": status, "checks": comparison_checks}],
     }
 
 
