@@ -204,6 +204,42 @@ def test_long_context_compare_requires_passing_input_reports(tmp_path: Path) -> 
     assert row["checks"]["global_budget_below_local_context"] is True
 
 
+def test_long_context_compare_requires_explicit_input_report_status(tmp_path: Path) -> None:
+    baseline = _write_long_context_report(
+        tmp_path / "local.json",
+        run_dir="runs/local",
+        stage="stage4_output_action",
+        exact_match=0.25,
+        teacher_accuracy=0.50,
+        report_status=None,
+    )
+    candidate = _write_long_context_report(
+        tmp_path / "global.json",
+        run_dir="runs/global",
+        stage="stage5_global_kv",
+        exact_match=0.25,
+        teacher_accuracy=0.55,
+        attention_mass=0.1,
+        sink_attention_mass=0.03,
+        window_attention_mass=0.07,
+        read_gate=0.2,
+        cache_slots=3.0,
+    )
+
+    output = make_long_context_comparison_report(baseline, [candidate], output_path=tmp_path / "compare.json")
+    report = json.loads(output.read_text(encoding="utf-8"))
+    row = report["comparisons"][0]
+
+    assert report["overall_status"] == "warn"
+    assert row["status"] == "warn"
+    assert row["baseline_report_status"] is None
+    assert row["candidate_report_status"] == "pass"
+    assert row["checks"]["baseline_report_passed"] is False
+    assert row["checks"]["candidate_report_passed"] is True
+    assert row["checks"]["global_kv_active"] is True
+    assert row["checks"]["quality_not_worse"] is True
+
+
 def test_long_context_compare_requires_stage4_local_to_stage5_global_roles(tmp_path: Path) -> None:
     baseline = _write_long_context_report(
         tmp_path / "wrong_baseline.json",

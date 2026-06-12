@@ -224,7 +224,7 @@ def _coverage_passed(coverage: Any, key: str) -> bool:
 
 
 def _report_passed(status: Any) -> bool:
-    return status is None or status == "pass"
+    return status == "pass"
 
 
 def _coverage_summary(coverage: Any) -> dict[str, Any]:
