@@ -1,5 +1,5 @@
 eval_name: lm_eval
-output_path: reports/lm_eval_report.json
+output_path: null
 metrics:
   - validation_loss
   - perplexity

@@ -120,7 +120,7 @@ python scripts/eval.py \
   --reports <reasoning_report.json> <long_context_report.json>
 ```
 
-This writes `reports/lm_eval_report.json` with validation loss, perplexity, requested throughput/routing metrics, optional downstream task accuracy, and an aggregate benchmark score from supplied downstream reports.
+This writes `<run_dir>/lm_eval_report.json` by default, with validation loss, perplexity, requested throughput/routing metrics, optional downstream task accuracy, and an aggregate benchmark score from supplied downstream reports.
 
 When `resume: true` loads `checkpoint_latest`, training restores model, optimizer, RNG state, and dataloader epoch/offset, then appends `resume_events.jsonl`. DDP runs also save `rank_state_<rank>.pt` files so each rank can restore its own RNG and dataloader offset. Stage 0 gates require `checkpoint_latest`, `checkpoint_best`, rank-state artifacts, and a valid resume event showing the latest checkpoint path, positive resumed step, larger target step, loaded optimizer/RNG state, dataloader offset, and valid rank-state metadata when a rank-local state was loaded.
 

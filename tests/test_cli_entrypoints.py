@@ -122,3 +122,42 @@ def test_train_cli_runs_one_step_tiny_baseline(tmp_path: Path) -> None:
     assert (run_dir / "checkpoint_latest" / "state.pt").exists()
     assert (run_dir / "checkpoint_best" / "state.pt").exists()
     assert (run_dir / "routing_report.json").exists()
+
+
+def test_lm_eval_cli_writes_validation_report_to_run_dir_by_default(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    (run_dir / "train_log.jsonl").write_text(
+        json.dumps({"tokens_per_second": 128.0, "active_block_evals_per_token": 0.5}) + "\n",
+        encoding="utf-8",
+    )
+    (run_dir / "eval_log.jsonl").write_text(
+        json.dumps({"validation_loss": 2.0, "perplexity": 7.4}) + "\n",
+        encoding="utf-8",
+    )
+    (run_dir / "routing_report.json").write_text(
+        json.dumps(
+            {
+                "summary": {"active_block_evals_per_token": 0.5},
+                "checks": {},
+                "overall_status": "warn",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        [sys.executable, "scripts/eval.py", "--config", "configs/eval/lm_eval.yaml", "--run", str(run_dir)],
+        cwd=ROOT,
+        check=True,
+        text=True,
+        capture_output=True,
+        timeout=60,
+    )
+
+    report_path = run_dir / "lm_eval_report.json"
+    assert Path(result.stdout.strip().splitlines()[-1]) == report_path
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert report["overall_status"] == "pass"
+    assert report["metrics"]["validation_loss"] == 2.0
+    assert report["metrics"]["active_block_evals_per_token"] == 0.5
