@@ -6,7 +6,14 @@ from pathlib import Path
 import pytest
 
 from brian_sphere_llm.data.manifest import REQUIRED_MANIFEST_FIELDS, sha256_text
-from brian_sphere_llm.data.prepare import DEFAULT_MANIFEST_CREATED_AT, _audit_prepared_manifest, _bool_config, _mixture_rows, prepare_data
+from brian_sphere_llm.data.prepare import (
+    DEFAULT_MANIFEST_CREATED_AT,
+    _audit_prepared_manifest,
+    _bool_config,
+    _encode_text_batch,
+    _mixture_rows,
+    prepare_data,
+)
 from brian_sphere_llm.data.tokenize import load_tokenizer
 from brian_sphere_llm.utils.config import load_yaml, save_yaml
 
@@ -298,3 +305,24 @@ def test_prepare_bool_config_parses_false_string_without_truthiness() -> None:
     assert _bool_config("true", "field") is True
     with pytest.raises(ValueError, match="field"):
         _bool_config("maybe", "field")
+
+
+def test_encode_text_batch_prefers_batch_tokenizer_call() -> None:
+    class BatchTokenizer:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def __call__(self, texts, *, add_special_tokens: bool, padding: bool, truncation: bool):
+            self.calls += 1
+            assert add_special_tokens is True
+            assert padding is False
+            assert truncation is False
+            return {"input_ids": [[len(text), 1] for text in texts]}
+
+        def encode(self, text: str, add_special_tokens: bool = False):
+            raise AssertionError("encode fallback should not be used")
+
+    tokenizer = BatchTokenizer()
+
+    assert _encode_text_batch(tokenizer, ["aa", "bbb"]) == [[2, 1], [3, 1]]
+    assert tokenizer.calls == 1

@@ -6,6 +6,7 @@ from dataclasses import asdict
 import hashlib
 import json
 import math
+import os
 from pathlib import Path
 from typing import Any
 
@@ -28,6 +29,14 @@ def prepare_data(config_path: str | Path) -> Path:
     config = load_config(config_path)
     output_dir = Path(config["output_dir"])
     output_dir.mkdir(parents=True, exist_ok=True)
+    tokenization_cfg = _mapping_config(config.get("tokenization", {}), "tokenization")
+    tokenization_parallelism = _bool_config(tokenization_cfg.get("parallelism", True), "tokenization.parallelism")
+    os.environ["TOKENIZERS_PARALLELISM"] = "true" if tokenization_parallelism else "false"
+    tokenization_worker_threads: int | None = None
+    if "worker_threads" in tokenization_cfg:
+        tokenization_worker_threads = _int_config(tokenization_cfg, "worker_threads", minimum=1)
+        os.environ["RAYON_NUM_THREADS"] = str(tokenization_worker_threads)
+    tokenization_batch_size = _int_config(tokenization_cfg, "batch_size", default=512, minimum=1)
     tokenizer_cfg = config["tokenizer"]
     tokenizer = load_tokenizer(
         tokenizer_cfg["name"],
@@ -92,39 +101,49 @@ def prepare_data(config_path: str | Path) -> Path:
         )
         manifest_handles = stack.enter_context(_open_manifest_writers(output_manifest_path, manifest_path))
         try:
-            for index, sample in enumerate(samples):
-                text = normalize_text(sample["text"])
-                if not keep_text(text):
+            for sample_batch in _sample_batches(samples, batch_size=tokenization_batch_size):
+                pending: list[tuple[int, dict[str, Any], str]] = []
+                texts: list[str] = []
+                for index, sample in sample_batch:
+                    text = normalize_text(sample["text"])
+                    if not keep_text(text):
+                        continue
+                    pending.append((index, sample, text))
+                    texts.append(text)
+                if not pending:
                     continue
-                tokens = tokenizer.encode(text, add_special_tokens=True)
-                if not tokens:
-                    continue
-                split = "val" if val_tokens < val_tokens_target and index % 10 == 0 else "train"
-                source_path = _write_source_text(output_dir, split, index, text) if source_text_enabled else None
-                row = ManifestRow.from_sample(
-                    sample_id=str(sample["sample_id"]),
-                    text=text,
-                    tokens=tokens,
-                    source_dataset=str(sample["source_dataset"]),
-                    source_url_or_id=str(sample["source_url_or_id"]),
-                    split=split,
-                    license=str(sample.get("license", metadata.license)),
-                    path=str(source_path) if source_path is not None else _unsaved_source_path(str(config["recipe_name"]), split, index),
-                    mixture_tag=str(sample["mixture_tag"]),
-                    route_metadata=sample.get("route_metadata"),
-                    created_at=manifest_created_at,
-                )
-                _write_manifest_row(row, manifest_handles, manifest_hash)
-                manifest_row_count += 1
-                source_mixture_realized[row.mixture_tag] = source_mixture_realized.get(row.mixture_tag, 0) + row.token_count
-                if split == "val":
-                    val_writer.add_document(tokens)
-                    val_tokens += len(tokens)
-                else:
-                    train_writer.add_document(tokens)
-                    train_tokens += len(tokens)
-                    if first_train_tokens is None:
-                        first_train_tokens = list(tokens)
+                token_batch = _encode_text_batch(tokenizer, texts)
+                for (index, sample, text), tokens in zip(pending, token_batch, strict=True):
+                    if not tokens:
+                        continue
+                    split = "val" if val_tokens < val_tokens_target and index % 10 == 0 else "train"
+                    source_path = _write_source_text(output_dir, split, index, text) if source_text_enabled else None
+                    row = ManifestRow.from_sample(
+                        sample_id=str(sample["sample_id"]),
+                        text=text,
+                        tokens=tokens,
+                        source_dataset=str(sample["source_dataset"]),
+                        source_url_or_id=str(sample["source_url_or_id"]),
+                        split=split,
+                        license=str(sample.get("license", metadata.license)),
+                        path=str(source_path) if source_path is not None else _unsaved_source_path(str(config["recipe_name"]), split, index),
+                        mixture_tag=str(sample["mixture_tag"]),
+                        route_metadata=sample.get("route_metadata"),
+                        created_at=manifest_created_at,
+                    )
+                    _write_manifest_row(row, manifest_handles, manifest_hash)
+                    manifest_row_count += 1
+                    source_mixture_realized[row.mixture_tag] = source_mixture_realized.get(row.mixture_tag, 0) + row.token_count
+                    if split == "val":
+                        val_writer.add_document(tokens)
+                        val_tokens += len(tokens)
+                    else:
+                        train_writer.add_document(tokens)
+                        train_tokens += len(tokens)
+                        if first_train_tokens is None:
+                            first_train_tokens = list(tokens)
+                    if train_tokens >= target_tokens and val_tokens >= val_tokens_target:
+                        break
                 if train_tokens >= target_tokens and val_tokens >= val_tokens_target:
                     break
         finally:
@@ -151,6 +170,9 @@ def prepare_data(config_path: str | Path) -> Path:
         "source_mixture_realized": source_mixture_realized,
         "source_mixture_realized_share": source_mixture_realized_share,
         "sha256_manifest": manifest_hash.hexdigest(),
+        "tokenization_batch_size": tokenization_batch_size,
+        "tokenization_parallelism": tokenization_parallelism,
+        "tokenization_worker_threads": tokenization_worker_threads,
         **manifest_audit,
         **tokenizer_artifact_audit,
         "tokenizer": asdict(metadata),
@@ -220,6 +242,35 @@ def _close_iterator(iterator: Any) -> None:
     close = getattr(iterator, "close", None)
     if close is not None:
         close()
+
+
+def _sample_batches(samples: Iterator[dict[str, Any]], *, batch_size: int) -> Iterator[list[tuple[int, dict[str, Any]]]]:
+    batch: list[tuple[int, dict[str, Any]]] = []
+    for index, sample in enumerate(samples):
+        batch.append((index, sample))
+        if len(batch) >= batch_size:
+            yield batch
+            batch = []
+    if batch:
+        yield batch
+
+
+def _encode_text_batch(tokenizer: Any, texts: list[str]) -> list[list[int]]:
+    if not texts:
+        return []
+    try:
+        encoded = tokenizer(texts, add_special_tokens=True, padding=False, truncation=False)
+    except TypeError:
+        return [tokenizer.encode(text, add_special_tokens=True) for text in texts]
+    except AttributeError:
+        return [tokenizer.encode(text, add_special_tokens=True) for text in texts]
+    try:
+        input_ids = encoded["input_ids"]
+    except (KeyError, TypeError, AttributeError):
+        input_ids = getattr(encoded, "input_ids", None)
+    if input_ids is None:
+        return [tokenizer.encode(text, add_special_tokens=True) for text in texts]
+    return [list(tokens) for tokens in input_ids]
 
 
 def _audit_prepared_manifest(manifest_path: Path, tokenizer: Any) -> dict[str, Any]:
