@@ -958,11 +958,16 @@ def _data_manifest_ref_checks(ref: Any) -> dict[str, bool]:
         "sha256_manifest_verified": ref.get("sha256_manifest_verified") is True,
         "manifest_row_count_positive": _positive_number(ref.get("manifest_row_count")),
         "manifest_source_text_hashes_verified": ref.get("manifest_source_text_hashes_verified") is True,
+        "manifest_source_text_hash_failure_count_zero": _zero_number(
+            ref.get("manifest_source_text_hash_failure_count")
+        ),
         "manifest_token_hashes_verified": ref.get("manifest_token_hashes_verified") is True,
+        "manifest_token_hash_failure_count_zero": _zero_number(ref.get("manifest_token_hash_failure_count")),
         "tokenizer_artifact_count_positive": _positive_number(ref.get("tokenizer_artifact_count")),
         "tokenizer_artifacts_present": ref.get("tokenizer_artifacts_present") is True,
         "tokenizer_artifact_hashes_present": _positive_string_mapping(ref.get("tokenizer_artifact_hashes")),
         "tokenizer_artifact_hashes_flag": ref.get("tokenizer_artifact_hashes_present") is True,
+        "tokenizer_artifact_hash_count_matches": _tokenizer_artifact_hash_count_matches(ref),
         "stats_recipe_name_matches_config": ref.get("stats_recipe_name_matches_config") is True,
         "stats_sequence_length_matches_config": ref.get("stats_sequence_length_matches_config") is True,
         "source_mixture_present": isinstance(ref.get("source_mixture_realized"), dict)
@@ -1000,6 +1005,14 @@ def _source_mixture_expected_tags_realized(ref: dict[str, Any]) -> bool:
         return False
     expected_tags = {str(tag) for tag, value in expected.items() if _positive_number(value)}
     return bool(expected_tags) and all(_positive_number(realized.get(tag)) for tag in expected_tags)
+
+
+def _tokenizer_artifact_hash_count_matches(ref: dict[str, Any]) -> bool:
+    count = ref.get("tokenizer_artifact_count")
+    hashes = ref.get("tokenizer_artifact_hashes")
+    if not _positive_number(count) or not _positive_string_mapping(hashes):
+        return False
+    return int(count) == len(hashes)
 
 
 def _source_mixture_realized_share_matches_counts(ref: dict[str, Any]) -> bool:
@@ -1160,6 +1173,13 @@ def _positive_number(value: Any) -> bool:
         return False
     numeric = _num(value)
     return numeric is not None and math.isfinite(numeric) and numeric > 0
+
+
+def _zero_number(value: Any) -> bool:
+    if isinstance(value, bool):
+        return False
+    numeric = _num(value)
+    return numeric is not None and math.isfinite(numeric) and numeric == 0.0
 
 
 def _nonempty_string(value: Any) -> bool:

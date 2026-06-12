@@ -860,16 +860,54 @@ def test_stage0_gate_requires_valid_data_manifest_ref(tmp_path: Path) -> None:
     assert gate["data_manifest_ref_checks"]["sha256_manifest_verified"] is False
     assert gate["data_manifest_ref_checks"]["manifest_row_count_positive"] is False
     assert gate["data_manifest_ref_checks"]["manifest_source_text_hashes_verified"] is False
+    assert gate["data_manifest_ref_checks"]["manifest_source_text_hash_failure_count_zero"] is False
     assert gate["data_manifest_ref_checks"]["manifest_token_hashes_verified"] is False
+    assert gate["data_manifest_ref_checks"]["manifest_token_hash_failure_count_zero"] is False
     assert gate["data_manifest_ref_checks"]["tokenizer_artifact_count_positive"] is False
     assert gate["data_manifest_ref_checks"]["tokenizer_artifacts_present"] is False
     assert gate["data_manifest_ref_checks"]["tokenizer_artifact_hashes_present"] is False
     assert gate["data_manifest_ref_checks"]["tokenizer_artifact_hashes_flag"] is False
+    assert gate["data_manifest_ref_checks"]["tokenizer_artifact_hash_count_matches"] is False
     assert gate["data_manifest_ref_checks"]["stats_recipe_name_matches_config"] is False
     assert gate["data_manifest_ref_checks"]["stats_sequence_length_matches_config"] is False
     assert gate["data_manifest_ref_checks"]["source_mixture_present"] is False
     assert gate["data_manifest_ref_checks"]["source_mixture_realized_share_present"] is False
     assert gate["data_manifest_ref_checks"]["source_mixture_expected_tags_realized"] is False
+
+
+def test_stage0_gate_requires_manifest_hash_failure_counts_and_tokenizer_hash_count(tmp_path: Path) -> None:
+    manifest_ref = _data_manifest_ref()
+    manifest_ref["manifest_source_text_hash_failure_count"] = 1
+    manifest_ref["manifest_token_hash_failure_count"] = 2
+    manifest_ref["tokenizer_artifact_count"] = 3
+    baseline = _write_run(
+        tmp_path,
+        "baseline",
+        stage="stage0_baseline",
+        val_loss=10.0,
+        train_row={},
+        determinism_status="pass",
+        resume_event={
+            "checkpoint": "checkpoint_latest",
+            "resumed_from_step": 1,
+            "target_max_steps": 2,
+            "optimizer_state_loaded": True,
+        },
+        baseline_difficulty_report=_baseline_difficulty_report(),
+        data_manifest_ref=manifest_ref,
+    )
+
+    report_path = make_stage_gate_report([baseline], output_path=tmp_path / "gate.json")
+    gate = json.loads(report_path.read_text(encoding="utf-8"))["gates"]["stage0_to_1"]
+
+    assert gate["status"] == "warn"
+    assert gate["checks"]["data_manifest_ref_valid"] is False
+    assert gate["data_manifest_ref_checks"]["manifest_source_text_hashes_verified"] is True
+    assert gate["data_manifest_ref_checks"]["manifest_source_text_hash_failure_count_zero"] is False
+    assert gate["data_manifest_ref_checks"]["manifest_token_hashes_verified"] is True
+    assert gate["data_manifest_ref_checks"]["manifest_token_hash_failure_count_zero"] is False
+    assert gate["data_manifest_ref_checks"]["tokenizer_artifact_hashes_present"] is True
+    assert gate["data_manifest_ref_checks"]["tokenizer_artifact_hash_count_matches"] is False
 
 
 def test_stage0_gate_requires_valid_model_stats(tmp_path: Path) -> None:
