@@ -329,8 +329,11 @@ def _data_manifest_ref() -> dict:
         "stats_path_exists": True,
         "tokenized_artifacts_present": True,
         "sequence_length": 8,
+        "num_documents": 4,
         "num_tokens_train": 24,
         "num_tokens_val": 8,
+        "avg_tokens_per_doc": 8.0,
+        "vocab_size": 259,
         "sha256_manifest": "abc123",
         "sha256_manifest_verified": True,
         "manifest_row_count": 4,
@@ -911,6 +914,9 @@ def test_stage0_gate_requires_valid_data_manifest_ref(tmp_path: Path) -> None:
     assert gate["data_manifest_ref_checks"]["tokenized_artifacts_present"] is False
     assert gate["data_manifest_ref_checks"]["sha256_manifest_present"] is False
     assert gate["data_manifest_ref_checks"]["sha256_manifest_verified"] is False
+    assert gate["data_manifest_ref_checks"]["num_documents_positive"] is False
+    assert gate["data_manifest_ref_checks"]["avg_tokens_per_doc_positive"] is False
+    assert gate["data_manifest_ref_checks"]["vocab_size_positive"] is False
     assert gate["data_manifest_ref_checks"]["manifest_row_count_positive"] is False
     assert gate["data_manifest_ref_checks"]["manifest_source_text_hashes_verified"] is False
     assert gate["data_manifest_ref_checks"]["manifest_source_text_hash_failure_count_zero"] is False
@@ -1007,6 +1013,40 @@ def test_stage0_gate_requires_tokenizer_metadata(tmp_path: Path) -> None:
     assert gate["data_manifest_ref_checks"]["tokenizer_license_present"] is False
     assert gate["data_manifest_ref_checks"]["tokenizer_vocab_size_positive"] is False
     assert gate["data_manifest_ref_checks"]["tokenizer_special_tokens_present"] is False
+
+
+def test_stage0_gate_requires_positive_stats_summary_fields(tmp_path: Path) -> None:
+    manifest_ref = _data_manifest_ref()
+    manifest_ref["num_documents"] = 0
+    manifest_ref["avg_tokens_per_doc"] = 0.0
+    manifest_ref["vocab_size"] = 0
+    baseline = _write_run(
+        tmp_path,
+        "baseline",
+        stage="stage0_baseline",
+        val_loss=10.0,
+        train_row={},
+        determinism_status="pass",
+        resume_event={
+            "checkpoint": "checkpoint_latest",
+            "resumed_from_step": 1,
+            "target_max_steps": 2,
+            "optimizer_state_loaded": True,
+        },
+        baseline_difficulty_report=_baseline_difficulty_report(),
+        data_manifest_ref=manifest_ref,
+    )
+
+    report_path = make_stage_gate_report([baseline], output_path=tmp_path / "gate.json")
+    gate = json.loads(report_path.read_text(encoding="utf-8"))["gates"]["stage0_to_1"]
+
+    assert gate["status"] == "warn"
+    assert gate["checks"]["data_manifest_ref_valid"] is False
+    assert gate["data_manifest_ref_checks"]["num_documents_positive"] is False
+    assert gate["data_manifest_ref_checks"]["avg_tokens_per_doc_positive"] is False
+    assert gate["data_manifest_ref_checks"]["vocab_size_positive"] is False
+    assert gate["data_manifest_ref_checks"]["num_tokens_train_positive"] is True
+    assert gate["data_manifest_ref_checks"]["num_tokens_val_positive"] is True
 
 
 def test_stage0_gate_requires_valid_model_stats(tmp_path: Path) -> None:

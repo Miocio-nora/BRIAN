@@ -494,6 +494,9 @@ def test_train_from_config_writes_routing_report_on_checkpoint(tmp_path: Path) -
     assert manifest_ref["tokenized_artifacts_present"] is True
     assert manifest_ref["sha256_manifest"] == sha256_text(manifest_text)
     assert manifest_ref["sha256_manifest_verified"] is True
+    assert manifest_ref["num_documents"] == 4
+    assert manifest_ref["avg_tokens_per_doc"] == 8.0
+    assert manifest_ref["vocab_size"] == 32
     assert manifest_ref["manifest_row_count"] == 1
     assert manifest_ref["manifest_source_text_hashes_verified"] is True
     assert manifest_ref["manifest_token_hashes_verified"] is True
