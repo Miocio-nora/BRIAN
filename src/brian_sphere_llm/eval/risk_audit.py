@@ -583,7 +583,7 @@ def _global_on_off_no_difference(
             if value is not None
         )
     ablation_report_status = global_kv_ablation_report.get("overall_status") if global_kv_ablation_report else None
-    ablation_report_passed = ablation_report_status == "pass"
+    ablation_report_passed = _report_with_checks_passed(global_kv_ablation_report)
     if global_kv_ablation_report and not ablation_report_passed:
         return True, {
             "source": "global_kv_ablation_report",
@@ -657,7 +657,7 @@ def _global_cache_worsens_loss(
 ) -> tuple[bool | None, dict[str, Any]]:
     local_vs_global = _list(_dict(global_kv_ablation_report.get("comparisons")).get("local_vs_global"))
     ablation_report_status = global_kv_ablation_report.get("overall_status") if global_kv_ablation_report else None
-    ablation_report_passed = ablation_report_status == "pass"
+    ablation_report_passed = _report_with_checks_passed(global_kv_ablation_report)
     deltas = [
         value
         for row in local_vs_global
@@ -789,6 +789,17 @@ def _gate(report: dict[str, Any], gate_name: str) -> dict[str, Any]:
 def _report_check(report: dict[str, Any], check_name: str) -> bool | None:
     value = _dict(report.get("checks")).get(check_name)
     return value if isinstance(value, bool) else None
+
+
+def _report_with_checks_passed(report: dict[str, Any]) -> bool | None:
+    if not report:
+        return None
+    if report.get("overall_status") in {"fail", "warn"} or report.get("status") in {"fail", "warn"}:
+        return False
+    checks = report.get("checks")
+    if report.get("overall_status") == "pass" or report.get("status") == "pass":
+        return isinstance(checks, dict) and bool(checks) and all(value is True for value in checks.values())
+    return False
 
 
 def _selected_checks(checks: dict[str, Any], names: list[str]) -> dict[str, Any]:
