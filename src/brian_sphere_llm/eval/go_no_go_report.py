@@ -836,6 +836,7 @@ def _compute_adjusted_eval_present(report: dict[str, Any]) -> bool | None:
         return None
     return any(
         candidate["comparison_view_contract_passed"] is True
+        and candidate["baseline_contract_passed"] is True
         and candidate["compute_adjusted_loss_delta"] is not None
         for candidate in candidates
     )
@@ -883,6 +884,8 @@ def _compute_adjusted_candidates(
         validation_loss = _num(row.get("validation_loss"))
         view_checks = _baseline_comparison_view_checks(comparison)
         view_contract_passed = all(value is True for value in view_checks.values())
+        baseline_checks = _compute_baseline_contract_checks(report, row, comparison)
+        baseline_contract_passed = all(value is True for value in baseline_checks.values())
         adjusted_delta = None
         if validation_loss is not None and flops_ratio is not None:
             adjusted_delta = validation_loss * flops_ratio - baseline_loss
@@ -894,10 +897,13 @@ def _compute_adjusted_candidates(
                 "baseline_validation_loss": baseline_loss,
                 "comparison_view_checks": view_checks,
                 "comparison_view_contract_passed": view_contract_passed,
+                "baseline_contract_checks": baseline_checks,
+                "baseline_contract_passed": baseline_contract_passed,
                 "estimated_flops_per_token_ratio": flops_ratio,
                 "validation_loss_delta": _num(comparison.get("validation_loss_delta")),
                 "compute_adjusted_loss_delta": adjusted_delta,
                 "passes_compute_adjusted_loss_proxy": view_contract_passed
+                and baseline_contract_passed
                 and adjusted_delta is not None
                 and adjusted_delta <= max_compute_adjusted_loss_delta,
             }
@@ -991,8 +997,11 @@ def _compute_report_has_not_worse_candidate(report: dict[str, Any]) -> bool | No
             continue
         found = True
         view_contract_passed = all(value is True for value in _baseline_comparison_view_checks(comparison).values())
+        baseline_contract_passed = all(
+            value is True for value in _compute_baseline_contract_checks(report, run, comparison).values()
+        )
         loss_delta = _num(comparison.get("validation_loss_delta"))
-        if view_contract_passed and loss_delta is not None and loss_delta <= 0.0:
+        if view_contract_passed and baseline_contract_passed and loss_delta is not None and loss_delta <= 0.0:
             return True
     return False if found else None
 
@@ -1001,18 +1010,42 @@ def _baseline_comparison_view_checks(comparison: dict[str, Any]) -> dict[str, An
     return {name: comparison.get(name) for name in BASELINE_COMPARISON_VIEW_CHECKS}
 
 
+def _compute_baseline_contract_checks(
+    report: dict[str, Any],
+    row: dict[str, Any],
+    comparison: dict[str, Any],
+) -> dict[str, bool]:
+    baseline_run = report.get("baseline_run")
+    baseline = _baseline_run_summary(report)
+    baseline_row_matches_declared = _nonempty_string(baseline_run) and baseline.get("run_dir") == baseline_run
+    return {
+        "report_baseline_run_present": _nonempty_string(baseline_run),
+        "baseline_row_present": baseline_row_matches_declared,
+        "baseline_stage0_fixed": baseline_row_matches_declared and baseline.get("stage") == "stage0_baseline",
+        "comparison_targets_declared_baseline": comparison.get("baseline_run") == baseline_run,
+        "candidate_not_baseline": row.get("run_dir") != baseline_run,
+    }
+
+
 def _compute_report_evidence(report: dict[str, Any]) -> dict[str, Any]:
     if not report:
         return {}
     rows = []
     for run in report.get("runs", []):
         if isinstance(run, dict) and isinstance(run.get("baseline_comparison"), dict):
+            comparison = run["baseline_comparison"]
+            view_checks = _baseline_comparison_view_checks(comparison)
+            baseline_checks = _compute_baseline_contract_checks(report, run, comparison)
             rows.append(
                 {
                     "run_dir": run.get("run_dir"),
                     "stage": run.get("stage"),
                     "validation_loss": run.get("validation_loss"),
-                    "baseline_comparison": run.get("baseline_comparison"),
+                    "baseline_comparison": comparison,
+                    "comparison_view_checks": view_checks,
+                    "comparison_view_contract_passed": all(value is True for value in view_checks.values()),
+                    "baseline_contract_checks": baseline_checks,
+                    "baseline_contract_passed": all(value is True for value in baseline_checks.values()),
                 }
             )
     return {"run_count": report.get("run_count"), "baseline_run": report.get("baseline_run"), "comparisons": rows}
@@ -1093,6 +1126,10 @@ def _ratio(value: Any, baseline: Any) -> float | None:
     if left is None or right is None or right == 0.0:
         return None
     return left / right
+
+
+def _nonempty_string(value: Any) -> bool:
+    return isinstance(value, str) and bool(value.strip())
 
 
 def _reasoning_evidence(baseline: dict[str, Any], candidates: list[dict[str, Any]]) -> dict[str, Any]:

@@ -290,12 +290,13 @@ def test_go_no_go_r350_passes_with_compute_reasoning_and_memory_evidence(tmp_pat
             "run_count": 2,
             "baseline_run": "baseline",
             "runs": [
-                {"run_dir": "baseline"},
+                {"run_dir": "baseline", "stage": "stage0_baseline"},
                 {
                     "run_dir": "routed",
                     "stage": "stage4_output_action",
                     "validation_loss": 9.9,
                     "baseline_comparison": {
+                        "baseline_run": "baseline",
                         "same_parameter_count_view": True,
                         "same_active_compute_view": True,
                         "similar_training_flops_view": True,
@@ -334,12 +335,13 @@ def test_go_no_go_r350_treats_absent_global_kv_evidence_as_not_tested(tmp_path: 
             "run_count": 2,
             "baseline_run": "baseline",
             "runs": [
-                {"run_dir": "baseline"},
+                {"run_dir": "baseline", "stage": "stage0_baseline"},
                 {
                     "run_dir": "routed",
                     "stage": "stage4_output_action",
                     "validation_loss": 9.9,
                     "baseline_comparison": {
+                        "baseline_run": "baseline",
                         "same_parameter_count_view": True,
                         "same_active_compute_view": True,
                         "similar_training_flops_view": True,
@@ -381,12 +383,13 @@ def test_go_no_go_r350_requires_all_compute_comparison_views(tmp_path: Path) -> 
             "run_count": 2,
             "baseline_run": "baseline",
             "runs": [
-                {"run_dir": "baseline"},
+                {"run_dir": "baseline", "stage": "stage0_baseline"},
                 {
                     "run_dir": "routed",
                     "stage": "stage4_output_action",
                     "validation_loss": 9.9,
                     "baseline_comparison": {
+                        "baseline_run": "baseline",
                         "same_active_compute_view": True,
                         "validation_loss_delta": -0.1,
                     },
@@ -421,6 +424,108 @@ def test_go_no_go_r350_requires_all_compute_comparison_views(tmp_path: Path) -> 
     assert "similar_training_flops_view" not in comparison
 
 
+def test_go_no_go_r350_requires_declared_stage0_compute_baseline(tmp_path: Path) -> None:
+    stage_gate = _write_json(tmp_path / "stage_gate.json", _passing_stage_gate())
+    compute = _write_json(
+        tmp_path / "compute.json",
+        {
+            "run_count": 2,
+            "baseline_run": "baseline",
+            "runs": [
+                {"run_dir": "baseline", "stage": "stage1_fixed_route"},
+                {
+                    "run_dir": "routed",
+                    "stage": "stage4_output_action",
+                    "validation_loss": 9.9,
+                    "baseline_comparison": {
+                        "baseline_run": "baseline",
+                        "same_parameter_count_view": True,
+                        "same_active_compute_view": True,
+                        "similar_training_flops_view": True,
+                        "validation_loss_delta": -0.1,
+                    },
+                },
+            ],
+        },
+    )
+    reasoning_baseline = _write_json(tmp_path / "reasoning_base.json", {"overall": {"exact_match_accuracy": 0.2}})
+    reasoning_candidate = _write_json(tmp_path / "reasoning_candidate.json", {"overall": {"exact_match_accuracy": 0.3}})
+    out = _write_json(tmp_path / "out.json", _passing_out_by_difficulty())
+    long_context = _write_json(tmp_path / "long_context.json", _controlled_memory_compare())
+
+    output = make_go_no_go_report(
+        stage_gate_report_path=stage_gate,
+        compute_report_path=compute,
+        reasoning_baseline_report_path=reasoning_baseline,
+        reasoning_candidate_report_paths=[reasoning_candidate],
+        out_by_difficulty_report_path=out,
+        long_context_compare_report_path=long_context,
+        phase="r350_to_1b",
+        output_path=tmp_path / "go.json",
+    )
+    report = json.loads(output.read_text(encoding="utf-8"))
+    criteria = {item["name"]: item for item in report["phases"]["r350_to_1b"]["criteria"]}
+    compute_criterion = criteria["same_active_compute_routed_not_worse_than_baseline"]
+    comparison = compute_criterion["evidence"]["comparisons"][0]
+
+    assert report["overall_status"] == "fail"
+    assert compute_criterion["status"] == "fail"
+    assert comparison["comparison_view_contract_passed"] is True
+    assert comparison["baseline_contract_checks"]["baseline_stage0_fixed"] is False
+    assert comparison["baseline_contract_passed"] is False
+
+
+def test_go_no_go_r350_requires_comparison_to_declared_baseline(tmp_path: Path) -> None:
+    stage_gate = _write_json(tmp_path / "stage_gate.json", _passing_stage_gate())
+    compute = _write_json(
+        tmp_path / "compute.json",
+        {
+            "run_count": 2,
+            "baseline_run": "baseline",
+            "runs": [
+                {"run_dir": "baseline", "stage": "stage0_baseline"},
+                {
+                    "run_dir": "routed",
+                    "stage": "stage4_output_action",
+                    "validation_loss": 9.9,
+                    "baseline_comparison": {
+                        "baseline_run": "other_baseline",
+                        "same_parameter_count_view": True,
+                        "same_active_compute_view": True,
+                        "similar_training_flops_view": True,
+                        "validation_loss_delta": -0.1,
+                    },
+                },
+            ],
+        },
+    )
+    reasoning_baseline = _write_json(tmp_path / "reasoning_base.json", {"overall": {"exact_match_accuracy": 0.2}})
+    reasoning_candidate = _write_json(tmp_path / "reasoning_candidate.json", {"overall": {"exact_match_accuracy": 0.3}})
+    out = _write_json(tmp_path / "out.json", _passing_out_by_difficulty())
+    long_context = _write_json(tmp_path / "long_context.json", _controlled_memory_compare())
+
+    output = make_go_no_go_report(
+        stage_gate_report_path=stage_gate,
+        compute_report_path=compute,
+        reasoning_baseline_report_path=reasoning_baseline,
+        reasoning_candidate_report_paths=[reasoning_candidate],
+        out_by_difficulty_report_path=out,
+        long_context_compare_report_path=long_context,
+        phase="r350_to_1b",
+        output_path=tmp_path / "go.json",
+    )
+    report = json.loads(output.read_text(encoding="utf-8"))
+    criteria = {item["name"]: item for item in report["phases"]["r350_to_1b"]["criteria"]}
+    compute_criterion = criteria["same_active_compute_routed_not_worse_than_baseline"]
+    comparison = compute_criterion["evidence"]["comparisons"][0]
+
+    assert report["overall_status"] == "fail"
+    assert compute_criterion["status"] == "fail"
+    assert comparison["comparison_view_contract_passed"] is True
+    assert comparison["baseline_contract_checks"]["comparison_targets_declared_baseline"] is False
+    assert comparison["baseline_contract_passed"] is False
+
+
 def test_go_no_go_r350_rejects_empty_passing_long_context_report(tmp_path: Path) -> None:
     stage_gate = _write_json(tmp_path / "stage_gate.json", _passing_stage_gate())
     compute = _write_json(
@@ -429,12 +534,13 @@ def test_go_no_go_r350_rejects_empty_passing_long_context_report(tmp_path: Path)
             "run_count": 2,
             "baseline_run": "baseline",
             "runs": [
-                {"run_dir": "baseline"},
+                {"run_dir": "baseline", "stage": "stage0_baseline"},
                 {
                     "run_dir": "routed",
                     "stage": "stage4_output_action",
                     "validation_loss": 9.9,
                     "baseline_comparison": {
+                        "baseline_run": "baseline",
                         "same_parameter_count_view": True,
                         "same_active_compute_view": True,
                         "similar_training_flops_view": True,
@@ -479,12 +585,13 @@ def test_go_no_go_r350_requires_stage5_long_context_roles(tmp_path: Path) -> Non
             "run_count": 2,
             "baseline_run": "baseline",
             "runs": [
-                {"run_dir": "baseline"},
+                {"run_dir": "baseline", "stage": "stage0_baseline"},
                 {
                     "run_dir": "routed",
                     "stage": "stage4_output_action",
                     "validation_loss": 9.9,
                     "baseline_comparison": {
+                        "baseline_run": "baseline",
                         "same_parameter_count_view": True,
                         "same_active_compute_view": True,
                         "similar_training_flops_view": True,
@@ -531,12 +638,13 @@ def test_go_no_go_r350_requires_long_context_coverage_contract(tmp_path: Path) -
             "run_count": 2,
             "baseline_run": "baseline",
             "runs": [
-                {"run_dir": "baseline"},
+                {"run_dir": "baseline", "stage": "stage0_baseline"},
                 {
                     "run_dir": "routed",
                     "stage": "stage4_output_action",
                     "validation_loss": 9.9,
                     "baseline_comparison": {
+                        "baseline_run": "baseline",
                         "same_parameter_count_view": True,
                         "same_active_compute_view": True,
                         "similar_training_flops_view": True,
@@ -583,12 +691,13 @@ def test_go_no_go_r350_rejects_empty_passing_out_by_difficulty_report(tmp_path: 
             "run_count": 2,
             "baseline_run": "baseline",
             "runs": [
-                {"run_dir": "baseline"},
+                {"run_dir": "baseline", "stage": "stage0_baseline"},
                 {
                     "run_dir": "routed",
                     "stage": "stage4_output_action",
                     "validation_loss": 9.9,
                     "baseline_comparison": {
+                        "baseline_run": "baseline",
                         "same_parameter_count_view": True,
                         "same_active_compute_view": True,
                         "similar_training_flops_view": True,
@@ -630,12 +739,13 @@ def test_go_no_go_r350_requires_stage4_hard_exit_out_by_difficulty(tmp_path: Pat
             "run_count": 2,
             "baseline_run": "baseline",
             "runs": [
-                {"run_dir": "baseline"},
+                {"run_dir": "baseline", "stage": "stage0_baseline"},
                 {
                     "run_dir": "routed",
                     "stage": "stage4_output_action",
                     "validation_loss": 9.9,
                     "baseline_comparison": {
+                        "baseline_run": "baseline",
                         "same_parameter_count_view": True,
                         "same_active_compute_view": True,
                         "similar_training_flops_view": True,
@@ -681,12 +791,13 @@ def test_go_no_go_r350_accepts_global_kv_ablation_memory_quality_evidence(tmp_pa
             "run_count": 2,
             "baseline_run": "baseline",
             "runs": [
-                {"run_dir": "baseline"},
+                {"run_dir": "baseline", "stage": "stage0_baseline"},
                 {
                     "run_dir": "routed",
                     "stage": "stage4_output_action",
                     "validation_loss": 9.9,
                     "baseline_comparison": {
+                        "baseline_run": "baseline",
                         "same_parameter_count_view": True,
                         "same_active_compute_view": True,
                         "similar_training_flops_view": True,
@@ -791,11 +902,12 @@ def test_go_no_go_r350_rejects_boolean_compute_loss_delta(tmp_path: Path) -> Non
             "run_count": 2,
             "baseline_run": "baseline",
             "runs": [
-                {"run_dir": "baseline", "validation_loss": 10.0},
+                {"run_dir": "baseline", "stage": "stage0_baseline", "validation_loss": 10.0},
                 {
                     "run_dir": "candidate",
                     "validation_loss": 10.0,
                     "baseline_comparison": {
+                        "baseline_run": "baseline",
                         "same_parameter_count_view": True,
                         "same_active_compute_view": True,
                         "similar_training_flops_view": True,
@@ -885,6 +997,7 @@ def test_go_no_go_r1b_success_passes_with_compute_adjusted_advantage(tmp_path: P
             "runs": [
                 {
                     "run_dir": "baseline",
+                    "stage": "stage0_baseline",
                     "validation_loss": 10.0,
                     "inference_latency_ms_per_token_latest": 1.0,
                 },
@@ -894,6 +1007,7 @@ def test_go_no_go_r1b_success_passes_with_compute_adjusted_advantage(tmp_path: P
                     "validation_loss": 10.2,
                     "inference_latency_ms_per_token_latest": 1.5,
                     "baseline_comparison": {
+                        "baseline_run": "baseline",
                         "same_parameter_count_view": True,
                         "same_active_compute_view": True,
                         "similar_training_flops_view": True,
@@ -931,6 +1045,7 @@ def test_go_no_go_r1b_success_passes_with_compute_adjusted_advantage(tmp_path: P
     assert latency[0]["inference_latency_ms_per_token_ratio"] == 1.5
     assert adjusted["passed"] is True
     assert adjusted["evidence"]["candidates"][0]["comparison_view_contract_passed"] is True
+    assert adjusted["evidence"]["candidates"][0]["baseline_contract_passed"] is True
     assert adjusted["evidence"]["candidates"][0]["compute_adjusted_loss_delta"] < 0.0
 
 
@@ -944,6 +1059,7 @@ def test_go_no_go_r1b_success_requires_compute_baseline_views(tmp_path: Path) ->
             "runs": [
                 {
                     "run_dir": "baseline",
+                    "stage": "stage0_baseline",
                     "validation_loss": 10.0,
                     "inference_latency_ms_per_token_latest": 1.0,
                 },
@@ -953,6 +1069,7 @@ def test_go_no_go_r1b_success_requires_compute_baseline_views(tmp_path: Path) ->
                     "validation_loss": 9.8,
                     "inference_latency_ms_per_token_latest": 1.5,
                     "baseline_comparison": {
+                        "baseline_run": "baseline",
                         "estimated_flops_per_token_ratio": 0.9,
                         "inference_latency_ms_per_token_ratio": 1.5,
                         "validation_loss_delta": -0.2,
@@ -982,6 +1099,7 @@ def test_go_no_go_r1b_success_requires_compute_baseline_views(tmp_path: Path) ->
     assert candidate["comparison_view_checks"]["same_active_compute_view"] is None
     assert candidate["comparison_view_checks"]["similar_training_flops_view"] is None
     assert candidate["comparison_view_contract_passed"] is False
+    assert candidate["baseline_contract_passed"] is True
     assert candidate["compute_adjusted_loss_delta"] < 0.0
     assert candidate["passes_compute_adjusted_loss_proxy"] is False
 
@@ -998,6 +1116,7 @@ def test_go_no_go_r1b_success_fails_explicit_routing_collapse(tmp_path: Path) ->
             "runs": [
                 {
                     "run_dir": "baseline",
+                    "stage": "stage0_baseline",
                     "validation_loss": 10.0,
                     "inference_latency_ms_per_token_latest": 1.0,
                 },
@@ -1006,6 +1125,7 @@ def test_go_no_go_r1b_success_fails_explicit_routing_collapse(tmp_path: Path) ->
                     "validation_loss": 10.2,
                     "inference_latency_ms_per_token_latest": 1.5,
                     "baseline_comparison": {
+                        "baseline_run": "baseline",
                         "same_parameter_count_view": True,
                         "same_active_compute_view": True,
                         "similar_training_flops_view": True,
@@ -1042,6 +1162,7 @@ def test_go_no_go_r1b_success_requires_stage5_long_context_memory_roles(tmp_path
             "runs": [
                 {
                     "run_dir": "baseline",
+                    "stage": "stage0_baseline",
                     "validation_loss": 10.0,
                     "inference_latency_ms_per_token_latest": 1.0,
                 },
@@ -1051,6 +1172,7 @@ def test_go_no_go_r1b_success_requires_stage5_long_context_memory_roles(tmp_path
                     "validation_loss": 10.2,
                     "inference_latency_ms_per_token_latest": 1.5,
                     "baseline_comparison": {
+                        "baseline_run": "baseline",
                         "same_parameter_count_view": True,
                         "same_active_compute_view": True,
                         "similar_training_flops_view": True,
@@ -1094,6 +1216,7 @@ def test_go_no_go_r1b_success_requires_long_context_memory_coverage(tmp_path: Pa
             "runs": [
                 {
                     "run_dir": "baseline",
+                    "stage": "stage0_baseline",
                     "validation_loss": 10.0,
                     "inference_latency_ms_per_token_latest": 1.0,
                 },
@@ -1103,6 +1226,7 @@ def test_go_no_go_r1b_success_requires_long_context_memory_coverage(tmp_path: Pa
                     "validation_loss": 10.2,
                     "inference_latency_ms_per_token_latest": 1.5,
                     "baseline_comparison": {
+                        "baseline_run": "baseline",
                         "same_parameter_count_view": True,
                         "same_active_compute_view": True,
                         "similar_training_flops_view": True,
@@ -1146,6 +1270,7 @@ def test_go_no_go_r1b_success_accepts_less_visible_cot_advantage(tmp_path: Path)
             "runs": [
                 {
                     "run_dir": "baseline",
+                    "stage": "stage0_baseline",
                     "validation_loss": 10.0,
                     "inference_latency_ms_per_token_latest": 1.0,
                 },
@@ -1154,6 +1279,7 @@ def test_go_no_go_r1b_success_accepts_less_visible_cot_advantage(tmp_path: Path)
                     "validation_loss": 10.1,
                     "inference_latency_ms_per_token_latest": 1.1,
                     "baseline_comparison": {
+                        "baseline_run": "baseline",
                         "same_parameter_count_view": True,
                         "same_active_compute_view": True,
                         "similar_training_flops_view": True,
