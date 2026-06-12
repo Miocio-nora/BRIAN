@@ -458,6 +458,8 @@ def test_stage_gate_report_writes_json(tmp_path: Path) -> None:
         scheduled_routing_report={
             "overall_status": "pass",
             "checks": {
+                "stage3_scheduled_free_routing_stage": True,
+                "scheduled_routing_mode": True,
                 "scheduled_stage": True,
                 "schedule_present": True,
                 "router_probability_monotonic_nondecreasing": True,
@@ -606,6 +608,8 @@ def test_stage_gate_report_writes_json(tmp_path: Path) -> None:
     assert report["gates"]["stage2_to_3"]["sequential_stage"] == "stage2_router_imitation"
     assert report["gates"]["stage2_to_3"]["mixed_stage"] == "stage3_pseudo_skip_recur"
     assert report["gates"]["stage3_to_4"]["status"] == "pass"
+    assert report["gates"]["stage3_to_4"]["checks"]["scheduled_routing_correct_stage"] is True
+    assert report["gates"]["stage3_to_4"]["checks"]["scheduled_routing_scheduled_mode"] is True
     assert report["gates"]["stage3_to_4"]["checks"]["scheduled_routing_passed"] is True
     assert report["gates"]["stage3_to_4"]["checks"]["difficulty_step_correlation_positive"] is True
     assert report["gates"]["stage5_to_6"]["status"] == "pass"
@@ -1574,6 +1578,8 @@ def test_stage3_gate_requires_stage1_loss_comparison(tmp_path: Path) -> None:
         scheduled_routing_report={
             "overall_status": "pass",
             "checks": {
+                "stage3_scheduled_free_routing_stage": True,
+                "scheduled_routing_mode": True,
                 "scheduled_stage": True,
                 "schedule_present": True,
                 "router_probability_monotonic_nondecreasing": True,
@@ -1620,6 +1626,8 @@ def test_stage3_gate_requires_positive_difficulty_step_correlation(tmp_path: Pat
         scheduled_routing_report={
             "overall_status": "pass",
             "checks": {
+                "stage3_scheduled_free_routing_stage": True,
+                "scheduled_routing_mode": True,
                 "scheduled_stage": True,
                 "schedule_present": True,
                 "router_probability_monotonic_nondecreasing": True,

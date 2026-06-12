@@ -18,6 +18,8 @@ def make_scheduled_routing_report(
     run_dir = Path(run_dir)
     config = _read_yaml(run_dir / "config_resolved.yaml")
     routing_config = config.get("routing", {}) if isinstance(config.get("routing"), dict) else {}
+    stage = str(config.get("stage", ""))
+    routing_mode = str(routing_config.get("mode", "")) if isinstance(routing_config, dict) else ""
     schedule_config = routing_config.get("schedule", [])
     schedule = schedule_config if isinstance(schedule_config, list) else []
     rows = _read_jsonl(run_dir / "train_log.jsonl")
@@ -26,7 +28,9 @@ def make_scheduled_routing_report(
     logged_rows = [row for row in rows if _has_logged_schedule(row)]
     logged_eval_rows = [row for row in eval_rows if _has_logged_schedule(row)]
     checks = {
-        "scheduled_stage": str(config.get("stage", "")).startswith("stage3") or routing_config.get("mode") == "scheduled",
+        "stage3_scheduled_free_routing_stage": stage == "stage3_scheduled_free_routing",
+        "scheduled_routing_mode": routing_mode == "scheduled",
+        "scheduled_stage": stage == "stage3_scheduled_free_routing" and routing_mode == "scheduled",
         "schedule_present": bool(schedule),
         "schedule_values_numeric": bool(schedule_points) and len(schedule_points) == len(schedule),
         "router_probability_monotonic_nondecreasing": _monotonic(
@@ -78,7 +82,8 @@ def make_scheduled_routing_report(
     }
     report = {
         "run_dir": str(run_dir),
-        "stage": str(config.get("stage", "")),
+        "stage": stage,
+        "routing_mode": routing_mode,
         "schedule": schedule_points,
         "train_step_count": len(rows),
         "logged_schedule_step_count": len(logged_rows),

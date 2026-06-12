@@ -404,6 +404,7 @@ def _gate_stage3(stage3: dict[str, Any] | None, stage1: dict[str, Any] | None, t
     if stage3 and stage1 and _finite(stage3.get("validation_loss")) and _finite(stage1.get("validation_loss")):
         ratio = stage3["validation_loss"] / max(1e-9, stage1["validation_loss"])
     difficulty_corr = _num(stage3.get("difficulty_step_correlation") if stage3 else None)
+    scheduled_checks = stage3.get("scheduled_routing_checks", {}) if stage3 else {}
     checks = {
         "validation_loss_not_collapsed": ratio is not None and ratio <= thresholds["stage3_loss_ratio_max"],
         "route_entropy_present": _metric_at_least(stage3, "route_entropy", thresholds["route_entropy_min"]),
@@ -416,7 +417,20 @@ def _gate_stage3(stage3: dict[str, Any] | None, stage1: dict[str, Any] | None, t
         "difficulty_step_correlation_positive": difficulty_corr is not None
         and difficulty_corr > thresholds["difficulty_step_correlation_min"],
         "scheduled_routing_report_present": bool(stage3 and stage3.get("scheduled_routing_report_present")),
-        "scheduled_routing_passed": bool(stage3 and stage3.get("scheduled_routing_status") == "pass"),
+        "scheduled_routing_correct_stage": bool(
+            isinstance(scheduled_checks, dict)
+            and scheduled_checks.get("stage3_scheduled_free_routing_stage") is True
+        ),
+        "scheduled_routing_scheduled_mode": bool(
+            isinstance(scheduled_checks, dict) and scheduled_checks.get("scheduled_routing_mode") is True
+        ),
+        "scheduled_routing_passed": bool(
+            stage3
+            and stage3.get("scheduled_routing_status") == "pass"
+            and isinstance(scheduled_checks, dict)
+            and scheduled_checks.get("stage3_scheduled_free_routing_stage") is True
+            and scheduled_checks.get("scheduled_routing_mode") is True
+        ),
         "checkpoint_present": bool(stage3 and stage3["has_checkpoint_latest"]),
         **_routed_run_artifact_gate_checks(stage3),
         **_validation_report_gate_checks(stage3),
