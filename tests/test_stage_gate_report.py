@@ -1960,6 +1960,36 @@ def test_stage4_gate_requires_passing_hard_exit_compare_report(tmp_path: Path) -
     assert gate["hard_exit_compare_checks"][0]["checks"]["latency_ratio_within_threshold"] is False
 
 
+def test_stage4_gate_requires_passing_hard_exit_compare_parent_report(tmp_path: Path) -> None:
+    stage4 = _write_run(
+        tmp_path,
+        "stage4",
+        stage="stage4_output_action",
+        val_loss=10.0,
+        train_row={
+            "average_route_steps": 2.0,
+            "first_exit_step_histogram": {"1": 1, "2": 2},
+            "top1_block_histogram": {"0": 1, "1": 1, "2": 1},
+        },
+    )
+    hard_exit_data = _hard_exit_compare_report()
+    hard_exit_data["overall_status"] = "warn"
+    hard_exit_report = tmp_path / "hard_exit_compare.json"
+    hard_exit_report.write_text(json.dumps(hard_exit_data), encoding="utf-8")
+
+    report_path = make_stage_gate_report(
+        [stage4],
+        output_path=tmp_path / "gate.json",
+        hard_exit_compare_report_path=hard_exit_report,
+    )
+    gate = json.loads(report_path.read_text(encoding="utf-8"))["gates"]["stage4_to_5"]
+
+    assert gate["status"] == "warn"
+    assert gate["checks"]["hard_exit_compare_passed"] is False
+    assert gate["checks"]["hard_exit_compute_adjusted_candidate_passed"] is False
+    assert gate["hard_exit_compare_checks"][0]["status"] == "pass"
+
+
 def test_stage4_gate_requires_stage4_hard_exit_compare_roles(tmp_path: Path) -> None:
     stage4 = _write_run(
         tmp_path,
@@ -2612,6 +2642,48 @@ def test_stage5_gate_requires_long_context_input_reports_to_pass(tmp_path: Path)
     assert gate["checks"]["long_context_global_kv_benefit_proxy"] is False
 
 
+def test_stage5_gate_requires_passing_long_context_parent_report_for_benefit(tmp_path: Path) -> None:
+    stage4 = _write_run(
+        tmp_path,
+        "stage4",
+        stage="stage4_output_action",
+        val_loss=10.0,
+        train_row={
+            "average_route_steps": 2.0,
+            "first_exit_step_histogram": {"1": 1, "2": 2},
+            "top1_block_histogram": {"0": 1, "1": 1, "2": 1},
+        },
+    )
+    stage5 = _write_run(
+        tmp_path,
+        "global",
+        stage="stage5_global_kv",
+        val_loss=10.0,
+        train_row={
+            "global_attention_mass": 1.0,
+            "global_read_gate_mean": 0.01,
+            "global_cache_slots_mean": 2.0,
+            "top1_block_histogram": {"0": 1, "1": 1, "2": 1},
+        },
+        global_kv_retention_report=_global_kv_retention_report(),
+    )
+    compare = _long_context_compare_report()
+    compare["overall_status"] = "fail"
+    compare_report = tmp_path / "long_context_compare.json"
+    compare_report.write_text(json.dumps(compare), encoding="utf-8")
+
+    report_path = make_stage_gate_report(
+        [stage4, stage5],
+        output_path=tmp_path / "gate.json",
+        long_context_compare_report_path=compare_report,
+    )
+    gate = json.loads(report_path.read_text(encoding="utf-8"))["gates"]["stage5_to_6"]
+
+    assert gate["status"] == "warn"
+    assert gate["checks"]["long_context_compare_passed"] is False
+    assert gate["checks"]["long_context_global_kv_benefit_proxy"] is False
+
+
 def test_stage5_gate_requires_long_context_compare_stage_roles(tmp_path: Path) -> None:
     stage4 = _write_run(
         tmp_path,
@@ -2857,6 +2929,38 @@ def test_stage6_gate_uses_parallel_compare_report(tmp_path: Path) -> None:
     assert gate["checks"]["parallel_compare_throughput_not_collapsed"] is True
     assert gate["checks"]["parallel_branch_benefit_proxy"] is True
     assert report["supplemental_reports"]["parallel_compare_report"] == str(compare_report)
+
+
+def test_stage6_gate_requires_passing_parallel_compare_parent_report_for_benefit(tmp_path: Path) -> None:
+    stage6 = _write_run(
+        tmp_path,
+        "parallel",
+        stage="stage6_parallel_passing",
+        val_loss=10.0,
+        train_row={
+            "parallel_branch_count_mean": 2.0,
+            "parallel_score_margin_mean": 0.1,
+            "global_cache_slots_mean": 2.0,
+            "top1_block_histogram": {"0": 1, "1": 1, "2": 1},
+        },
+        parallel_passing_report=_parallel_passing_report(),
+    )
+    compare = _parallel_compare_report()
+    compare["overall_status"] = "fail"
+    compare_report = tmp_path / "parallel_compare.json"
+    compare_report.write_text(json.dumps(compare), encoding="utf-8")
+
+    report_path = make_stage_gate_report(
+        [stage6],
+        output_path=tmp_path / "gate.json",
+        parallel_compare_report_path=compare_report,
+    )
+    gate = json.loads(report_path.read_text(encoding="utf-8"))["gates"]["stage6_to_scale"]
+
+    assert gate["status"] == "warn"
+    assert gate["checks"]["parallel_compare_passed"] is False
+    assert gate["checks"]["parallel_compare_throughput_not_collapsed"] is False
+    assert gate["checks"]["parallel_branch_benefit_proxy"] is False
 
 
 def test_stage6_gate_requires_branch_score_and_delta_memory_checks(tmp_path: Path) -> None:

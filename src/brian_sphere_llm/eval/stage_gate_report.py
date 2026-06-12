@@ -529,7 +529,13 @@ def _gate_stage4(
         "validation_loss_not_worse",
     ]
     hard_exit_comparisons = hard_exit_compare_report.get("comparisons", []) if hard_exit_compare_report else []
-    any_hard_exit_pass = _any_passing_comparison_with_checks(hard_exit_comparisons, hard_exit_key_checks)
+    hard_exit_compare_passed = bool(
+        hard_exit_compare_report and hard_exit_compare_report.get("overall_status") == "pass"
+    )
+    any_hard_exit_pass = hard_exit_compare_passed and _any_passing_comparison_with_checks(
+        hard_exit_comparisons,
+        hard_exit_key_checks,
+    )
     checks = {
         "exit_distribution_present": bool(exit_hist),
         "not_all_immediate_exit": bool(exit_hist) and immediate < total_exits,
@@ -559,9 +565,7 @@ def _gate_stage4(
         and bool(out_checks.get("active_compute_non_decreasing_with_difficulty", False)),
         "easy_output_probability_not_below_hard": bool(out_checks.get("easy_output_probability_at_least_hard", False)),
         "hard_exit_compare_report_present": bool(hard_exit_compare_report),
-        "hard_exit_compare_passed": bool(
-            hard_exit_compare_report and hard_exit_compare_report.get("overall_status") == "pass"
-        ),
+        "hard_exit_compare_passed": hard_exit_compare_passed,
         "hard_exit_compute_adjusted_candidate_passed": any_hard_exit_pass,
         "checkpoint_present": bool(stage4 and stage4["has_checkpoint_latest"]),
         **_routed_run_artifact_gate_checks(stage4),
@@ -644,7 +648,13 @@ def _gate_stage5(
         "memory_budget_present",
         "global_budget_below_local_context",
     ]
-    any_long_context_pass = _any_passing_comparison_with_checks(comparisons, long_context_key_checks)
+    long_context_compare_passed = bool(
+        long_context_compare_report and long_context_compare_report.get("overall_status") == "pass"
+    )
+    any_long_context_pass = long_context_compare_passed and _any_passing_comparison_with_checks(
+        comparisons,
+        long_context_key_checks,
+    )
     retention_report = global_kv_retention_report or (stage5.get("global_kv_retention_report") if stage5 else None) or {}
     retention_checks = retention_report.get("checks", {}) if isinstance(retention_report.get("checks"), dict) else {}
     checks = {
@@ -671,9 +681,7 @@ def _gate_stage5(
         "local_global_read_ratio_measured": bool(retention_checks.get("read_ratio_measured", False)),
         "global_cache_window_utilization_measured": bool(retention_checks.get("window_utilization_measured", False)),
         "long_context_compare_report_present": bool(long_context_compare_report),
-        "long_context_compare_passed": bool(
-            long_context_compare_report and long_context_compare_report.get("overall_status") == "pass"
-        ),
+        "long_context_compare_passed": long_context_compare_passed,
         "long_context_global_kv_benefit_proxy": any_long_context_pass,
         "checkpoint_present": bool(stage5 and stage5["has_checkpoint_latest"]),
         **_routed_run_artifact_gate_checks(stage5),
@@ -728,8 +736,15 @@ def _gate_stage6(
         "throughput_not_collapsed",
         "parallel_branch_benefit_proxy",
     ]
-    any_parallel_pass = _any_passing_comparison_with_checks(comparisons, parallel_key_checks)
-    any_parallel_throughput_pass = _any_passing_comparison_with_checks(comparisons, ["throughput_not_collapsed"])
+    parallel_compare_passed = bool(parallel_compare_report and parallel_compare_report.get("overall_status") == "pass")
+    any_parallel_pass = parallel_compare_passed and _any_passing_comparison_with_checks(
+        comparisons,
+        parallel_key_checks,
+    )
+    any_parallel_throughput_pass = parallel_compare_passed and _any_passing_comparison_with_checks(
+        comparisons,
+        ["throughput_not_collapsed"],
+    )
     passing_report = parallel_passing_report or (stage6.get("parallel_passing_report") if stage6 else None) or {}
     passing_checks = passing_report.get("checks", {}) if isinstance(passing_report.get("checks"), dict) else {}
     checks = {
@@ -756,9 +771,7 @@ def _gate_stage6(
         "global_cache_or_local_route_present": _finite(_routing_metric(stage6, "global_cache_slots_mean"))
         or _finite(_routing_metric(stage6, "average_route_steps")),
         "parallel_compare_report_present": bool(parallel_compare_report),
-        "parallel_compare_passed": bool(
-            parallel_compare_report and parallel_compare_report.get("overall_status") == "pass"
-        ),
+        "parallel_compare_passed": parallel_compare_passed,
         "parallel_compare_throughput_not_collapsed": any_parallel_throughput_pass,
         "parallel_branch_benefit_proxy": any_parallel_pass,
         "checkpoint_present": bool(stage6 and stage6["has_checkpoint_latest"]),
