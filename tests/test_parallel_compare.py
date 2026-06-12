@@ -17,13 +17,20 @@ def _write_run(
 ) -> Path:
     run_dir = root / name
     run_dir.mkdir(parents=True)
+    parallel_stage = stage in {"stage6_parallel_passing", "stage7_parallel_passing"}
+    global_kv_stage = stage in {"stage5_global_kv", "stage6_parallel_passing", "stage7_parallel_passing"}
     (run_dir / "config_resolved.yaml").write_text(
         yaml.safe_dump(
             {
                 "stage": stage,
+                "routing": {"mode": "parallel" if parallel_stage else "scheduled"},
                 "batch_size": 2,
                 "data_config_resolved": {"sequence_length": 8},
-                "model_config_resolved": {"top_k": 2},
+                "model_config_resolved": {
+                    "top_k": 2,
+                    "global_kv": global_kv_stage,
+                    "parallel_passing": parallel_stage,
+                },
             }
         ),
         encoding="utf-8",
@@ -86,6 +93,16 @@ def test_parallel_compare_passes_bounded_parallel_candidate(tmp_path: Path) -> N
     report = json.loads(output.read_text(encoding="utf-8"))
     row = report["comparisons"][0]
     assert report["overall_status"] == "pass"
+    assert row["baseline_stage"] == "stage5_global_kv"
+    assert row["candidate_stage"] == "stage6_parallel_passing"
+    assert row["checks"]["baseline_stage5_global_kv"] is True
+    assert row["checks"]["baseline_scheduled_route_mode"] is True
+    assert row["checks"]["baseline_global_kv_enabled"] is True
+    assert row["checks"]["baseline_parallel_passing_disabled"] is True
+    assert row["checks"]["candidate_parallel_stage"] is True
+    assert row["checks"]["candidate_parallel_route_mode"] is True
+    assert row["checks"]["candidate_parallel_passing_enabled"] is True
+    assert row["checks"]["candidate_global_kv_enabled"] is True
     assert row["checks"]["parallel_branch_active"] is True
     assert row["checks"]["parallel_score_margin_present"] is True
     assert row["checks"]["quality_not_worse"] is True
@@ -125,6 +142,46 @@ def test_parallel_compare_warns_without_parallel_metrics(tmp_path: Path) -> None
     assert row["checks"]["parallel_branch_active"] is False
     assert row["checks"]["parallel_score_margin_present"] is False
     assert row["checks"]["quality_not_worse"] is False
+
+
+def test_parallel_compare_requires_stage5_to_parallel_roles(tmp_path: Path) -> None:
+    baseline = _write_run(
+        tmp_path,
+        "stage4",
+        stage="stage4_output_action",
+        validation_loss=10.0,
+        tokens_per_second=100,
+        routing_summary={
+            "average_route_steps": 2.0,
+            "active_block_evals_per_token": 0.5,
+            "weighted_fusion_ratio": 1.0,
+        },
+    )
+    candidate = _write_run(
+        tmp_path,
+        "stage5",
+        stage="stage5_global_kv",
+        validation_loss=9.9,
+        tokens_per_second=120,
+        routing_summary={
+            "average_route_steps": 2.0,
+            "active_block_evals_per_token": 0.25,
+            "parallel_branch_count_mean": 2.0,
+            "parallel_score_margin_mean": 0.1,
+        },
+    )
+
+    output = make_parallel_comparison_report(baseline, [candidate], output_path=tmp_path / "parallel_compare.json")
+    row = json.loads(output.read_text(encoding="utf-8"))["comparisons"][0]
+
+    assert row["status"] == "warn"
+    assert row["checks"]["baseline_stage5_global_kv"] is False
+    assert row["checks"]["baseline_global_kv_enabled"] is False
+    assert row["checks"]["candidate_parallel_stage"] is False
+    assert row["checks"]["candidate_parallel_route_mode"] is False
+    assert row["checks"]["candidate_parallel_passing_enabled"] is False
+    assert row["checks"]["parallel_branch_active"] is True
+    assert row["checks"]["quality_not_worse"] is True
 
 
 def test_parallel_compare_rejects_boolean_parallel_metrics(tmp_path: Path) -> None:

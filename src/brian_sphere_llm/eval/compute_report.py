@@ -75,6 +75,8 @@ def summarize_run(
     final_train = train_rows[-1] if train_rows else {}
     final_eval = eval_rows[-1] if eval_rows else {}
     routing_config = config.get("routing", {}) if isinstance(config.get("routing"), dict) else {}
+    model_config = config.get("model_config_resolved", {})
+    model_config = model_config if isinstance(model_config, dict) else {}
 
     parameter_count = int(_num(model_stats.get("parameter_count")) or 0)
     physical_layers = _physical_layer_count(model_stats, config)
@@ -93,6 +95,8 @@ def summarize_run(
         "stage": str(config.get("stage", _stage_from_name(run_dir.name))),
         "model_name": model_stats.get("model_name", ""),
         "route_mode": routing_config.get("mode"),
+        "global_kv_enabled": _model_bool_value(model_config, "global_kv", default=False),
+        "parallel_passing_enabled": _model_bool_value(model_config, "parallel_passing", default=False),
         "hard_exit_enabled": _hard_exit_enabled(config),
         "distributed_world_size": _world_size(config),
         "micro_batch_size": _batch_size(config),
@@ -277,6 +281,10 @@ def _bool_value(value: Any, name: str) -> bool:
         if normalized in {"0", "false", "no", "off"}:
             return False
     raise ValueError(f"{name} must be a boolean.")
+
+
+def _model_bool_value(model_config: dict[str, Any], key: str, *, default: bool) -> bool:
+    return _bool_value(model_config.get(key, default), f"model_config_resolved.{key}")
 
 
 def _int_value(value: Any, name: str, *, minimum: int | None = None) -> int:

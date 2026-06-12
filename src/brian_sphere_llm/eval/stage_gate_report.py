@@ -650,6 +650,14 @@ def _gate_stage6(
 ) -> dict[str, Any]:
     comparisons = parallel_compare_report.get("comparisons", []) if parallel_compare_report else []
     parallel_key_checks = [
+        "baseline_stage5_global_kv",
+        "baseline_scheduled_route_mode",
+        "baseline_global_kv_enabled",
+        "baseline_parallel_passing_disabled",
+        "candidate_parallel_stage",
+        "candidate_parallel_route_mode",
+        "candidate_parallel_passing_enabled",
+        "candidate_global_kv_enabled",
         "parallel_branch_active",
         "parallel_score_margin_present",
         "quality_not_worse",
@@ -665,6 +673,7 @@ def _gate_stage6(
         "parallel_score_margin_present": _finite(_routing_metric(stage6, "parallel_score_margin_mean")),
         "parallel_passing_report_present": bool(passing_report),
         "parallel_passing_report_passed": bool(passing_report.get("overall_status") == "pass"),
+        "parallel_passing_stage_reported": bool(passing_checks.get("stage6_parallel_stage", False)),
         "parallel_passing_enabled": bool(passing_checks.get("parallel_passing_enabled", False)),
         "parallel_route_selected": bool(passing_checks.get("parallel_route_selected", False)),
         "parallel_shared_base_global_memory_enabled": bool(

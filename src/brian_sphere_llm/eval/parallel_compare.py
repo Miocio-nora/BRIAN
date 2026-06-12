@@ -70,6 +70,14 @@ def _compare_candidate(
     active_ratio = _num(comparison.get("active_layer_eval_ratio"))
     flops_ratio = _num(comparison.get("estimated_flops_per_token_ratio"))
     throughput_ratio = _num(comparison.get("tokens_per_second_ratio"))
+    baseline_stage5 = baseline.get("stage") == "stage5_global_kv"
+    baseline_scheduled = baseline.get("route_mode") == "scheduled"
+    baseline_global_kv = baseline.get("global_kv_enabled") is True
+    baseline_non_parallel = baseline.get("parallel_passing_enabled") is False
+    candidate_parallel_stage = candidate.get("stage") in {"stage6_parallel_passing", "stage7_parallel_passing"}
+    candidate_parallel_route = candidate.get("route_mode") == "parallel"
+    candidate_parallel_enabled = candidate.get("parallel_passing_enabled") is True
+    candidate_global_kv = candidate.get("global_kv_enabled") is True
     quality_not_worse = validation_delta is not None and validation_delta <= max_validation_loss_delta
     active_compute_bounded = active_ratio is not None and active_ratio <= max_active_layer_eval_ratio
     flops_bounded = flops_ratio is not None and flops_ratio <= max_estimated_flops_ratio
@@ -85,6 +93,14 @@ def _compare_candidate(
         or (throughput_ratio is not None and throughput_ratio >= 1.0)
     )
     checks = {
+        "baseline_stage5_global_kv": baseline_stage5,
+        "baseline_scheduled_route_mode": baseline_scheduled,
+        "baseline_global_kv_enabled": baseline_global_kv,
+        "baseline_parallel_passing_disabled": baseline_non_parallel,
+        "candidate_parallel_stage": candidate_parallel_stage,
+        "candidate_parallel_route_mode": candidate_parallel_route,
+        "candidate_parallel_passing_enabled": candidate_parallel_enabled,
+        "candidate_global_kv_enabled": candidate_global_kv,
         "parallel_branch_active": parallel_branch_active,
         "parallel_score_margin_present": score_margin_present,
         "quality_not_worse": quality_not_worse,
@@ -95,6 +111,10 @@ def _compare_candidate(
     }
     return {
         "candidate_run": candidate["run_dir"],
+        "candidate_stage": candidate.get("stage"),
+        "baseline_stage": baseline.get("stage"),
+        "candidate_route_mode": candidate.get("route_mode"),
+        "baseline_route_mode": baseline.get("route_mode"),
         "candidate": _summary_row(candidate),
         "baseline_comparison": {
             "validation_loss_delta": validation_delta,
@@ -117,6 +137,9 @@ def _summary_row(summary: dict[str, Any]) -> dict[str, Any]:
     return {
         "run_dir": summary.get("run_dir"),
         "stage": summary.get("stage"),
+        "route_mode": summary.get("route_mode"),
+        "global_kv_enabled": summary.get("global_kv_enabled"),
+        "parallel_passing_enabled": summary.get("parallel_passing_enabled"),
         "validation_loss": summary.get("validation_loss"),
         "active_layer_evals_per_token": summary.get("active_layer_evals_per_token"),
         "active_layer_ratio": summary.get("active_layer_ratio"),
