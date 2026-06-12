@@ -400,7 +400,7 @@ python scripts/run_experiment.py \
   --limit 2
 ```
 
-Completed experiment packages write `experiment_results.json`, `compute_report.json`, and `experiment_package_report.json` under the output directory. The package report checks that every selected manifest entry produced a run, routing report, compute row, and baseline comparison evidence for non-baseline entries.
+Completed experiment packages write `experiment_results.json`, `compute_report.json`, and `experiment_package_report.json` under the output directory. The package report checks that every selected manifest entry produced a run, that run stages match the manifest train configs, that compute rows match the run configs, and that non-baseline entries include baseline comparison evidence.
 
 Generate a cost-control report after a Stage 4 sweep:
 

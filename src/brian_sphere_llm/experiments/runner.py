@@ -180,9 +180,19 @@ def make_experiment_package_report(
     for entry in expected_entries:
         result = results_by_id.get(entry.id)
         run_dir = str(result.get("run_dir")) if result and result.get("run_dir") is not None else None
+        expected_config = _load_config_if_exists(entry.train_config)
+        run_config_path = Path(run_dir) / "config_resolved.yaml" if run_dir else None
+        run_config = _load_config_if_exists(run_config_path) if run_config_path else {}
         compute_row = compute_by_run.get(run_dir or "")
         has_routing_report = bool(result and _path_exists(result.get("routing_report")))
         has_compute_row = bool(compute_row)
+        expected_stage = expected_config.get("stage")
+        run_stage = run_config.get("stage")
+        compute_stage = compute_row.get("stage") if isinstance(compute_row, dict) else None
+        run_config_present = bool(run_config_path and run_config_path.exists())
+        run_config_loads = bool(run_config)
+        run_stage_matches_entry = run_stage is not None and run_stage == expected_stage
+        compute_stage_matches_run = has_compute_row and compute_stage is not None and compute_stage == run_stage
         comparison = compute_row.get("baseline_comparison") if isinstance(compute_row, dict) else None
         baseline_comparison_present = entry.role == "baseline" or bool(isinstance(comparison, dict))
         baseline_comparison_views_present = entry.role == "baseline" or _baseline_comparison_views_present(comparison)
@@ -193,14 +203,26 @@ def make_experiment_package_report(
                 "run_dir": run_dir,
                 "routing_report": result.get("routing_report") if result else None,
                 "routing_report_present": has_routing_report,
+                "run_config": str(run_config_path) if run_config_path else None,
+                "run_config_present": run_config_present,
+                "run_config_loads": run_config_loads,
+                "expected_stage": expected_stage,
+                "run_stage": run_stage,
+                "compute_stage": compute_stage,
+                "run_stage_matches_entry": run_stage_matches_entry,
+                "compute_stage_matches_run_config": compute_stage_matches_run,
                 "compute_row_present": has_compute_row,
                 "baseline_comparison_present": baseline_comparison_present,
                 "baseline_comparison_views_present": baseline_comparison_views_present,
                 "status": _entry_status(
                     result_present=result is not None,
                     run_dir_present=bool(run_dir),
+                    run_config_present=run_config_present,
+                    run_config_loads=run_config_loads,
+                    run_stage_matches_entry=run_stage_matches_entry,
                     routing_report_present=has_routing_report,
                     compute_row_present=has_compute_row,
+                    compute_stage_matches_run_config=compute_stage_matches_run,
                     baseline_comparison_present=baseline_comparison_present,
                     baseline_comparison_views_present=baseline_comparison_views_present,
                     baseline_required=bool(baseline_run_str) and entry.role != "baseline",
@@ -213,9 +235,13 @@ def make_experiment_package_report(
         "manifest_entries_present": bool(expected_entries),
         "all_entries_have_results": all(row["result_present"] for row in entry_rows),
         "all_results_have_run_dir": all(bool(row["run_dir"]) for row in entry_rows),
+        "all_results_have_run_config": all(row["run_config_present"] for row in entry_rows),
+        "all_run_configs_load": all(row["run_config_loads"] for row in entry_rows),
+        "all_run_stages_match_manifest": all(row["run_stage_matches_entry"] for row in entry_rows),
         "all_results_have_routing_report": all(row["routing_report_present"] for row in entry_rows),
         "compute_report_present": bool(compute_report),
         "all_results_have_compute_rows": all(row["compute_row_present"] for row in entry_rows),
+        "all_compute_rows_match_run_stage": all(row["compute_stage_matches_run_config"] for row in entry_rows),
         "baseline_run_known": bool(baseline_run_str),
         "non_baseline_compute_comparisons_present": bool(non_baseline_rows)
         and all(row["baseline_comparison_present"] for row in non_baseline_rows),
@@ -294,13 +320,26 @@ def _entry_status(
     *,
     result_present: bool,
     run_dir_present: bool,
+    run_config_present: bool,
+    run_config_loads: bool,
+    run_stage_matches_entry: bool,
     routing_report_present: bool,
     compute_row_present: bool,
+    compute_stage_matches_run_config: bool,
     baseline_comparison_present: bool,
     baseline_comparison_views_present: bool,
     baseline_required: bool,
 ) -> str:
-    required = [result_present, run_dir_present, routing_report_present, compute_row_present]
+    required = [
+        result_present,
+        run_dir_present,
+        run_config_present,
+        run_config_loads,
+        run_stage_matches_entry,
+        routing_report_present,
+        compute_row_present,
+        compute_stage_matches_run_config,
+    ]
     if baseline_required:
         required.append(baseline_comparison_present)
         required.append(baseline_comparison_views_present)
@@ -336,6 +375,15 @@ def _package_status(checks: dict[str, bool], entries: list[dict[str, Any]]) -> s
 
 def _path_exists(value: Any) -> bool:
     return value is not None and Path(str(value)).exists()
+
+
+def _load_config_if_exists(path: Path | None) -> dict[str, Any]:
+    if path is None or not path.exists():
+        return {}
+    try:
+        return load_config(path)
+    except Exception:
+        return {}
 
 
 def _read_json_if_exists(path: Path) -> dict[str, Any]:

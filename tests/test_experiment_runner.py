@@ -220,6 +220,8 @@ def test_experiment_package_report_passes_complete_package(tmp_path: Path) -> No
     candidate_run = tmp_path / "candidate_run"
     baseline_run.mkdir()
     candidate_run.mkdir()
+    _write_config_resolved(baseline_run, entries[0])
+    _write_config_resolved(candidate_run, entries[1])
     baseline_routing = baseline_run / "routing_report.json"
     candidate_routing = candidate_run / "routing_report.json"
     baseline_routing.write_text("{}", encoding="utf-8")
@@ -230,9 +232,14 @@ def test_experiment_package_report_passes_complete_package(tmp_path: Path) -> No
             {
                 "baseline_run": str(baseline_run),
                 "runs": [
-                    {"run_dir": str(baseline_run), "validation_loss": 10.0},
+                    {
+                        "run_dir": str(baseline_run),
+                        "stage": load_config(entries[0].train_config)["stage"],
+                        "validation_loss": 10.0,
+                    },
                     {
                         "run_dir": str(candidate_run),
+                        "stage": load_config(entries[1].train_config)["stage"],
                         "validation_loss": 9.9,
                         "baseline_comparison": {
                             "same_parameter_count_view": True,
@@ -263,6 +270,9 @@ def test_experiment_package_report_passes_complete_package(tmp_path: Path) -> No
 
     assert report["overall_status"] == "pass"
     assert report["checks"]["all_entries_have_results"] is True
+    assert report["checks"]["all_results_have_run_config"] is True
+    assert report["checks"]["all_run_stages_match_manifest"] is True
+    assert report["checks"]["all_compute_rows_match_run_stage"] is True
     assert report["checks"]["non_baseline_compute_comparisons_present"] is True
     assert report["checks"]["non_baseline_compute_comparison_views_present"] is True
     assert [entry["status"] for entry in report["entries"]] == ["pass", "pass"]
@@ -275,13 +285,20 @@ def test_experiment_package_report_warns_missing_compute_row(tmp_path: Path) -> 
     candidate_run = tmp_path / "candidate_run"
     baseline_run.mkdir()
     candidate_run.mkdir()
+    _write_config_resolved(baseline_run, entries[0])
+    _write_config_resolved(candidate_run, entries[1])
     baseline_routing = baseline_run / "routing_report.json"
     candidate_routing = candidate_run / "routing_report.json"
     baseline_routing.write_text("{}", encoding="utf-8")
     candidate_routing.write_text("{}", encoding="utf-8")
     compute_report = tmp_path / "compute_report.json"
     compute_report.write_text(
-        json.dumps({"baseline_run": str(baseline_run), "runs": [{"run_dir": str(baseline_run)}]}),
+        json.dumps(
+            {
+                "baseline_run": str(baseline_run),
+                "runs": [{"run_dir": str(baseline_run), "stage": load_config(entries[0].train_config)["stage"]}],
+            }
+        ),
         encoding="utf-8",
     )
     results = [
@@ -312,6 +329,8 @@ def test_experiment_package_report_warns_incomplete_baseline_comparison(tmp_path
     candidate_run = tmp_path / "candidate_run"
     baseline_run.mkdir()
     candidate_run.mkdir()
+    _write_config_resolved(baseline_run, entries[0])
+    _write_config_resolved(candidate_run, entries[1])
     baseline_routing = baseline_run / "routing_report.json"
     candidate_routing = candidate_run / "routing_report.json"
     baseline_routing.write_text("{}", encoding="utf-8")
@@ -322,9 +341,14 @@ def test_experiment_package_report_warns_incomplete_baseline_comparison(tmp_path
             {
                 "baseline_run": str(baseline_run),
                 "runs": [
-                    {"run_dir": str(baseline_run), "validation_loss": 10.0},
+                    {
+                        "run_dir": str(baseline_run),
+                        "stage": load_config(entries[0].train_config)["stage"],
+                        "validation_loss": 10.0,
+                    },
                     {
                         "run_dir": str(candidate_run),
+                        "stage": load_config(entries[1].train_config)["stage"],
                         "validation_loss": 9.9,
                         "baseline_comparison": {"validation_loss_delta": -0.1},
                     },
@@ -354,3 +378,136 @@ def test_experiment_package_report_warns_incomplete_baseline_comparison(tmp_path
     assert report["entries"][1]["baseline_comparison_present"] is True
     assert report["entries"][1]["baseline_comparison_views_present"] is False
     assert report["entries"][1]["status"] == "warn"
+
+
+def test_experiment_package_report_warns_run_stage_mismatch(tmp_path: Path) -> None:
+    plan = build_experiment_plan("configs/experiments/tiny_position_ablations.yaml", include_baseline=True)
+    entries = plan.entries[:2]
+    baseline_run = tmp_path / "baseline_run"
+    candidate_run = tmp_path / "candidate_run"
+    baseline_run.mkdir()
+    candidate_run.mkdir()
+    _write_config_resolved(baseline_run, entries[0])
+    _write_config_resolved(candidate_run, entries[1], stage="stage1_fixed_route")
+    baseline_routing = baseline_run / "routing_report.json"
+    candidate_routing = candidate_run / "routing_report.json"
+    baseline_routing.write_text("{}", encoding="utf-8")
+    candidate_routing.write_text("{}", encoding="utf-8")
+    compute_report = tmp_path / "compute_report.json"
+    compute_report.write_text(
+        json.dumps(
+            {
+                "baseline_run": str(baseline_run),
+                "runs": [
+                    {
+                        "run_dir": str(baseline_run),
+                        "stage": load_config(entries[0].train_config)["stage"],
+                        "validation_loss": 10.0,
+                    },
+                    {
+                        "run_dir": str(candidate_run),
+                        "stage": "stage1_fixed_route",
+                        "validation_loss": 9.9,
+                        "baseline_comparison": {
+                            "same_parameter_count_view": True,
+                            "same_active_compute_view": True,
+                            "similar_training_flops_view": True,
+                            "validation_loss_delta": -0.1,
+                        },
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    results = [
+        {**entries[0].to_json(), "run_dir": str(baseline_run), "routing_report": str(baseline_routing)},
+        {**entries[1].to_json(), "run_dir": str(candidate_run), "routing_report": str(candidate_routing)},
+    ]
+
+    output = make_experiment_package_report(
+        plan,
+        results,
+        entries=entries,
+        baseline_run=baseline_run,
+        compute_report_path=compute_report,
+        output_path=tmp_path / "package_report.json",
+    )
+    report = json.loads(output.read_text(encoding="utf-8"))
+    candidate = report["entries"][1]
+
+    assert report["overall_status"] == "warn"
+    assert report["checks"]["all_run_stages_match_manifest"] is False
+    assert candidate["expected_stage"] == load_config(entries[1].train_config)["stage"]
+    assert candidate["run_stage"] == "stage1_fixed_route"
+    assert candidate["run_stage_matches_entry"] is False
+
+
+def test_experiment_package_report_warns_compute_stage_mismatch(tmp_path: Path) -> None:
+    plan = build_experiment_plan("configs/experiments/tiny_position_ablations.yaml", include_baseline=True)
+    entries = plan.entries[:2]
+    baseline_run = tmp_path / "baseline_run"
+    candidate_run = tmp_path / "candidate_run"
+    baseline_run.mkdir()
+    candidate_run.mkdir()
+    _write_config_resolved(baseline_run, entries[0])
+    _write_config_resolved(candidate_run, entries[1])
+    baseline_routing = baseline_run / "routing_report.json"
+    candidate_routing = candidate_run / "routing_report.json"
+    baseline_routing.write_text("{}", encoding="utf-8")
+    candidate_routing.write_text("{}", encoding="utf-8")
+    compute_report = tmp_path / "compute_report.json"
+    compute_report.write_text(
+        json.dumps(
+            {
+                "baseline_run": str(baseline_run),
+                "runs": [
+                    {
+                        "run_dir": str(baseline_run),
+                        "stage": load_config(entries[0].train_config)["stage"],
+                        "validation_loss": 10.0,
+                    },
+                    {
+                        "run_dir": str(candidate_run),
+                        "stage": "stage1_fixed_route",
+                        "validation_loss": 9.9,
+                        "baseline_comparison": {
+                            "same_parameter_count_view": True,
+                            "same_active_compute_view": True,
+                            "similar_training_flops_view": True,
+                            "validation_loss_delta": -0.1,
+                        },
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    results = [
+        {**entries[0].to_json(), "run_dir": str(baseline_run), "routing_report": str(baseline_routing)},
+        {**entries[1].to_json(), "run_dir": str(candidate_run), "routing_report": str(candidate_routing)},
+    ]
+
+    output = make_experiment_package_report(
+        plan,
+        results,
+        entries=entries,
+        baseline_run=baseline_run,
+        compute_report_path=compute_report,
+        output_path=tmp_path / "package_report.json",
+    )
+    report = json.loads(output.read_text(encoding="utf-8"))
+    candidate = report["entries"][1]
+
+    assert report["overall_status"] == "warn"
+    assert report["checks"]["all_compute_rows_match_run_stage"] is False
+    assert candidate["run_stage"] == load_config(entries[1].train_config)["stage"]
+    assert candidate["compute_stage"] == "stage1_fixed_route"
+    assert candidate["compute_stage_matches_run_config"] is False
+
+
+def _write_config_resolved(run_dir: Path, entry, *, stage: str | None = None) -> None:
+    config = load_config(entry.train_config)
+    if stage is not None:
+        config["stage"] = stage
+    (run_dir / "config_resolved.yaml").write_text(yaml.safe_dump(config), encoding="utf-8")
