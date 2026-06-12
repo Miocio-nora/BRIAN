@@ -6,7 +6,7 @@ import yaml
 
 torch = pytest.importorskip("torch")
 
-from brian_sphere_llm.eval.pseudo_route_curriculum import make_pseudo_route_curriculum_report
+from brian_sphere_llm.eval.pseudo_route_curriculum import _overall_status, make_pseudo_route_curriculum_report
 from brian_sphere_llm.routing.pseudo_policy import mixed_skip_recur_actions
 from brian_sphere_llm.utils.config import load_config
 
@@ -80,6 +80,12 @@ def test_pseudo_route_curriculum_report_uses_baseline_difficulty_bins(tmp_path: 
     assert report["checks"]["supervised_out_targets_present"] is True
     assert report["by_difficulty"]["easy"]["mean_internal_route_steps"] == 2.0
     assert report["by_difficulty"]["hard"]["recur_transition_count"] == 1
+
+
+def test_pseudo_route_curriculum_status_requires_explicit_boolean_true_checks() -> None:
+    assert _overall_status({"a": True, "b": True}) == "pass"
+    assert _overall_status({"a": True, "b": "yes"}) == "fail"
+    assert _overall_status({"a": "yes", "b": 1}) == "fail"
 
 
 def test_pseudo_route_curriculum_report_fails_when_hard_lacks_recurrence(tmp_path: Path) -> None:

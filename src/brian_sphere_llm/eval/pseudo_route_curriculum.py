@@ -79,13 +79,17 @@ def make_pseudo_route_curriculum_report(
         "sample_count": len(rows),
         "by_difficulty": by_difficulty,
         "checks": checks,
-        "overall_status": "pass" if all(checks.values()) else "fail",
+        "overall_status": _overall_status(checks),
     }
     if output_path is None:
         output_path = run_dir / "pseudo_route_curriculum_report.json"
     output_path = Path(output_path)
     write_json(report, output_path)
     return output_path
+
+
+def _overall_status(checks: dict[str, bool]) -> str:
+    return "pass" if all(value is True for value in checks.values()) else "fail"
 
 
 def _sample_rows(samples: list[dict[str, Any]], actions: list["torch.Tensor"], *, out_action: int) -> list[dict[str, Any]]:
