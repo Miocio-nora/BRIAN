@@ -148,6 +148,33 @@ def test_parallel_passing_report_fails_missing_branch_delta_memory(tmp_path: Pat
     assert report["checks"]["branch_delta_memory_measured"] is False
 
 
+def test_parallel_passing_report_requires_parallel_route_mode(tmp_path: Path) -> None:
+    run_dir = _write_run(
+        tmp_path,
+        beam_size=2,
+        branch_cost=0.01,
+        window_slots=3,
+        routing_mode="scheduled",
+        train_rows=[
+            {
+                "parallel_branch_count_mean": 2.0,
+                "parallel_score_margin_mean": 0.2,
+                "parallel_delta_cache_slots_max": 1.0,
+            },
+        ],
+    )
+
+    report_path = make_parallel_passing_report(run_dir)
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+
+    assert report["overall_status"] == "fail"
+    assert report["routing"]["mode"] == "scheduled"
+    assert report["checks"]["stage6_parallel_stage"] is True
+    assert report["checks"]["parallel_passing_enabled"] is True
+    assert report["checks"]["parallel_route_selected"] is False
+    assert report["checks"]["parallel_branch_active"] is True
+
+
 def test_parallel_passing_report_rejects_boolean_numeric_metrics(tmp_path: Path) -> None:
     run_dir = tmp_path / "parallel_bool"
     run_dir.mkdir()
@@ -228,12 +255,13 @@ def _write_run(
     train_rows: list[dict],
     branch_score_decay: float = 0.99,
     include_eval_delta: bool = True,
+    routing_mode: str = "parallel",
 ) -> Path:
     run_dir = root / "parallel"
     run_dir.mkdir()
     config = {
         "stage": "stage6_parallel_passing",
-        "routing": {"mode": "parallel"},
+        "routing": {"mode": routing_mode},
         "model_config_resolved": {
             "parallel_passing": True,
             "beam_size": beam_size,

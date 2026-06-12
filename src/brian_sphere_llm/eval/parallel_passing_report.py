@@ -40,11 +40,12 @@ def make_parallel_passing_report(
         "model_config_resolved.parallel_passing",
     )
     global_window_slots = int(_num(model_config.get("global_window_slots")) or 0)
+    routing_mode = _routing_mode(config)
     parallel_stage = str(config.get("stage", "")).startswith("stage6") or str(config.get("stage", "")).startswith("stage7")
     checks = {
         "stage6_parallel_stage": parallel_stage,
         "parallel_passing_enabled": parallel_passing_enabled,
-        "parallel_route_selected": parallel_stage or _routing_mode(config) == "parallel",
+        "parallel_route_selected": routing_mode == "parallel",
         "shared_base_global_memory_enabled": global_kv_enabled,
         "beam_size_present": beam_size >= 1,
         "beam_size_within_limit": beam_size >= 1 and beam_size <= max_beam_size,
@@ -89,7 +90,7 @@ def make_parallel_passing_report(
             "memory_policy": "shared_base_global_kv_with_branch_delta" if global_kv_enabled else "local_only",
         },
         "routing": {
-            "mode": _routing_mode(config),
+            "mode": routing_mode,
             "parallel_branch_count": _summary(branch_counts),
             "parallel_score_margin": _summary(score_margins),
             "parallel_delta_cache_slots": _summary(delta_cache_slots),
