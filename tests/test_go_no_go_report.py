@@ -1044,9 +1044,80 @@ def test_go_no_go_r1b_success_passes_with_compute_adjusted_advantage(tmp_path: P
     assert memory[0]["global_cache_capacity_ratio"] == 0.25
     assert latency[0]["inference_latency_ms_per_token_ratio"] == 1.5
     assert adjusted["passed"] is True
+    assert latency[0]["baseline_contract_passed"] is True
     assert adjusted["evidence"]["candidates"][0]["comparison_view_contract_passed"] is True
     assert adjusted["evidence"]["candidates"][0]["baseline_contract_passed"] is True
     assert adjusted["evidence"]["candidates"][0]["compute_adjusted_loss_delta"] < 0.0
+
+
+def test_go_no_go_r1b_success_requires_latency_declared_baseline_contract(tmp_path: Path) -> None:
+    stage_gate = _write_json(tmp_path / "stage_gate.json", _passing_stage_gate())
+    compute = _write_json(
+        tmp_path / "compute.json",
+        {
+            "run_count": 3,
+            "baseline_run": "baseline",
+            "runs": [
+                {
+                    "run_dir": "baseline",
+                    "stage": "stage0_baseline",
+                    "validation_loss": 10.0,
+                    "inference_latency_ms_per_token_latest": 1.0,
+                },
+                {
+                    "run_dir": "r1b_candidate",
+                    "stage": "stage6_parallel_passing",
+                    "validation_loss": 9.8,
+                    "inference_latency_ms_per_token_latest": 3.0,
+                    "baseline_comparison": {
+                        "baseline_run": "baseline",
+                        "same_parameter_count_view": True,
+                        "same_active_compute_view": True,
+                        "similar_training_flops_view": True,
+                        "estimated_flops_per_token_ratio": 0.9,
+                        "inference_latency_ms_per_token_ratio": 3.0,
+                        "validation_loss_delta": -0.2,
+                    },
+                },
+                {
+                    "run_dir": "rogue_latency_candidate",
+                    "stage": "stage6_parallel_passing",
+                    "validation_loss": 11.0,
+                    "inference_latency_ms_per_token_latest": 1.1,
+                    "baseline_comparison": {
+                        "baseline_run": "other_baseline",
+                        "same_parameter_count_view": True,
+                        "same_active_compute_view": True,
+                        "similar_training_flops_view": True,
+                        "estimated_flops_per_token_ratio": 1.0,
+                        "inference_latency_ms_per_token_ratio": 1.1,
+                        "validation_loss_delta": 1.0,
+                    },
+                },
+            ],
+        },
+    )
+    long_context = _write_json(tmp_path / "long_context.json", _controlled_memory_compare())
+
+    output = make_go_no_go_report(
+        stage_gate_report_path=stage_gate,
+        compute_report_path=compute,
+        long_context_compare_report_path=long_context,
+        phase="r1b_success",
+        output_path=tmp_path / "go.json",
+    )
+    report = json.loads(output.read_text(encoding="utf-8"))
+    criteria = {item["name"]: item for item in report["phases"]["r1b_success"]["criteria"]}
+    latency = criteria["inference_latency_remains_acceptable"]
+    candidates = {item["run_dir"]: item for item in latency["evidence"]["candidates"]}
+
+    assert report["overall_status"] == "fail"
+    assert latency["status"] == "fail"
+    assert candidates["r1b_candidate"]["baseline_contract_passed"] is True
+    assert candidates["r1b_candidate"]["passes_latency_proxy"] is False
+    assert candidates["rogue_latency_candidate"]["baseline_contract_passed"] is False
+    assert candidates["rogue_latency_candidate"]["baseline_contract_checks"]["comparison_targets_declared_baseline"] is False
+    assert candidates["rogue_latency_candidate"]["passes_latency_proxy"] is False
 
 
 def test_go_no_go_r1b_success_requires_compute_baseline_views(tmp_path: Path) -> None:

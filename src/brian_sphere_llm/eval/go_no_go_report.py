@@ -816,6 +816,8 @@ def _inference_latency_candidates(
         latency_ratio = _num(comparison.get("inference_latency_ms_per_token_ratio"))
         if latency_ratio is None:
             latency_ratio = _ratio(latency, baseline_latency)
+        baseline_checks = _compute_baseline_contract_checks(report, row, comparison)
+        baseline_contract_passed = all(value is True for value in baseline_checks.values())
         candidates.append(
             {
                 "run_dir": row.get("run_dir"),
@@ -824,7 +826,11 @@ def _inference_latency_candidates(
                 "baseline_inference_latency_ms_per_token": baseline_latency,
                 "inference_latency_ms_per_token_ratio": latency_ratio,
                 "tokens_per_second_ratio": _num(comparison.get("tokens_per_second_ratio")),
-                "passes_latency_proxy": latency_ratio is not None and latency_ratio <= max_inference_latency_ratio,
+                "baseline_contract_checks": baseline_checks,
+                "baseline_contract_passed": baseline_contract_passed,
+                "passes_latency_proxy": baseline_contract_passed
+                and latency_ratio is not None
+                and latency_ratio <= max_inference_latency_ratio,
             }
         )
     return candidates
