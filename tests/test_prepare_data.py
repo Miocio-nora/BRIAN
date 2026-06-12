@@ -28,6 +28,7 @@ def test_prepare_tiny_synthetic_data(tmp_path: Path) -> None:
     assert (output_dir / "val.idx").exists()
     assert (output_dir / "manifest.jsonl").exists()
     assert Path(cfg["manifest_path"]).exists()
+    assert not (output_dir / "source_text").exists()
     assert (output_dir / "tokenizer.json").exists()
     assert (output_dir / "tokenizer_config.json").exists()
     assert (output_dir / "tokenizer_metadata.json").exists()
@@ -70,6 +71,7 @@ def test_prepare_tiny_synthetic_data(tmp_path: Path) -> None:
     assert stats["manifest_token_hashes_verified"] is True
     assert stats["manifest_source_text_hash_failure_count"] == 0
     assert stats["manifest_token_hash_failure_count"] == 0
+    assert stats["manifest_source_text_storage"] == "none"
     assert stats["tokenizer_artifact_count"] >= 4
     assert stats["tokenizer_artifacts_present"] is True
     assert stats["tokenizer_artifact_hashes_present"] is True
@@ -83,6 +85,7 @@ def test_prepare_tiny_synthetic_data(tmp_path: Path) -> None:
     assert stats["source_mixture_expected"] == stats["source_mixture_realized_share"]
     assert math.isclose(sum(stats["source_mixture_expected"].values()), 1.0)
     assert {row["created_at"] for row in manifest_rows} == {DEFAULT_MANIFEST_CREATED_AT}
+    assert manifest_rows[0]["path"].startswith("unsaved://")
     assert manifest_rows[0]["route_metadata"]["pseudo_route_type"] in {
         "advance",
         "early_exit",
@@ -106,6 +109,7 @@ def test_prepared_manifest_audit_detects_source_text_drift(tmp_path: Path) -> No
     cfg["target_tokens"] = 1000
     cfg["validation_tokens"] = 100
     cfg["synthetic_only"]["sample_count"] = 16
+    cfg["source_text"] = {"enabled": True}
     config_path = tmp_path / "data.yaml"
     save_yaml(cfg, config_path)
     output_dir = prepare_data(config_path)

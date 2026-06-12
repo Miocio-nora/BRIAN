@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-from brian_sphere_llm.data.pack import pack_fixed_length, read_token_bin, write_index, write_token_bin
+from brian_sphere_llm.data.pack import FixedLengthTokenBinWriter, pack_fixed_length, read_token_bin, write_index, write_token_bin
 from brian_sphere_llm.data.tokenize import SimpleByteTokenizer, tokenizer_metadata
 
 
@@ -35,4 +35,14 @@ def test_pack_and_bin_roundtrip(tmp_path: Path) -> None:
     idx_path = tmp_path / "train.idx"
     write_token_bin(sequences, bin_path)
     write_index(idx_path, sequence_length=3, num_sequences=2)
+    assert read_token_bin(bin_path) == [1, 2, 3, 4, 0, 0]
+
+
+def test_streaming_token_bin_writer_matches_fixed_length_pack(tmp_path: Path) -> None:
+    bin_path = tmp_path / "stream.bin"
+    with FixedLengthTokenBinWriter(bin_path, sequence_length=3, pad_token_id=0, flush_sequences=1) as writer:
+        writer.add_document([1, 2])
+        writer.add_document([3, 4])
+        assert writer.close() == 2
+
     assert read_token_bin(bin_path) == [1, 2, 3, 4, 0, 0]
