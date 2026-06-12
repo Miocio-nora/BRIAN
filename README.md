@@ -317,7 +317,7 @@ python scripts/eval.py \
   --runs <stage0_baseline_run> <routed_run_1> <routed_run_2>
 ```
 
-This writes `reports/compute_report.json` with parameter ratios, active layer eval ratios, estimated FLOPs/token, estimated GPU-hours, validation loss deltas, throughput ratios, latency/token, train step time, inference timing, and CUDA memory snapshots when available. Go/No-Go compute criteria require every compute-adjusted candidate to satisfy the same-parameter-count, same-active-compute, and similar-training-FLOPs baseline comparison views.
+This writes `reports/compute_report.json` with parameter ratios, active layer eval ratios, estimated FLOPs/token, estimated GPU-hours, estimated KV bytes/token, validation loss deltas, throughput ratios, latency/token, train step time, inference timing, and CUDA memory snapshots when available. Go/No-Go compute criteria require every compute-adjusted candidate to satisfy the same-parameter-count, same-active-compute, and similar-training-FLOPs baseline comparison views.
 
 Compare inference timing with and without hard `OUT` exits:
 

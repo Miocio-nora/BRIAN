@@ -84,7 +84,7 @@ def test_summarize_run_estimates_active_route_compute(tmp_path: Path) -> None:
             "batch_size": 2,
             "data_config_resolved": {"sequence_length": 8},
             "routing": {"mode": "scheduled", "hard_exit": False},
-            "model_config_resolved": {"top_k": 2},
+            "model_config_resolved": {"top_k": 2, "base": {"layers": 4, "d_model": 16}},
         },
         model_stats={
             "model_name": "brian_route_core",
@@ -115,6 +115,70 @@ def test_summarize_run_estimates_active_route_compute(tmp_path: Path) -> None:
     assert summary["train_latency_ms_per_token_mean"] == 0.5
     assert summary["inference_latency_ms_per_token_latest"] == 0.25
     assert summary["train_cuda_max_memory_allocated_mb_latest"] == 16.0
+    assert summary["sequence_length"] == 8
+    assert summary["kv_dtype_bytes"] == 2.0
+    assert summary["estimated_local_raw_kv_bytes_per_token_fp16"] == pytest.approx(256.0)
+    assert summary["estimated_global_cache_capacity_bytes_per_token_fp16"] == 0.0
+    assert summary["estimated_total_kv_bytes_per_token_fp16"] == pytest.approx(256.0)
+
+
+def test_summarize_run_estimates_global_kv_bytes_per_token(tmp_path: Path) -> None:
+    run = _write_run(
+        tmp_path,
+        "global_kv",
+        config={
+            "stage": "stage5_global_kv",
+            "batch_size": 1,
+            "data_config_resolved": {"sequence_length": 8},
+            "routing": {"mode": "scheduled"},
+            "model_config_resolved": {
+                "global_kv": True,
+                "global_code_dim": 8,
+                "global_sink_slots": 1,
+                "global_window_slots": 3,
+                "base": {"layers": 4, "d_model": 16},
+            },
+        },
+        model_stats={"model_name": "brian_global", "parameter_count": 200, "layers": 4},
+        routing_summary={"global_cache_slots_mean": 2.0},
+    )
+
+    summary = summarize_run(run)
+
+    assert summary["estimated_local_raw_kv_bytes_per_token_fp16"] == pytest.approx(256.0)
+    assert summary["estimated_global_cache_capacity_bytes_fp16"] == pytest.approx(64.0)
+    assert summary["estimated_global_cache_capacity_bytes_per_token_fp16"] == pytest.approx(8.0)
+    assert summary["estimated_global_cache_mean_bytes_fp16"] == pytest.approx(32.0)
+    assert summary["estimated_global_cache_mean_bytes_per_token_fp16"] == pytest.approx(4.0)
+    assert summary["estimated_total_kv_bytes_per_token_fp16"] == pytest.approx(264.0)
+
+
+def test_summarize_run_leaves_global_kv_bytes_unknown_without_code_dim(tmp_path: Path) -> None:
+    run = _write_run(
+        tmp_path,
+        "global_kv_missing_code_dim",
+        config={
+            "stage": "stage5_global_kv",
+            "batch_size": 1,
+            "data_config_resolved": {"sequence_length": 8},
+            "model_config_resolved": {
+                "global_kv": True,
+                "global_sink_slots": 1,
+                "global_window_slots": 3,
+                "base": {"layers": 4, "d_model": 16},
+            },
+        },
+        model_stats={"model_name": "brian_global", "parameter_count": 200, "layers": 4},
+        routing_summary={"global_cache_slots_mean": 2.0},
+    )
+
+    summary = summarize_run(run)
+
+    assert summary["estimated_local_raw_kv_bytes_per_token_fp16"] == pytest.approx(256.0)
+    assert summary["estimated_global_cache_capacity_bytes_fp16"] is None
+    assert summary["estimated_global_cache_capacity_bytes_per_token_fp16"] is None
+    assert summary["estimated_global_cache_mean_bytes_fp16"] is None
+    assert summary["estimated_total_kv_bytes_per_token_fp16"] is None
 
 
 def test_summarize_run_uses_later_top_k_for_weighted_fusion_compute(tmp_path: Path) -> None:
@@ -341,7 +405,7 @@ def test_make_compute_report_compares_to_baseline(tmp_path: Path) -> None:
             "batch_size": 2,
             "data_config_resolved": {"sequence_length": 8},
         },
-        model_stats={"model_name": "baseline", "parameter_count": 100, "layers": 4},
+        model_stats={"model_name": "baseline", "parameter_count": 100, "layers": 4, "d_model": 16},
         validation_loss=10.0,
         tokens_per_second=200,
         train_latency_ms_per_token=0.5,
@@ -361,6 +425,7 @@ def test_make_compute_report_compares_to_baseline(tmp_path: Path) -> None:
             "pre_blocks": 1,
             "route_pool_blocks": 2,
             "post_blocks": 1,
+            "d_model": 16,
         },
         routing_summary={"average_route_steps": 3.0, "active_block_evals_per_token": 2 / 3},
         validation_loss=10.2,
@@ -378,3 +443,5 @@ def test_make_compute_report_compares_to_baseline(tmp_path: Path) -> None:
     assert comparison["validation_loss_delta"] == pytest.approx(0.2)
     assert comparison["train_latency_ms_per_token_ratio"] == pytest.approx(1.5)
     assert comparison["inference_latency_ms_per_token_ratio"] == pytest.approx(2.0)
+    assert comparison["estimated_local_raw_kv_bytes_per_token_ratio"] == pytest.approx(1.0)
+    assert comparison["estimated_total_kv_bytes_per_token_ratio"] == pytest.approx(1.0)

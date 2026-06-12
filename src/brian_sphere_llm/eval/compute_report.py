@@ -11,6 +11,8 @@ from brian_sphere_llm.utils.logging import write_json
 
 DEFAULT_TFLOPS_PER_GPU = 989.0
 DEFAULT_UTILIZATION = 0.35
+REPO_ROOT = Path(__file__).resolve().parents[3]
+KV_DTYPE_BYTES = 2.0
 
 
 def estimate_flops(params: int, tokens: int, gamma: float = 1.0) -> float:
@@ -83,6 +85,7 @@ def summarize_run(
     physical_layers = _physical_layer_count(model_stats, config)
     active_layer_evals = _active_layer_evals(model_stats, config, routing_summary)
     active_layer_ratio = active_layer_evals / physical_layers if physical_layers > 0 else None
+    sequence_length = _sequence_length(config)
     trained_tokens = _trained_tokens(config, final_train, final_eval)
     estimated_flops_per_token = 6.0 * parameter_count * (active_layer_ratio if active_layer_ratio is not None else 1.0)
     estimated_training_flops = estimated_flops_per_token * trained_tokens
@@ -105,6 +108,7 @@ def summarize_run(
         "gradient_accumulation_steps": _gradient_accumulation_steps(config),
         "local_effective_batch_size": _batch_size(config) * _gradient_accumulation_steps(config),
         "effective_batch_size": _batch_size(config) * _gradient_accumulation_steps(config) * _world_size(config),
+        "sequence_length": sequence_length,
         "parameter_count": parameter_count,
         "physical_layer_count": physical_layers,
         "active_layer_evals_per_token": active_layer_evals,
@@ -129,6 +133,7 @@ def summarize_run(
         "train_cuda_max_memory_allocated_mb_latest": _num(final_train.get("cuda_max_memory_allocated_mb")),
         "eval_cuda_memory_allocated_mb_latest": _num(final_eval.get("cuda_memory_allocated_mb")),
         "eval_cuda_max_memory_allocated_mb_latest": _num(final_eval.get("cuda_max_memory_allocated_mb")),
+        **_kv_byte_estimates(config, model_stats, routing_summary),
         "routing": {
             "average_route_steps": _num(routing_summary.get("average_route_steps")),
             "active_internal_decision_fraction": _num(routing_summary.get("active_block_evals_per_token")),
@@ -179,6 +184,14 @@ def compare_to_baseline(summary: dict[str, Any], baseline: dict[str, Any]) -> di
         "tokens_per_second_ratio": tokens_per_second_ratio,
         "train_latency_ms_per_token_ratio": train_latency_ratio,
         "inference_latency_ms_per_token_ratio": inference_latency_ratio,
+        "estimated_local_raw_kv_bytes_per_token_ratio": _ratio(
+            summary.get("estimated_local_raw_kv_bytes_per_token_fp16"),
+            baseline.get("estimated_local_raw_kv_bytes_per_token_fp16"),
+        ),
+        "estimated_total_kv_bytes_per_token_ratio": _ratio(
+            summary.get("estimated_total_kv_bytes_per_token_fp16"),
+            baseline.get("estimated_total_kv_bytes_per_token_fp16"),
+        ),
     }
 
 
@@ -230,6 +243,106 @@ def _trained_tokens(config: dict[str, Any], final_train: dict[str, Any], final_e
     sequence_length = _sequence_length(config)
     return int(step * batch_size * gradient_accumulation_steps * sequence_length * _world_size(config))
 
+
+def _kv_byte_estimates(
+    config: dict[str, Any],
+    model_stats: dict[str, Any],
+    routing_summary: dict[str, Any],
+) -> dict[str, float | None]:
+    model_config = config.get("model_config_resolved", {})
+    model_config = model_config if isinstance(model_config, dict) else {}
+    base_config = _base_model_config(model_config)
+    layer_count = _kv_layer_count(model_stats, config, base_config)
+    d_model = _kv_d_model(model_stats, model_config, base_config)
+    sequence_length = _sequence_length(config)
+    local_bytes_per_token = layer_count * d_model * 2.0 * KV_DTYPE_BYTES if layer_count and d_model else None
+    global_enabled = _model_bool_value(model_config, "global_kv", default=False)
+    global_code_dim = _num(model_config.get("global_code_dim"))
+    global_sink_slots = _num(model_config.get("global_sink_slots")) or 0.0
+    global_window_slots = _num(model_config.get("global_window_slots")) or 0.0
+    global_capacity_slots = global_sink_slots + global_window_slots if global_enabled else 0.0
+    global_capacity_bytes = None
+    if global_enabled and global_code_dim is not None:
+        global_capacity_bytes = global_capacity_slots * global_code_dim * KV_DTYPE_BYTES
+    elif not global_enabled:
+        global_capacity_bytes = 0.0
+    global_mean_slots = _num(routing_summary.get("global_cache_slots_mean"))
+    global_mean_bytes = (
+        global_mean_slots * global_code_dim * KV_DTYPE_BYTES
+        if global_enabled and global_mean_slots is not None and global_code_dim is not None
+        else None
+    )
+    global_capacity_bytes_per_token = _ratio(global_capacity_bytes, sequence_length)
+    global_mean_bytes_per_token = _ratio(global_mean_bytes, sequence_length)
+    if local_bytes_per_token is None or (global_enabled and global_capacity_bytes_per_token is None):
+        total_bytes_per_token = None
+    else:
+        total_bytes_per_token = local_bytes_per_token + (global_capacity_bytes_per_token or 0.0)
+    return {
+        "kv_estimation": "fp16_kv_bytes_per_token_and_global_code_bytes",
+        "kv_dtype_bytes": KV_DTYPE_BYTES,
+        "estimated_local_raw_kv_bytes_per_token_fp16": local_bytes_per_token,
+        "estimated_global_cache_capacity_bytes_fp16": global_capacity_bytes if global_enabled else 0.0,
+        "estimated_global_cache_capacity_bytes_per_token_fp16": global_capacity_bytes_per_token
+        if global_enabled
+        else 0.0,
+        "estimated_global_cache_mean_bytes_fp16": global_mean_bytes,
+        "estimated_global_cache_mean_bytes_per_token_fp16": global_mean_bytes_per_token,
+        "estimated_total_kv_bytes_per_token_fp16": total_bytes_per_token,
+    }
+
+
+def _kv_layer_count(model_stats: dict[str, Any], config: dict[str, Any], base_config: dict[str, Any]) -> float | None:
+    for value in (
+        base_config.get("layers"),
+        model_stats.get("layers"),
+        config.get("model_config_resolved", {}).get("layers")
+        if isinstance(config.get("model_config_resolved"), dict)
+        else None,
+    ):
+        number = _num(value)
+        if number is not None:
+            return number
+    physical_layers = _physical_layer_count(model_stats, config)
+    return float(physical_layers) if physical_layers > 0 else None
+
+
+def _kv_d_model(
+    model_stats: dict[str, Any],
+    model_config: dict[str, Any],
+    base_config: dict[str, Any],
+) -> float | None:
+    for value in (
+        base_config.get("d_model"),
+        model_stats.get("d_model"),
+        model_config.get("d_model"),
+    ):
+        number = _num(value)
+        if number is not None:
+            return number
+    return None
+
+
+def _base_model_config(model_config: dict[str, Any]) -> dict[str, Any]:
+    base = model_config.get("base")
+    if isinstance(base, dict):
+        return base
+    base_config = model_config.get("base_config")
+    if not base_config:
+        return {}
+    base_path = Path(str(base_config))
+    candidates = []
+    if base_path.is_absolute():
+        candidates.append(base_path)
+    candidates.append(REPO_ROOT / "configs" / "model" / base_path.name)
+    candidates.append(base_path)
+    for candidate in candidates:
+        if candidate.exists():
+            try:
+                return load_config(candidate)
+            except Exception:
+                return {}
+    return {}
 
 def _batch_size(config: dict[str, Any]) -> int:
     value = config.get("batch_size")
