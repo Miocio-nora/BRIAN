@@ -62,11 +62,15 @@ def test_r350_scaling_package_coverage_passes(tmp_path: Path) -> None:
     assert report["checks"]["planned_parameter_estimates_in_range"] is True
     assert [row["id"] for row in report["requirements"]] == ["B0", "B1", "B2", "B3", "B4"]
     assert _requirement(report, "B2")["checks"]["model_flags_match"] is True
+    assert _requirement(report, "B4")["checks"]["stage_matches"] is True
+    assert _requirement(report, "B4")["checks"]["routing_flags_match"] is True
     for entry_id in ["B0", "B1", "B2", "B3", "B4"]:
         assert _requirement(report, entry_id)["checks"]["train_flags_match"] is True
     assert _entry(report, "B0")["model"]["estimated_parameter_count_in_plan_range"] is True
     assert _entry(report, "B1")["model"]["estimated_parameter_count_in_plan_range"] is True
     assert _entry(report, "B1")["train"]["precision"] == "bf16"
+    assert _entry(report, "B4")["stage"] == "stage3_pseudo_skip_recur"
+    assert _entry(report, "B4")["routing"]["pseudo_policy"] == "mixed_skip_recur"
 
 
 def test_r1b_pilot_package_coverage_passes(tmp_path: Path) -> None:
@@ -504,6 +508,45 @@ def test_package_a_coverage_requires_a2_sequential_pseudo_policy(tmp_path: Path)
     assert requirement["checks"]["mode_matches"] is True
     assert requirement["checks"]["routing_flags_match"] is False
     assert _entry(report, "A2")["routing"]["pseudo_policy"] == "mixed_skip_recur"
+
+
+def test_package_b_coverage_requires_b4_mixed_skip_recur_policy(tmp_path: Path) -> None:
+    manifest = tmp_path / "wrong_b4_policy.yaml"
+    source = load_config("configs/experiments/route_core_r350_scaling.yaml")
+    sequential_b4_train = tmp_path / "sequential_b4_train.yaml"
+    sequential_b4_train.write_text(
+        yaml.safe_dump(
+            {
+                "extends": str(Path("configs/train/ablation_b4_r350_difficulty_route.yaml").resolve()),
+                "stage": "stage3_pseudo_skip_recur",
+                "routing": {
+                    "mode": "pseudo",
+                    "pseudo_policy": "sequential",
+                },
+                "precision": "bf16",
+            }
+        ),
+        encoding="utf-8",
+    )
+    for row in source["ablations"]:
+        if row["id"] == "B4":
+            row["train_config"] = str(sequential_b4_train)
+    manifest.write_text(yaml.safe_dump(source), encoding="utf-8")
+
+    output = make_experiment_coverage_report(
+        manifest,
+        output_path=tmp_path / "coverage.json",
+        profile="package_b",
+    )
+    report = json.loads(output.read_text(encoding="utf-8"))
+    requirement = _requirement(report, "B4")
+
+    assert report["overall_status"] == "fail"
+    assert requirement["checks"]["entry_present"] is True
+    assert requirement["checks"]["stage_matches"] is True
+    assert requirement["checks"]["mode_matches"] is True
+    assert requirement["checks"]["routing_flags_match"] is False
+    assert _entry(report, "B4")["routing"]["pseudo_policy"] == "sequential"
 
 
 def test_experiment_coverage_rejects_boolean_numeric_model_flags(tmp_path: Path) -> None:

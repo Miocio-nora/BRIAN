@@ -196,7 +196,9 @@ def _requirements(profile: str, plan: ExperimentPlan, entries: list[dict[str, An
                 _req(
                     "B4",
                     "350M difficulty-conditioned route",
+                    stage="stage3_pseudo_skip_recur",
                     mode="pseudo",
+                    routing_flags={"pseudo_policy": "mixed_skip_recur"},
                     train_flags={"precision": "bf16"},
                 ),
             ],
