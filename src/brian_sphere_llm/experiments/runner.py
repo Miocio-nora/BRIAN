@@ -175,6 +175,8 @@ def make_experiment_package_report(
     compute_by_run = _compute_rows_by_run(compute_rows)
     results_by_id = {str(result.get("id")): result for result in results}
     baseline_run_str = str(baseline_run or compute_report.get("baseline_run") or "")
+    result_run_dirs = {str(result["run_dir"]) for result in results if result.get("run_dir") is not None}
+    compute_run_dirs = set(compute_by_run)
 
     entry_rows = []
     for entry in expected_entries:
@@ -240,6 +242,9 @@ def make_experiment_package_report(
         "all_run_stages_match_manifest": all(row["run_stage_matches_entry"] for row in entry_rows),
         "all_results_have_routing_report": all(row["routing_report_present"] for row in entry_rows),
         "compute_report_present": bool(compute_report),
+        "compute_report_run_count_matches_results": bool(result_run_dirs)
+        and len(compute_run_dirs) == len(result_run_dirs),
+        "compute_report_runs_match_results": bool(result_run_dirs) and compute_run_dirs == result_run_dirs,
         "all_results_have_compute_rows": all(row["compute_row_present"] for row in entry_rows),
         "all_compute_rows_match_run_stage": all(row["compute_stage_matches_run_config"] for row in entry_rows),
         "baseline_run_known": bool(baseline_run_str),
