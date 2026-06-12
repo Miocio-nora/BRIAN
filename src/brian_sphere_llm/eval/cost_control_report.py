@@ -101,9 +101,9 @@ def _analyze_cost_sweep(rows: list[dict[str, Any]], *, min_active_compute_range:
 def _status(checks: dict[str, bool]) -> str:
     if checks.get("has_multiple_cost_weights") is False:
         return "fail"
-    if all(checks.values()):
+    if all(value is True for value in checks.values()):
         return "pass"
-    if any(checks.values()):
+    if any(value is True for value in checks.values()):
         return "warn"
     return "fail"
 

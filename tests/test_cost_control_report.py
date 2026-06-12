@@ -3,7 +3,7 @@ from pathlib import Path
 
 import yaml
 
-from brian_sphere_llm.eval.cost_control_report import make_cost_control_report
+from brian_sphere_llm.eval.cost_control_report import _status, make_cost_control_report
 from brian_sphere_llm.utils.config import load_config
 
 
@@ -65,6 +65,13 @@ def test_make_cost_control_report_orders_and_scores_sweep(tmp_path: Path) -> Non
     assert report["analysis"]["checks"]["average_steps_not_increasing_with_cost"] is True
     assert report["analysis"]["average_route_steps_monotonic_nonincreasing"] is True
     assert report["analysis"]["cost_vs_p_output_correlation"] > 0.0
+
+
+def test_cost_control_status_requires_explicit_boolean_true_checks() -> None:
+    assert _status({"has_multiple_cost_weights": True, "a": True}) == "pass"
+    assert _status({"has_multiple_cost_weights": True, "a": "yes"}) == "warn"
+    assert _status({"has_multiple_cost_weights": "yes", "a": 1}) == "fail"
+    assert _status({"has_multiple_cost_weights": False, "a": True}) == "fail"
 
 
 def test_cost_control_report_requires_output_probability_trend(tmp_path: Path) -> None:

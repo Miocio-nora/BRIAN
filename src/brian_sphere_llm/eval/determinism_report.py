@@ -99,13 +99,17 @@ def make_eval_determinism_report(
         "second_eval": second,
         "comparison": comparison,
         "checks": checks,
-        "overall_status": "pass" if all(checks.values()) else "fail",
+        "overall_status": _overall_status(checks),
     }
     if output_path is None:
         output_path = run_dir / "eval_determinism_report.json"
     output_path = Path(output_path)
     write_json(report, output_path)
     return output_path
+
+
+def _overall_status(checks: dict[str, bool]) -> str:
+    return "pass" if all(value is True for value in checks.values()) else "fail"
 
 
 def _eval_once(

@@ -50,7 +50,7 @@ def make_position_ablation_report(
         "any_valid_no_position_measurable_difference": reference_position_enabled and any_valid_no_position_measurable,
     }
     report = {
-        "overall_status": "pass" if all(checks.values()) else "fail",
+        "overall_status": _overall_status(checks),
         "checks": checks,
         "reference_run": reference,
         "candidate_count": len(candidates),
@@ -65,6 +65,10 @@ def make_position_ablation_report(
     output_path = Path(output_path)
     write_json(report, output_path)
     return output_path
+
+
+def _overall_status(checks: dict[str, bool]) -> str:
+    return "pass" if all(value is True for value in checks.values()) else "fail"
 
 
 def _summarize_run(run_dir: Path) -> dict[str, Any]:

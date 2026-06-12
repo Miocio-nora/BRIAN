@@ -7,6 +7,7 @@ torch = pytest.importorskip("torch")
 
 from brian_sphere_llm.data.pack import write_index, write_token_bin
 from brian_sphere_llm.eval.determinism_report import (
+    _overall_status,
     _effective_batch_size,
     _float_value,
     _int_value,
@@ -61,6 +62,12 @@ def test_eval_determinism_comparison_rejects_boolean_numeric_metrics() -> None:
             "within_tolerance": True,
         }
     ]
+
+
+def test_eval_determinism_status_requires_explicit_boolean_true_checks() -> None:
+    assert _overall_status({"a": True, "b": True}) == "pass"
+    assert _overall_status({"a": True, "b": "yes"}) == "fail"
+    assert _overall_status({"a": "yes", "b": 1}) == "fail"
 
 
 def test_eval_determinism_config_helpers_reject_boolean_values() -> None:

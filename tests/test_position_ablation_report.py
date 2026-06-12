@@ -3,7 +3,7 @@ from pathlib import Path
 
 import yaml
 
-from brian_sphere_llm.eval.position_ablation import make_position_ablation_report
+from brian_sphere_llm.eval.position_ablation import _overall_status, make_position_ablation_report
 from brian_sphere_llm.utils.config import load_config
 
 
@@ -45,6 +45,12 @@ def test_position_ablation_report_passes_on_metric_delta(tmp_path: Path) -> None
     assert comparison["checks"]["routing_metric_delta_measurable"] is True
     assert comparison["routing_metric_deltas"]["average_route_steps"] == -0.5
     assert comparison["measurable_routing_metric_deltas"]["position_norm_mean"] == -1.0
+
+
+def test_position_ablation_status_requires_explicit_boolean_true_checks() -> None:
+    assert _overall_status({"a": True, "b": True}) == "pass"
+    assert _overall_status({"a": True, "b": "yes"}) == "fail"
+    assert _overall_status({"a": "yes", "b": 1}) == "fail"
 
 
 def test_position_ablation_report_fails_without_difference(tmp_path: Path) -> None:

@@ -108,13 +108,17 @@ def make_fixed_route_stability_report(
         "max_abs_logit": max_abs_logit,
         "routing_summary": routing_summary,
         "checks": checks,
-        "overall_status": "pass" if all(checks.values()) else "fail",
+        "overall_status": _overall_status(checks),
     }
     if output_path is None:
         output_path = run_dir / "fixed_route_stability_report.json"
     output_path = Path(output_path)
     write_json(report, output_path)
     return output_path
+
+
+def _overall_status(checks: dict[str, bool]) -> str:
+    return "pass" if all(value is True for value in checks.values()) else "fail"
 
 
 def _route_matches_targets(route_info: dict[str, Any]) -> bool:

@@ -6,7 +6,11 @@ import pytest
 torch = pytest.importorskip("torch")
 
 from brian_sphere_llm.data.pack import write_index, write_token_bin
-from brian_sphere_llm.eval.fixed_route_stability import _mean_numeric_summaries, make_fixed_route_stability_report
+from brian_sphere_llm.eval.fixed_route_stability import (
+    _mean_numeric_summaries,
+    _overall_status,
+    make_fixed_route_stability_report,
+)
 from brian_sphere_llm.train.trainer import train_from_config
 from brian_sphere_llm.utils.config import load_config, save_yaml
 
@@ -41,6 +45,12 @@ def test_fixed_route_stability_summary_rejects_boolean_numeric_metrics() -> None
     assert "route_imitation_accuracy" not in summary
     assert "position_norm_mean" not in summary
     assert summary["route_entropy"] == 0.375
+
+
+def test_fixed_route_stability_status_requires_explicit_boolean_true_checks() -> None:
+    assert _overall_status({"a": True, "b": True}) == "pass"
+    assert _overall_status({"a": True, "b": "yes"}) == "fail"
+    assert _overall_status({"a": "yes", "b": 1}) == "fail"
 
 
 def test_fixed_route_stability_eval_config_resolves() -> None:
