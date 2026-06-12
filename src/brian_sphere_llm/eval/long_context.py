@@ -99,6 +99,12 @@ def make_long_context_report(
         sample_output_path = output_path.with_name(output_path.stem + "_samples.jsonl")
     sample_output_path = Path(sample_output_path)
     _write_jsonl(rows, sample_output_path)
+    overall = summarize_long_context_rows(rows)
+    coverage = _coverage_summary(rows, expected_task_families, expected_difficulties)
+    routing = _routing_summary(rows)
+    global_kv = _global_kv_summary(rows)
+    memory_budget = _memory_budget_summary(config, rows)
+    checks = _report_checks(overall, coverage, memory_budget)
     report = {
         "run_dir": str(run_dir),
         "stage": str(config.get("stage", "")),
@@ -108,13 +114,15 @@ def make_long_context_report(
         "seed": seed,
         "context_length": context_length,
         "samples_path": str(sample_output_path),
-        "overall": summarize_long_context_rows(rows),
-        "coverage": _coverage_summary(rows, expected_task_families, expected_difficulties),
+        "overall": overall,
+        "coverage": coverage,
         "by_task_family": _group_summary(rows, "task_family"),
         "by_difficulty": _group_summary(rows, "difficulty"),
-        "routing": _routing_summary(rows),
-        "global_kv": _global_kv_summary(rows),
-        "memory_budget": _memory_budget_summary(config, rows),
+        "routing": routing,
+        "global_kv": global_kv,
+        "memory_budget": memory_budget,
+        "checks": checks,
+        "overall_status": _overall_status(checks),
     }
     write_json(report, output_path)
     return output_path
@@ -225,6 +233,34 @@ def summarize_long_context_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "teacher_forced_token_accuracy": _mean([row.get("teacher_forced_token_accuracy") for row in rows]),
         "truncation_rate": sum(1 for row in rows if row.get("truncated")) / len(rows),
     }
+
+
+def _report_checks(overall: dict[str, Any], coverage: dict[str, Any], memory_budget: dict[str, Any]) -> dict[str, bool]:
+    global_kv_enabled = memory_budget.get("global_kv_enabled") is True
+    return {
+        "samples_present": _positive_number(overall.get("sample_count")),
+        "exact_match_accuracy_present": _num(overall.get("exact_match_accuracy")) is not None,
+        "teacher_forced_token_accuracy_present": _num(overall.get("teacher_forced_token_accuracy")) is not None,
+        "truncation_rate_present": _num(overall.get("truncation_rate")) is not None,
+        "task_family_coverage_passed": coverage.get("task_family_coverage_passed") is True,
+        "difficulty_coverage_passed": coverage.get("difficulty_coverage_passed") is True,
+        "local_memory_budget_present": _num(memory_budget.get("estimated_local_raw_kv_context_bytes_fp16")) is not None,
+        "global_memory_budget_present_or_not_applicable": not global_kv_enabled
+        or _num(memory_budget.get("estimated_global_cache_capacity_to_local_context_ratio")) is not None,
+    }
+
+
+def _overall_status(checks: dict[str, bool]) -> str:
+    required = [
+        "samples_present",
+        "exact_match_accuracy_present",
+        "teacher_forced_token_accuracy_present",
+    ]
+    if not all(checks.get(key) is True for key in required):
+        return "fail"
+    if all(checks.values()):
+        return "pass"
+    return "warn"
 
 
 def _make_sample(rng: random.Random, task_family: str, difficulty: str, *, context_length: int) -> LongContextSample:
@@ -489,6 +525,11 @@ def _num(value: Any) -> float | None:
     if isinstance(value, (int, float)):
         return float(value)
     return None
+
+
+def _positive_number(value: Any) -> bool:
+    number = _num(value)
+    return number is not None and number > 0.0
 
 
 def _write_jsonl(rows: list[dict[str, Any]], path: Path) -> None:

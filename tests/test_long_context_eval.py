@@ -251,12 +251,74 @@ def test_make_long_context_report_records_stage_and_route_mode(
     monkeypatch.setattr(long_context_eval, "generate_long_context_samples", lambda *args, **kwargs: [sample])
     monkeypatch.setattr(long_context_eval, "evaluate_long_context_sample", lambda *args, **kwargs: row)
 
-    output = make_long_context_report(run_dir, sample_count=1, output_path=tmp_path / "report.json")
+    output = make_long_context_report(
+        run_dir,
+        sample_count=1,
+        output_path=tmp_path / "report.json",
+        task_families=["needle_retrieval"],
+        difficulties=["near"],
+    )
     report = json.loads(output.read_text(encoding="utf-8"))
 
     assert report["stage"] == "stage5_global_kv"
     assert report["route_mode"] == "scheduled"
     assert report["checkpoint"] == "checkpoint_best"
+    assert report["overall_status"] == "pass"
+    assert report["checks"]["samples_present"] is True
+    assert report["checks"]["task_family_coverage_passed"] is True
+    assert report["checks"]["difficulty_coverage_passed"] is True
+    assert report["checks"]["global_memory_budget_present_or_not_applicable"] is True
+
+
+def test_make_long_context_report_warns_when_expected_coverage_is_missing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeModel:
+        def eval(self) -> None:
+            return None
+
+    run_dir = Path(tmp_path) / "run"
+    run_dir.mkdir()
+    config = {
+        "stage": "stage4_output_action",
+        "model_config_resolved": {
+            "base": {"layers": 4, "d_model": 64},
+            "global_kv": False,
+        },
+        "data_config_resolved": {"sequence_length": 8},
+    }
+    sample = LongContextSample(
+        task_family="needle_retrieval",
+        difficulty="near",
+        prompt="ctx K1=42. Q K1? A:",
+        answer=" 42",
+        key="K1",
+    )
+    row = {
+        "sample_id": 0,
+        "task_family": "needle_retrieval",
+        "difficulty": "near",
+        "exact_match": True,
+        "teacher_forced_token_accuracy": 1.0,
+        "truncated": False,
+    }
+
+    monkeypatch.setattr(long_context_eval, "load_config", lambda path: config)
+    monkeypatch.setattr(long_context_eval, "_load_tokenizer_from_run_config", lambda config: object())
+    monkeypatch.setattr(long_context_eval, "_device", lambda device_name: torch.device("cpu"))
+    monkeypatch.setattr(long_context_eval, "_load_model_for_run", lambda *args, **kwargs: FakeModel())
+    monkeypatch.setattr(long_context_eval, "_checkpoint_step", lambda *args, **kwargs: 7)
+    monkeypatch.setattr(long_context_eval, "generate_long_context_samples", lambda *args, **kwargs: [sample])
+    monkeypatch.setattr(long_context_eval, "evaluate_long_context_sample", lambda *args, **kwargs: row)
+
+    output = make_long_context_report(run_dir, sample_count=1, output_path=tmp_path / "report.json")
+    report = json.loads(output.read_text(encoding="utf-8"))
+
+    assert report["overall_status"] == "warn"
+    assert report["checks"]["samples_present"] is True
+    assert report["checks"]["task_family_coverage_passed"] is False
+    assert report["checks"]["difficulty_coverage_passed"] is False
 
 
 def test_long_context_coverage_summary_reports_missing_families_and_difficulties() -> None:
