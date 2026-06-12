@@ -1,0 +1,10 @@
+extends: stage3_scheduled_free_routing.yaml
+run_name: package_a_r125_2b_A4_free_router_block_position
+data_config: ../data/r125_main_2b.yaml
+max_steps: 244141
+eval_interval: 10000
+save_interval: 10000
+save_best_checkpoint: false
+wandb:
+  group: package_a_r125_2b
+  tags: [package_a, r125, 2b, A4, free_router_block_position]

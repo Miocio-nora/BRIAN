@@ -1,5 +1,7 @@
 import json
 from pathlib import Path
+import sys
+import types
 
 import pytest
 
@@ -28,6 +30,9 @@ from brian_sphere_llm.train.trainer import (
     _schedule_values,
     _set_sampler_epoch,
     _wrap_distributed_model,
+    _finish_wandb,
+    _init_wandb,
+    _wandb_log,
     evaluate,
     run_name,
     train_from_config,
@@ -119,6 +124,72 @@ def test_learning_rate_schedule_config_rejects_unknown_name() -> None:
 def test_train_config_mapping_helper_rejects_non_mapping() -> None:
     with pytest.raises(ValueError, match="routing"):
         _mapping_config({"routing": True}, "routing")
+
+
+def test_wandb_logging_initializes_logs_and_finishes_on_main_process(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: dict[str, object] = {}
+
+    class FakeRun:
+        def __init__(self) -> None:
+            self.logs: list[tuple[dict[str, object], int | None]] = []
+            self.summary: dict[str, object] = {}
+            self.finished = False
+
+        def log(self, payload, step=None):
+            self.logs.append((payload, step))
+
+        def finish(self):
+            self.finished = True
+
+    fake_run = FakeRun()
+
+    def fake_init(**kwargs):
+        calls["init"] = kwargs
+        return fake_run
+
+    monkeypatch.setitem(sys.modules, "wandb", types.SimpleNamespace(init=fake_init))
+
+    run = _init_wandb(
+        {
+            "wandb": {
+                "enabled": True,
+                "project": "brian-test",
+                "name": "auto",
+                "mode": "offline",
+                "tags": ["unit"],
+            }
+        },
+        resolved_config={"stage": "stage0_baseline"},
+        model_stats={"parameter_count": 1},
+        run_dir=tmp_path / "run",
+        is_main_process=True,
+    )
+    _wandb_log(run, "train", {"step": 3, "loss": 1.5, "bad": float("nan"), "label": "ok"})
+    _finish_wandb(run, final_step=3, best_eval_loss=1.25)
+
+    assert calls["init"]["project"] == "brian-test"
+    assert calls["init"]["name"] == "run"
+    assert calls["init"]["mode"] == "offline"
+    assert calls["init"]["tags"] == ["unit"]
+    assert fake_run.logs == [({"train/loss": 1.5, "train/label": "ok"}, 3)]
+    assert fake_run.summary["final_step"] == 3
+    assert fake_run.summary["best_eval_loss"] == 1.25
+    assert fake_run.finished is True
+
+
+def test_wandb_logging_skips_non_main_process(tmp_path: Path) -> None:
+    run = _init_wandb(
+        {"wandb": {"enabled": True}},
+        resolved_config={},
+        model_stats={},
+        run_dir=tmp_path / "run",
+        is_main_process=False,
+    )
+
+    assert run is None
 
 
 def test_forward_for_stage_parses_string_false_hard_exit() -> None:
@@ -549,6 +620,20 @@ def test_train_from_config_writes_final_routing_report_when_checkpoint_report_di
     assert report["cost_quality_curve"]["summary"]["train_point_count"] == 1
 
 
+def test_train_from_config_can_skip_best_checkpoint(tmp_path: Path) -> None:
+    train_config = _write_tiny_train_fixture(
+        tmp_path,
+        max_steps=1,
+        resume=False,
+        save_best_checkpoint=False,
+    )
+
+    run_dir = train_from_config(train_config)
+
+    assert (run_dir / "checkpoint_latest" / "state.pt").exists()
+    assert not (run_dir / "checkpoint_best").exists()
+
+
 def test_train_from_config_logs_routed_behavior(tmp_path: Path) -> None:
     train_config = _write_tiny_routed_train_fixture(tmp_path)
 
@@ -640,6 +725,7 @@ def _write_tiny_train_fixture(
     max_steps: int,
     resume: bool,
     write_routing_report_on_checkpoint: bool = True,
+    save_best_checkpoint: bool = True,
 ) -> Path:
     tokenized = tmp_path / "tokenized_resume"
     sequences = [
@@ -695,6 +781,7 @@ def _write_tiny_train_fixture(
             "learning_rate": 0.001,
             "resume": resume,
             "write_routing_report_on_checkpoint": write_routing_report_on_checkpoint,
+            "save_best_checkpoint": save_best_checkpoint,
         },
         train_config,
     )

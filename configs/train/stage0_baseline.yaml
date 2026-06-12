@@ -15,6 +15,11 @@ learning_rate: 0.0003
 weight_decay: 0.1
 grad_clip: 1.0
 resume: false
+wandb:
+  enabled: true
+  project: brian-sphere-llm
+  name: auto
+  mode: online
 loss_weights:
   route: 0.0
   balance: 0.0

@@ -103,6 +103,24 @@ For multi-GPU jobs, launch the same training entrypoint with `torchrun`; the tra
 torchrun --nproc_per_node=<gpu_count> scripts/train.py --config configs/train/stage0_r1b_baseline.yaml
 ```
 
+Weights & Biases logging is enabled by default through the inherited train config:
+
+```yaml
+wandb:
+  enabled: true
+  project: brian-sphere-llm
+  name: auto
+  mode: online
+```
+
+Only rank 0 initializes W&B and uploads train/eval metrics. Before starting an online run, authenticate once:
+
+```bash
+wandb login
+```
+
+or export `WANDB_API_KEY`. To disable upload for a specific run, set `wandb.enabled: false` in that train config. To collect local W&B files without uploading immediately, set `wandb.mode: offline` and sync later with `wandb sync`.
+
 Generate a routing report:
 
 ```bash

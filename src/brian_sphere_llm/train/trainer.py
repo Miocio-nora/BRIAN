@@ -76,6 +76,7 @@ def train_from_config(config_path: str | Path) -> Path:
     max_steps = _int_config(config, "max_steps", minimum=1)
     eval_interval = _int_config(config, "eval_interval", default=max_steps, minimum=1)
     save_interval = _int_config(config, "save_interval", default=max_steps, minimum=1)
+    save_best_checkpoint = _bool_config(config, "save_best_checkpoint", default=True)
     learning_rate = _float_config(config, "learning_rate", minimum=0.0)
     lr_schedule = _lr_schedule_config(config)
     warmup_steps = _int_config(config, "warmup_steps", default=0, minimum=0)
@@ -128,6 +129,13 @@ def train_from_config(config_path: str | Path) -> Path:
     if is_main_process:
         write_json(model_stats, run_dir / "model_stats.json")
         write_json(_data_manifest_ref(data_config, tokenized_dir), run_dir / "data_manifest_ref.json")
+    wandb_run = _init_wandb(
+        config,
+        resolved_config=resolved_config,
+        model_stats=model_stats,
+        run_dir=run_dir,
+        is_main_process=is_main_process,
+    )
     dist_utils.barrier()
 
     train_loader = build_dataloader(
@@ -303,16 +311,18 @@ def train_from_config(config_path: str | Path) -> Path:
             )
         if train_log is not None:
             train_log.write(row)
+        _wandb_log(wandb_run, "train", row)
 
         if step % eval_interval == 0 or step == max_steps:
             eval_row = evaluate(model, val_loader, config=config, device=device, route_mode=stage_mode, global_step=step)
             eval_row["step"] = step
             if eval_log is not None:
                 eval_log.write(eval_row)
+            _wandb_log(wandb_run, "eval", eval_row)
             eval_loss = float(eval_row["validation_loss"])
             if best_eval_loss is None or eval_loss < best_eval_loss:
                 best_eval_loss = eval_loss
-                if is_main_process:
+                if save_best_checkpoint and is_main_process:
                     save_checkpoint(
                         run_dir / "checkpoint_best",
                         model=dist_utils.unwrap_model(model),
@@ -321,13 +331,14 @@ def train_from_config(config_path: str | Path) -> Path:
                         best_eval_loss=best_eval_loss,
                         extra=_checkpoint_training_state(data_epoch, microbatch_in_epoch),
                     )
-                _save_rank_training_state(
-                    run_dir / "checkpoint_best",
-                    step=step,
-                    best_eval_loss=best_eval_loss,
-                    data_epoch=data_epoch,
-                    microbatch_in_epoch=microbatch_in_epoch,
-                )
+                if save_best_checkpoint:
+                    _save_rank_training_state(
+                        run_dir / "checkpoint_best",
+                        step=step,
+                        best_eval_loss=best_eval_loss,
+                        data_epoch=data_epoch,
+                        microbatch_in_epoch=microbatch_in_epoch,
+                    )
         if step % save_interval == 0 or step == max_steps:
             if is_main_process:
                 save_checkpoint(
@@ -349,6 +360,7 @@ def train_from_config(config_path: str | Path) -> Path:
                 make_routing_report(run_dir)
     if is_main_process and not (run_dir / "routing_report.json").exists():
         make_routing_report(run_dir)
+    _finish_wandb(wandb_run, final_step=max_steps, best_eval_loss=best_eval_loss)
     dist_utils.barrier()
     dist_utils.destroy_distributed()
     return run_dir
@@ -408,6 +420,91 @@ def _wrap_distributed_model(
             find_unused_parameters=find_unused_parameters,
         )
     return DistributedDataParallel(model, find_unused_parameters=find_unused_parameters)
+
+
+def _init_wandb(
+    config: dict[str, Any],
+    *,
+    resolved_config: dict[str, Any],
+    model_stats: dict[str, Any],
+    run_dir: Path,
+    is_main_process: bool,
+) -> Any | None:
+    wandb_cfg = _wandb_config(config)
+    if not is_main_process or not _bool_value(wandb_cfg.get("enabled", False), "wandb.enabled"):
+        return None
+    try:
+        import wandb
+    except ModuleNotFoundError as exc:  # pragma: no cover
+        raise ModuleNotFoundError("Install `wandb` or set `wandb.enabled: false` to disable W&B logging.") from exc
+
+    name = str(wandb_cfg.get("name", "auto"))
+    if name == "auto":
+        name = run_dir.name
+    init_kwargs: dict[str, Any] = {
+        "project": str(wandb_cfg.get("project", "brian-sphere-llm")),
+        "name": name,
+        "dir": str(run_dir),
+        "config": {
+            "train": resolved_config,
+            "model_stats": model_stats,
+            "run_dir": str(run_dir),
+        },
+    }
+    for key in ("entity", "group", "job_type", "mode", "id", "resume"):
+        if key in wandb_cfg and wandb_cfg[key] is not None:
+            init_kwargs[key] = wandb_cfg[key]
+    if "tags" in wandb_cfg:
+        init_kwargs["tags"] = _wandb_tags(wandb_cfg["tags"])
+    return wandb.init(**init_kwargs)
+
+
+def _wandb_config(config: dict[str, Any]) -> dict[str, Any]:
+    return dict(_mapping_config(config, "wandb"))
+
+
+def _wandb_tags(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if not isinstance(value, list | tuple):
+        raise ValueError("wandb.tags must be a list.")
+    return [str(item) for item in value]
+
+
+def _wandb_log(wandb_run: Any | None, prefix: str, row: dict[str, Any]) -> None:
+    if wandb_run is None:
+        return
+    step = row.get("step")
+    payload = {
+        f"{prefix}/{key}": value
+        for key, value in row.items()
+        if key != "step" and _wandb_loggable(value)
+    }
+    if not payload:
+        return
+    if isinstance(step, int) and not isinstance(step, bool):
+        wandb_run.log(payload, step=step)
+        return
+    wandb_run.log(payload)
+
+
+def _wandb_loggable(value: Any) -> bool:
+    if isinstance(value, bool):
+        return True
+    if isinstance(value, (int, float)):
+        return math.isfinite(float(value))
+    if isinstance(value, str):
+        return True
+    return value is None
+
+
+def _finish_wandb(wandb_run: Any | None, *, final_step: int, best_eval_loss: float | None) -> None:
+    if wandb_run is None:
+        return
+    wandb_run.summary["final_step"] = final_step
+    if best_eval_loss is not None:
+        wandb_run.summary["best_eval_loss"] = best_eval_loss
+    wandb_run.finish()
 
 
 def _gradient_sync_context(model: Any, *, distributed: bool, should_sync: bool):

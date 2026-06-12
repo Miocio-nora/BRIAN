@@ -1,0 +1,36 @@
+experiment_name: route_core_r125_2b_package
+description: Formal Package A BRIAN-R125 route-core validation package on the 2B-token recipe.
+baseline_train_config: configs/train/package_a_r125_2b_a0_baseline.yaml
+ablations:
+  - id: A0
+    name: fixed_transformer_baseline
+    train_config: configs/train/package_a_r125_2b_a0_baseline.yaml
+    purpose: Fixed decoder-only Transformer baseline on the 2B-token R125 recipe.
+  - id: A1
+    name: fixed_route_wrapper
+    train_config: configs/train/package_a_r125_2b_a1_fixed_route.yaml
+    purpose: Route-core wrapper forced to the original sequential middle-block path.
+  - id: A2
+    name: sequential_router_imitation
+    train_config: configs/train/package_a_r125_2b_a2_sequential_router_imitation.yaml
+    purpose: Router imitation on the original sequential pseudo route.
+  - id: A3
+    name: skip_recur_router_imitation
+    train_config: configs/train/package_a_r125_2b_a3_skip_recur_router_imitation.yaml
+    purpose: Router imitation on mixed skip/recurrent pseudo routes.
+  - id: A4
+    name: free_router_block_position
+    train_config: configs/train/package_a_r125_2b_a4_free_router_block_position.yaml
+    purpose: Scheduled router-controlled paths with block-position state.
+  - id: A5
+    name: no_block_position
+    train_config: configs/train/package_a_r125_2b_a5_no_block_position.yaml
+    purpose: Remove block-position state from the scheduled free-routing path.
+  - id: A6
+    name: no_output_action
+    train_config: configs/train/package_a_r125_2b_a6_no_output_action.yaml
+    purpose: Scheduled routing ablation without hard terminal output action.
+  - id: A7
+    name: no_location_loss
+    train_config: configs/train/package_a_r125_2b_a7_no_location_loss.yaml
+    purpose: Hard-output route-core path without location regularization.
