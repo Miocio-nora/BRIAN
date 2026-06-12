@@ -1610,6 +1610,78 @@ def test_stage4_gate_requires_out_by_difficulty_reasoning_report_to_pass(tmp_pat
     assert gate["checks"]["out_by_difficulty_reasoning_report_passed"] is False
 
 
+def test_stage4_gate_rejects_truthy_non_boolean_supplemental_checks(tmp_path: Path) -> None:
+    stage4 = _write_run(
+        tmp_path,
+        "stage4",
+        stage="stage4_output_action",
+        val_loss=10.0,
+        train_row={
+            "average_route_steps": 2.0,
+            "max_route_steps": 4,
+            "forced_max_step_exit_fraction": 0.0,
+            "first_exit_step_histogram": {"1": 1, "2": 2},
+            "top1_block_histogram": {"0": 1, "1": 1, "2": 1},
+        },
+    )
+    cost_report = tmp_path / "cost.json"
+    cost_report.write_text(
+        json.dumps(
+            {
+                "analysis": {
+                    "status": "pass",
+                    "checks": {
+                        "stage4_output_action_runs": "yes",
+                        "hard_exit_enabled": 1,
+                        "active_compute_range_present": "yes",
+                        "active_compute_not_increasing_with_cost": 1,
+                        "average_steps_not_increasing_with_cost": "yes",
+                        "output_probability_not_decreasing_with_cost": 1,
+                    },
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    out_report = tmp_path / "out_by_difficulty.json"
+    out_report.write_text(
+        json.dumps(
+            {
+                "overall_status": "pass",
+                "checks": {
+                    "reasoning_report_present": "yes",
+                    "reasoning_report_passed": 1,
+                    "stage4_output_action_reasoning": "yes",
+                    "hard_exit_reasoning": 1,
+                    "route_steps_non_decreasing_with_difficulty": "yes",
+                    "active_compute_non_decreasing_with_difficulty": 1,
+                    "easy_output_probability_at_least_hard": "yes",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    report_path = make_stage_gate_report(
+        [stage4],
+        output_path=tmp_path / "gate.json",
+        cost_control_report_path=cost_report,
+        out_by_difficulty_report_path=out_report,
+    )
+    gate = json.loads(report_path.read_text(encoding="utf-8"))["gates"]["stage4_to_5"]
+
+    assert gate["status"] == "warn"
+    assert gate["checks"]["cost_control_passed"] is True
+    assert gate["checks"]["cost_control_stage4_output_action_runs"] is False
+    assert gate["checks"]["cost_control_hard_exit_enabled"] is False
+    assert gate["checks"]["cost_control_average_steps_not_increasing"] is False
+    assert gate["checks"]["out_by_difficulty_passed"] is True
+    assert gate["checks"]["out_by_difficulty_reasoning_report_present"] is False
+    assert gate["checks"]["out_by_difficulty_reasoning_report_passed"] is False
+    assert gate["checks"]["hard_compute_not_below_easy"] is False
+    assert gate["checks"]["easy_output_probability_not_below_hard"] is False
+
+
 def test_stage2_gate_rejects_boolean_block_histogram_counts(tmp_path: Path) -> None:
     stage2 = _write_run(
         tmp_path,
@@ -2857,6 +2929,55 @@ def test_stage5_gate_requires_local_global_adapter_diagnostics(tmp_path: Path) -
     assert gate["checks"]["global_cache_window_utilization_measured"] is False
 
 
+def test_stage5_gate_rejects_truthy_non_boolean_retention_checks(tmp_path: Path) -> None:
+    stage4 = _write_run(
+        tmp_path,
+        "stage4",
+        stage="stage4_output_action",
+        val_loss=10.0,
+        train_row={
+            "average_route_steps": 2.0,
+            "first_exit_step_histogram": {"1": 1, "2": 2},
+            "top1_block_histogram": {"0": 1, "1": 1, "2": 1},
+        },
+    )
+    retention_report = _global_kv_retention_report()
+    for key in retention_report["checks"]:
+        retention_report["checks"][key] = "yes"
+    retention_report["overall_status"] = "pass"
+    stage5 = _write_run(
+        tmp_path,
+        "global",
+        stage="stage5_global_kv",
+        val_loss=10.0,
+        train_row={
+            "global_attention_mass": 1.0,
+            "global_read_gate_mean": 0.01,
+            "global_cache_slots_mean": 2.0,
+            "top1_block_histogram": {"0": 1, "1": 1, "2": 1},
+        },
+        global_kv_retention_report=retention_report,
+    )
+    compare_report = tmp_path / "long_context_compare.json"
+    compare_report.write_text(json.dumps(_long_context_compare_report()), encoding="utf-8")
+
+    report_path = make_stage_gate_report(
+        [stage4, stage5],
+        output_path=tmp_path / "gate.json",
+        long_context_compare_report_path=compare_report,
+    )
+    gate = json.loads(report_path.read_text(encoding="utf-8"))["gates"]["stage5_to_6"]
+
+    assert gate["status"] == "warn"
+    assert gate["checks"]["global_kv_retention_passed"] is True
+    assert gate["checks"]["global_kv_retention_stage5"] is False
+    assert gate["checks"]["global_kv_retention_enabled"] is False
+    assert gate["checks"]["sink_window_retention_configured"] is False
+    assert gate["checks"]["sink_window_attention_measured"] is False
+    assert gate["checks"]["global_read_gate_bounded"] is False
+    assert gate["checks"]["local_global_read_ratio_measured"] is False
+
+
 def test_stage6_gate_uses_parallel_compare_report(tmp_path: Path) -> None:
     stage6 = _write_run(
         tmp_path,
@@ -3000,6 +3121,43 @@ def test_stage6_gate_requires_branch_score_and_delta_memory_checks(tmp_path: Pat
     assert gate["checks"]["parallel_branch_score_decay_configured"] is False
     assert gate["checks"]["parallel_branch_delta_memory_measured"] is False
     assert gate["checks"]["parallel_delta_cache_nonnegative"] is False
+
+
+def test_stage6_gate_rejects_truthy_non_boolean_parallel_report_checks(tmp_path: Path) -> None:
+    passing_report = _parallel_passing_report()
+    for key in passing_report["checks"]:
+        passing_report["checks"][key] = "yes"
+    passing_report["overall_status"] = "pass"
+    stage6 = _write_run(
+        tmp_path,
+        "parallel",
+        stage="stage6_parallel_passing",
+        val_loss=10.0,
+        train_row={
+            "parallel_branch_count_mean": 2.0,
+            "parallel_score_margin_mean": 0.1,
+            "global_cache_slots_mean": 2.0,
+            "top1_block_histogram": {"0": 1, "1": 1, "2": 1},
+        },
+        parallel_passing_report=passing_report,
+    )
+    compare_report = tmp_path / "parallel_compare.json"
+    compare_report.write_text(json.dumps(_parallel_compare_report()), encoding="utf-8")
+
+    report_path = make_stage_gate_report(
+        [stage6],
+        output_path=tmp_path / "gate.json",
+        parallel_compare_report_path=compare_report,
+    )
+    gate = json.loads(report_path.read_text(encoding="utf-8"))["gates"]["stage6_to_scale"]
+
+    assert gate["status"] == "warn"
+    assert gate["checks"]["parallel_passing_report_passed"] is True
+    assert gate["checks"]["parallel_passing_stage_reported"] is False
+    assert gate["checks"]["parallel_passing_enabled"] is False
+    assert gate["checks"]["parallel_shared_base_global_memory_enabled"] is False
+    assert gate["checks"]["parallel_branch_score_decay_configured"] is False
+    assert gate["checks"]["parallel_delta_cache_bounded"] is False
 
 
 def test_stage6_gate_accepts_stage7_parallel_alias(tmp_path: Path) -> None:

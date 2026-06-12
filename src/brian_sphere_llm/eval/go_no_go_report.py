@@ -360,7 +360,7 @@ def _gate_check(gates: dict[str, Any], gate_name: str, check_name: str) -> bool 
     checks = gate.get("checks", {})
     if not isinstance(checks, dict) or check_name not in checks:
         return None
-    return bool(checks[check_name])
+    return checks[check_name] is True
 
 
 def _all_gate_checks(gates: dict[str, Any], gate_name: str, check_names: list[str]) -> bool | None:

@@ -547,23 +547,21 @@ def _gate_stage4(
         ),
         "cost_control_report_present": bool(cost_control_report),
         "cost_control_passed": bool(cost_analysis.get("status") == "pass"),
-        "cost_control_stage4_output_action_runs": bool(cost_checks.get("stage4_output_action_runs", False)),
-        "cost_control_hard_exit_enabled": bool(cost_checks.get("hard_exit_enabled", False)),
-        "cost_control_active_range_present": bool(cost_checks.get("active_compute_range_present", False)),
-        "cost_control_active_not_increasing": bool(cost_checks.get("active_compute_not_increasing_with_cost", False)),
-        "cost_control_average_steps_not_increasing": bool(
-            cost_checks.get("average_steps_not_increasing_with_cost", False)
-        ),
-        "cost_control_output_not_decreasing": bool(cost_checks.get("output_probability_not_decreasing_with_cost", False)),
+        "cost_control_stage4_output_action_runs": _check_true(cost_checks, "stage4_output_action_runs"),
+        "cost_control_hard_exit_enabled": _check_true(cost_checks, "hard_exit_enabled"),
+        "cost_control_active_range_present": _check_true(cost_checks, "active_compute_range_present"),
+        "cost_control_active_not_increasing": _check_true(cost_checks, "active_compute_not_increasing_with_cost"),
+        "cost_control_average_steps_not_increasing": _check_true(cost_checks, "average_steps_not_increasing_with_cost"),
+        "cost_control_output_not_decreasing": _check_true(cost_checks, "output_probability_not_decreasing_with_cost"),
         "out_by_difficulty_report_present": bool(out_by_difficulty_report),
         "out_by_difficulty_passed": bool(out_by_difficulty_report.get("overall_status") == "pass"),
-        "out_by_difficulty_reasoning_report_present": bool(out_checks.get("reasoning_report_present", False)),
-        "out_by_difficulty_reasoning_report_passed": bool(out_checks.get("reasoning_report_passed", False)),
-        "out_by_difficulty_stage4_reasoning": bool(out_checks.get("stage4_output_action_reasoning", False)),
-        "out_by_difficulty_hard_exit_reasoning": bool(out_checks.get("hard_exit_reasoning", False)),
-        "hard_compute_not_below_easy": bool(out_checks.get("route_steps_non_decreasing_with_difficulty", False))
-        and bool(out_checks.get("active_compute_non_decreasing_with_difficulty", False)),
-        "easy_output_probability_not_below_hard": bool(out_checks.get("easy_output_probability_at_least_hard", False)),
+        "out_by_difficulty_reasoning_report_present": _check_true(out_checks, "reasoning_report_present"),
+        "out_by_difficulty_reasoning_report_passed": _check_true(out_checks, "reasoning_report_passed"),
+        "out_by_difficulty_stage4_reasoning": _check_true(out_checks, "stage4_output_action_reasoning"),
+        "out_by_difficulty_hard_exit_reasoning": _check_true(out_checks, "hard_exit_reasoning"),
+        "hard_compute_not_below_easy": _check_true(out_checks, "route_steps_non_decreasing_with_difficulty")
+        and _check_true(out_checks, "active_compute_non_decreasing_with_difficulty"),
+        "easy_output_probability_not_below_hard": _check_true(out_checks, "easy_output_probability_at_least_hard"),
         "hard_exit_compare_report_present": bool(hard_exit_compare_report),
         "hard_exit_compare_passed": hard_exit_compare_passed,
         "hard_exit_compute_adjusted_candidate_passed": any_hard_exit_pass,
@@ -663,23 +661,23 @@ def _gate_stage5(
         "global_cache_slots_present": _metric_at_least(stage5, "global_cache_slots_mean", 1.0),
         "global_kv_retention_report_present": bool(retention_report),
         "global_kv_retention_passed": bool(retention_report.get("overall_status") == "pass"),
-        "global_kv_retention_stage5": bool(retention_checks.get("stage5_global_kv_stage", False)),
-        "global_kv_retention_enabled": bool(retention_checks.get("global_kv_enabled", False)),
-        "global_kv_retention_capacity_present": bool(retention_checks.get("retention_capacity_present", False)),
-        "global_kv_retention_cache_slots_present": bool(retention_checks.get("global_cache_slots_present", False)),
+        "global_kv_retention_stage5": _check_true(retention_checks, "stage5_global_kv_stage"),
+        "global_kv_retention_enabled": _check_true(retention_checks, "global_kv_enabled"),
+        "global_kv_retention_capacity_present": _check_true(retention_checks, "retention_capacity_present"),
+        "global_kv_retention_cache_slots_present": _check_true(retention_checks, "global_cache_slots_present"),
         "stage4_reference_validation_loss_present": loss_ratio is not None,
         "validation_loss_not_worse_than_stage4": loss_ratio is not None
         and loss_ratio <= thresholds["stage5_loss_ratio_max"],
-        "sink_window_retention_configured": bool(retention_checks.get("sink_slots_configured", False))
-        and bool(retention_checks.get("window_slots_configured", False)),
-        "sink_window_attention_measured": bool(retention_checks.get("sink_attention_mass_measured", False))
-        and bool(retention_checks.get("window_attention_mass_measured", False)),
-        "global_attention_mass_bounded": bool(retention_checks.get("global_attention_mass_bounded", False)),
-        "global_read_gate_bounded": bool(retention_checks.get("global_read_gate_bounded", False)),
-        "sink_window_mass_conserved": bool(retention_checks.get("sink_window_mass_conserved", False)),
-        "cache_slots_within_retention_capacity": bool(retention_checks.get("cache_slots_within_retention_capacity", False)),
-        "local_global_read_ratio_measured": bool(retention_checks.get("read_ratio_measured", False)),
-        "global_cache_window_utilization_measured": bool(retention_checks.get("window_utilization_measured", False)),
+        "sink_window_retention_configured": _check_true(retention_checks, "sink_slots_configured")
+        and _check_true(retention_checks, "window_slots_configured"),
+        "sink_window_attention_measured": _check_true(retention_checks, "sink_attention_mass_measured")
+        and _check_true(retention_checks, "window_attention_mass_measured"),
+        "global_attention_mass_bounded": _check_true(retention_checks, "global_attention_mass_bounded"),
+        "global_read_gate_bounded": _check_true(retention_checks, "global_read_gate_bounded"),
+        "sink_window_mass_conserved": _check_true(retention_checks, "sink_window_mass_conserved"),
+        "cache_slots_within_retention_capacity": _check_true(retention_checks, "cache_slots_within_retention_capacity"),
+        "local_global_read_ratio_measured": _check_true(retention_checks, "read_ratio_measured"),
+        "global_cache_window_utilization_measured": _check_true(retention_checks, "window_utilization_measured"),
         "long_context_compare_report_present": bool(long_context_compare_report),
         "long_context_compare_passed": long_context_compare_passed,
         "long_context_global_kv_benefit_proxy": any_long_context_pass,
@@ -752,22 +750,20 @@ def _gate_stage6(
         "parallel_score_margin_present": _finite(_routing_metric(stage6, "parallel_score_margin_mean")),
         "parallel_passing_report_present": bool(passing_report),
         "parallel_passing_report_passed": bool(passing_report.get("overall_status") == "pass"),
-        "parallel_passing_stage_reported": bool(passing_checks.get("stage6_parallel_stage", False)),
-        "parallel_passing_enabled": bool(passing_checks.get("parallel_passing_enabled", False)),
-        "parallel_route_selected": bool(passing_checks.get("parallel_route_selected", False)),
-        "parallel_shared_base_global_memory_enabled": bool(
-            passing_checks.get("shared_base_global_memory_enabled", False)
-        ),
-        "parallel_beam_bounded": bool(passing_checks.get("beam_size_within_limit", False)),
-        "parallel_branch_active": bool(passing_checks.get("parallel_branch_active", False)),
-        "parallel_branch_count_bounded_by_beam": bool(passing_checks.get("branch_count_bounded_by_beam", False)),
-        "parallel_branch_cost_enabled": bool(passing_checks.get("branch_cost_enabled", False)),
-        "parallel_branch_score_decay_configured": bool(passing_checks.get("branch_score_decay_configured", False)),
-        "parallel_score_margin_nonnegative": bool(passing_checks.get("score_margin_nonnegative", False)),
-        "parallel_branch_delta_memory_measured": bool(passing_checks.get("branch_delta_memory_measured", False)),
-        "parallel_delta_cache_nonnegative": bool(passing_checks.get("delta_cache_nonnegative", False)),
-        "parallel_delta_memory_policy_present": bool(passing_checks.get("delta_memory_policy_present", False)),
-        "parallel_delta_cache_bounded": bool(passing_checks.get("delta_cache_bounded_by_window", False)),
+        "parallel_passing_stage_reported": _check_true(passing_checks, "stage6_parallel_stage"),
+        "parallel_passing_enabled": _check_true(passing_checks, "parallel_passing_enabled"),
+        "parallel_route_selected": _check_true(passing_checks, "parallel_route_selected"),
+        "parallel_shared_base_global_memory_enabled": _check_true(passing_checks, "shared_base_global_memory_enabled"),
+        "parallel_beam_bounded": _check_true(passing_checks, "beam_size_within_limit"),
+        "parallel_branch_active": _check_true(passing_checks, "parallel_branch_active"),
+        "parallel_branch_count_bounded_by_beam": _check_true(passing_checks, "branch_count_bounded_by_beam"),
+        "parallel_branch_cost_enabled": _check_true(passing_checks, "branch_cost_enabled"),
+        "parallel_branch_score_decay_configured": _check_true(passing_checks, "branch_score_decay_configured"),
+        "parallel_score_margin_nonnegative": _check_true(passing_checks, "score_margin_nonnegative"),
+        "parallel_branch_delta_memory_measured": _check_true(passing_checks, "branch_delta_memory_measured"),
+        "parallel_delta_cache_nonnegative": _check_true(passing_checks, "delta_cache_nonnegative"),
+        "parallel_delta_memory_policy_present": _check_true(passing_checks, "delta_memory_policy_present"),
+        "parallel_delta_cache_bounded": _check_true(passing_checks, "delta_cache_bounded_by_window"),
         "global_cache_or_local_route_present": _finite(_routing_metric(stage6, "global_cache_slots_mean"))
         or _finite(_routing_metric(stage6, "average_route_steps")),
         "parallel_compare_report_present": bool(parallel_compare_report),
@@ -852,6 +848,10 @@ def _comparison_checks(comparisons: Any) -> list[dict[str, Any]]:
             }
         )
     return rows
+
+
+def _check_true(checks: Any, key: str) -> bool:
+    return isinstance(checks, dict) and checks.get(key) is True
 
 
 def _resume_event_checks(event: Any) -> dict[str, bool]:
