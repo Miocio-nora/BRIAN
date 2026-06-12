@@ -49,7 +49,13 @@ def test_risk_audit_passes_with_clear_evidence(tmp_path: Path) -> None:
         {
             "overall_status": "pass",
             "candidate_count": 1,
-            "checks": {"candidate_present": True, "any_measurable_difference": True},
+            "checks": {
+                "candidate_present": True,
+                "any_measurable_difference": True,
+                "reference_position_enabled": True,
+                "no_position_candidate_present": True,
+                "any_valid_no_position_measurable_difference": True,
+            },
         },
     )
     retention = _write_json(
@@ -200,7 +206,13 @@ def test_risk_audit_flags_triggered_symptoms(tmp_path: Path) -> None:
         {
             "overall_status": "fail",
             "candidate_count": 1,
-            "checks": {"candidate_present": True, "any_measurable_difference": False},
+            "checks": {
+                "candidate_present": True,
+                "any_measurable_difference": False,
+                "reference_position_enabled": True,
+                "no_position_candidate_present": True,
+                "any_valid_no_position_measurable_difference": False,
+            },
         },
     )
     retention = _write_json(
@@ -299,7 +311,16 @@ def test_risk_audit_flags_never_exit_from_stage_gate_check(tmp_path: Path) -> No
     )
     position = _write_json(
         tmp_path / "position.json",
-        {"overall_status": "pass", "checks": {"candidate_present": True, "any_measurable_difference": True}},
+        {
+            "overall_status": "pass",
+            "checks": {
+                "candidate_present": True,
+                "any_measurable_difference": True,
+                "reference_position_enabled": True,
+                "no_position_candidate_present": True,
+                "any_valid_no_position_measurable_difference": True,
+            },
+        },
     )
     retention = _write_json(tmp_path / "retention.json", {"overall_status": "pass", "checks": {}})
     long_context = _write_json(tmp_path / "long_context.json", {"overall_status": "pass", "comparisons": []})
@@ -323,6 +344,54 @@ def test_risk_audit_flags_never_exit_from_stage_gate_check(tmp_path: Path) -> No
 
     assert never_exits["triggered"] is True
     assert never_exits["evidence"]["stage4_not_never_exit"] is False
+
+
+def test_risk_audit_treats_wrong_position_ablation_role_as_missing(tmp_path: Path) -> None:
+    position = _write_json(
+        tmp_path / "position.json",
+        {
+            "overall_status": "pass",
+            "candidate_count": 1,
+            "checks": {
+                "candidate_present": True,
+                "any_measurable_difference": True,
+                "reference_position_enabled": True,
+                "no_position_candidate_present": False,
+                "any_valid_no_position_measurable_difference": False,
+            },
+        },
+    )
+
+    output = make_risk_audit_report(
+        output_path=tmp_path / "risk.json",
+        position_ablation_report_path=position,
+    )
+    report = json.loads(output.read_text(encoding="utf-8"))
+    symptom = _symptom(report, "block_position_state_no_effect", "no_position_ablation_equals_main_model")
+
+    assert symptom["status"] == "missing"
+    assert symptom["triggered"] is None
+
+
+def test_risk_audit_treats_legacy_position_ablation_report_as_missing(tmp_path: Path) -> None:
+    position = _write_json(
+        tmp_path / "position.json",
+        {
+            "overall_status": "pass",
+            "candidate_count": 1,
+            "checks": {"candidate_present": True, "any_measurable_difference": True},
+        },
+    )
+
+    output = make_risk_audit_report(
+        output_path=tmp_path / "risk.json",
+        position_ablation_report_path=position,
+    )
+    report = json.loads(output.read_text(encoding="utf-8"))
+    symptom = _symptom(report, "block_position_state_no_effect", "no_position_ablation_equals_main_model")
+
+    assert symptom["status"] == "missing"
+    assert symptom["triggered"] is None
 
 
 def test_risk_audit_rejects_boolean_numeric_evidence(tmp_path: Path) -> None:

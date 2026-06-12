@@ -36,9 +36,18 @@ def make_position_ablation_report(
         for candidate in candidates
     ]
     any_measurable = any(item["checks"]["measurable_difference"] for item in comparisons)
+    reference_position_enabled = _position_enabled(reference)
+    no_position_candidate_present = any(item["checks"]["candidate_no_position_ablation"] for item in comparisons)
+    any_valid_no_position_measurable = any(
+        item["checks"]["candidate_no_position_ablation"] and item["checks"]["measurable_difference"]
+        for item in comparisons
+    )
     checks = {
         "candidate_present": bool(comparisons),
         "any_measurable_difference": any_measurable,
+        "reference_position_enabled": reference_position_enabled,
+        "no_position_candidate_present": no_position_candidate_present,
+        "any_valid_no_position_measurable_difference": reference_position_enabled and any_valid_no_position_measurable,
     }
     report = {
         "overall_status": "pass" if all(checks.values()) else "fail",
@@ -67,10 +76,14 @@ def _summarize_run(run_dir: Path) -> dict[str, Any]:
     eval_rows = _read_jsonl(run_dir / "eval_log.jsonl")
     latest_eval = eval_rows[-1] if eval_rows else routing_report.get("latest_eval", {})
     routing_summary = routing_report.get("summary", {}) if isinstance(routing_report.get("summary"), dict) else {}
+    model_config = config.get("model_config_resolved", {}) if isinstance(config.get("model_config_resolved"), dict) else {}
     return {
         "run_dir": str(run_dir),
         "stage": str(config.get("stage", "")),
         "model_name": str(model_stats.get("model_name", "")),
+        "block_position_mode": _str_value(model_config.get("block_position_mode", config.get("block_position_mode"))),
+        "position_to_router": _bool_value(model_config.get("position_to_router", config.get("position_to_router"))),
+        "position_to_blocks": _bool_value(model_config.get("position_to_blocks", config.get("position_to_blocks"))),
         "validation_loss": _num(latest_eval.get("validation_loss")),
         "perplexity": _num(latest_eval.get("perplexity")),
         "routing": {key: _num(routing_summary.get(key)) for key in ROUTING_METRICS},
@@ -95,7 +108,10 @@ def _compare(
     }
     validation_measurable = validation_delta is not None and abs(validation_delta) > min_validation_loss_delta
     routing_measurable = bool(measurable_routing)
+    candidate_no_position = _no_position_ablation(candidate)
     checks = {
+        "reference_position_enabled": _position_enabled(reference),
+        "candidate_no_position_ablation": candidate_no_position,
         "validation_loss_delta_measurable": validation_measurable,
         "routing_metric_delta_measurable": routing_measurable,
         "measurable_difference": validation_measurable or routing_measurable,
@@ -104,12 +120,33 @@ def _compare(
         "run_dir": candidate["run_dir"],
         "stage": candidate.get("stage"),
         "model_name": candidate.get("model_name"),
-        "status": "pass" if checks["measurable_difference"] else "fail",
+        "block_position_mode": candidate.get("block_position_mode"),
+        "position_to_router": candidate.get("position_to_router"),
+        "position_to_blocks": candidate.get("position_to_blocks"),
+        "status": "pass"
+        if checks["reference_position_enabled"] and candidate_no_position and checks["measurable_difference"]
+        else "fail",
         "checks": checks,
         "validation_loss_delta": validation_delta,
         "routing_metric_deltas": routing_deltas,
         "measurable_routing_metric_deltas": measurable_routing,
     }
+
+
+def _position_enabled(summary: dict[str, Any]) -> bool:
+    return (
+        summary.get("block_position_mode") not in {"", "none"}
+        and summary.get("position_to_router") is True
+        and summary.get("position_to_blocks") is True
+    )
+
+
+def _no_position_ablation(summary: dict[str, Any]) -> bool:
+    return (
+        summary.get("block_position_mode") == "none"
+        and summary.get("position_to_router") is False
+        and summary.get("position_to_blocks") is False
+    )
 
 
 def _delta(value: Any, baseline: Any) -> float | None:
@@ -126,6 +163,18 @@ def _num(value: Any) -> float | None:
     if isinstance(value, (int, float)) and math.isfinite(float(value)):
         return float(value)
     return None
+
+
+def _bool_value(value: Any) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    return None
+
+
+def _str_value(value: Any) -> str:
+    if isinstance(value, str):
+        return value
+    return ""
 
 
 def _read_jsonl(path: Path) -> list[dict[str, Any]]:

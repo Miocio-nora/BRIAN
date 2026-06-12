@@ -493,14 +493,15 @@ def _no_position_ablation_equals_main(report: dict[str, Any]) -> bool | None:
     candidate_present = checks.get("candidate_present")
     if candidate_present is False or candidate_count == 0:
         return None
-    measurable = checks.get("any_measurable_difference")
-    if isinstance(measurable, bool):
-        return not measurable
-    status = report.get("overall_status")
-    if status == "pass":
-        return False
-    if status == "fail" and candidate_present is True:
-        return True
+    reference_position_enabled = checks.get("reference_position_enabled")
+    no_position_present = checks.get("no_position_candidate_present")
+    if reference_position_enabled is False or no_position_present is False:
+        return None
+    if reference_position_enabled is not True or no_position_present is not True:
+        return None
+    valid_no_position_measurable = checks.get("any_valid_no_position_measurable_difference")
+    if isinstance(valid_no_position_measurable, bool):
+        return not valid_no_position_measurable
     return None
 
 

@@ -118,11 +118,18 @@ def _passing_position_ablation() -> dict:
         "checks": {
             "candidate_present": True,
             "any_measurable_difference": True,
+            "reference_position_enabled": True,
+            "no_position_candidate_present": True,
+            "any_valid_no_position_measurable_difference": True,
         },
         "comparisons": [
             {
                 "status": "pass",
-                "checks": {"measurable_difference": True},
+                "checks": {
+                    "reference_position_enabled": True,
+                    "candidate_no_position_ablation": True,
+                    "measurable_difference": True,
+                },
                 "validation_loss_delta": 0.01,
             }
         ],
@@ -249,6 +256,30 @@ def test_go_no_go_r125_rejects_empty_passing_position_report(tmp_path: Path) -> 
     assert report["overall_status"] == "fail"
     assert position_criterion["status"] == "fail"
     assert position_criterion["evidence"]["checks"] is None
+
+
+def test_go_no_go_r125_requires_no_position_ablation_role(tmp_path: Path) -> None:
+    stage_gate = _write_json(tmp_path / "stage_gate.json", _passing_stage_gate())
+    position_data = _passing_position_ablation()
+    position_data["checks"]["no_position_candidate_present"] = False
+    position_data["checks"]["any_valid_no_position_measurable_difference"] = False
+    position_data["comparisons"][0]["checks"]["candidate_no_position_ablation"] = False
+    position = _write_json(tmp_path / "position.json", position_data)
+
+    output = make_go_no_go_report(
+        stage_gate_report_path=stage_gate,
+        position_ablation_report_path=position,
+        phase="r125_to_r350",
+        output_path=tmp_path / "go.json",
+    )
+    report = json.loads(output.read_text(encoding="utf-8"))
+    criteria = {item["name"]: item for item in report["phases"]["r125_to_r350"]["criteria"]}
+    position_criterion = criteria["block_position_ablation_measurable_difference"]
+
+    assert report["overall_status"] == "fail"
+    assert position_criterion["status"] == "fail"
+    assert position_criterion["passed"] is False
+    assert position_criterion["evidence"]["checks"]["no_position_candidate_present"] is False
 
 
 def test_go_no_go_r350_passes_with_compute_reasoning_and_memory_evidence(tmp_path: Path) -> None:

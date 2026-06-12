@@ -441,7 +441,12 @@ def _position_ablation_passed(report: dict[str, Any]) -> bool | None:
     checks = report.get("checks")
     if not isinstance(checks, dict):
         return False
-    return checks.get("candidate_present") is True and checks.get("any_measurable_difference") is True
+    return (
+        checks.get("candidate_present") is True
+        and checks.get("reference_position_enabled") is True
+        and checks.get("no_position_candidate_present") is True
+        and checks.get("any_valid_no_position_measurable_difference") is True
+    )
 
 
 def _position_ablation_evidence(report: dict[str, Any]) -> dict[str, Any]:

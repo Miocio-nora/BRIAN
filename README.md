@@ -357,7 +357,7 @@ python scripts/eval.py \
   --runs <no_position_run> <router_only_position_run> <circular_position_run>
 ```
 
-This writes `reports/position_ablation_report.json` with validation-loss and routing/position metric deltas. Pass it to the Go/No-Go report with `--position-ablation-report`.
+This writes `reports/position_ablation_report.json` with validation-loss and routing/position metric deltas. The report passes only when the reference keeps block position enabled for both router and blocks, at least one candidate is a true no-position ablation for both router and blocks, and that valid no-position candidate shows a measurable difference. Pass it to the Go/No-Go report with `--position-ablation-report`.
 
 Resolve the full Package A BRIAN-R125 route-core manifest:
 
@@ -739,7 +739,7 @@ Proceed from BRIAN-R125 route-core experiments to BRIAN-R350 only if:
 - scheduled free routing does not collapse validation loss;
 - average route steps can be controlled by cost loss;
 - block load does not collapse to one internal block;
-- the block-position ablation shows a measurable difference;
+- the true no-position block-position ablation shows a measurable difference;
 - `OUT` is neither always early nor never used.
 
 If these fail, the plan is to fix route training, position design, and curriculum before scaling.
