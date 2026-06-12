@@ -720,9 +720,11 @@ def _gate_stage6(
         "quality_not_worse",
         "active_compute_bounded",
         "estimated_flops_bounded",
+        "throughput_not_collapsed",
         "parallel_branch_benefit_proxy",
     ]
     any_parallel_pass = _any_passing_comparison_with_checks(comparisons, parallel_key_checks)
+    any_parallel_throughput_pass = _any_passing_comparison_with_checks(comparisons, ["throughput_not_collapsed"])
     passing_report = parallel_passing_report or (stage6.get("parallel_passing_report") if stage6 else None) or {}
     passing_checks = passing_report.get("checks", {}) if isinstance(passing_report.get("checks"), dict) else {}
     checks = {
@@ -752,6 +754,7 @@ def _gate_stage6(
         "parallel_compare_passed": bool(
             parallel_compare_report and parallel_compare_report.get("overall_status") == "pass"
         ),
+        "parallel_compare_throughput_not_collapsed": any_parallel_throughput_pass,
         "parallel_branch_benefit_proxy": any_parallel_pass,
         "checkpoint_present": bool(stage6 and stage6["has_checkpoint_latest"]),
         **_routed_run_artifact_gate_checks(stage6),

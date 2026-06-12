@@ -2479,6 +2479,7 @@ def test_stage6_gate_uses_parallel_compare_report(tmp_path: Path) -> None:
     assert gate["checks"]["parallel_delta_cache_bounded"] is True
     assert gate["checks"]["parallel_branch_score_decay_configured"] is True
     assert gate["checks"]["parallel_compare_report_present"] is True
+    assert gate["checks"]["parallel_compare_throughput_not_collapsed"] is True
     assert gate["checks"]["parallel_branch_benefit_proxy"] is True
     assert report["supplemental_reports"]["parallel_compare_report"] == str(compare_report)
 
@@ -2580,6 +2581,7 @@ def test_stage6_gate_accepts_stage7_parallel_alias(tmp_path: Path) -> None:
     assert gate["status"] == "pass"
     assert gate["checks"]["parallel_branch_count_present"] is True
     assert gate["checks"]["parallel_passing_report_passed"] is True
+    assert gate["checks"]["parallel_compare_throughput_not_collapsed"] is True
     assert gate["checks"]["parallel_branch_benefit_proxy"] is True
 
 
@@ -2639,6 +2641,40 @@ def test_stage6_gate_requires_parallel_compare_key_checks(tmp_path: Path) -> Non
 
     assert gate["status"] == "warn"
     assert gate["checks"]["parallel_compare_passed"] is True
+    assert gate["checks"]["parallel_compare_throughput_not_collapsed"] is False
+    assert gate["checks"]["parallel_branch_benefit_proxy"] is False
+
+
+def test_stage6_gate_requires_parallel_compare_throughput(tmp_path: Path) -> None:
+    stage6 = _write_run(
+        tmp_path,
+        "parallel",
+        stage="stage6_parallel_passing",
+        val_loss=10.0,
+        train_row={
+            "parallel_branch_count_mean": 2.0,
+            "parallel_score_margin_mean": 0.1,
+            "global_cache_slots_mean": 2.0,
+            "top1_block_histogram": {"0": 1, "1": 1, "2": 1},
+        },
+        parallel_passing_report=_parallel_passing_report(),
+    )
+    compare = _parallel_compare_report(checks={"throughput_not_collapsed": False})
+    compare["overall_status"] = "pass"
+    compare["comparisons"][0]["status"] = "pass"
+    compare_report = tmp_path / "parallel_compare.json"
+    compare_report.write_text(json.dumps(compare), encoding="utf-8")
+
+    report_path = make_stage_gate_report(
+        [stage6],
+        output_path=tmp_path / "gate.json",
+        parallel_compare_report_path=compare_report,
+    )
+    gate = json.loads(report_path.read_text(encoding="utf-8"))["gates"]["stage6_to_scale"]
+
+    assert gate["status"] != "pass"
+    assert gate["checks"]["parallel_compare_passed"] is True
+    assert gate["checks"]["parallel_compare_throughput_not_collapsed"] is False
     assert gate["checks"]["parallel_branch_benefit_proxy"] is False
 
 
