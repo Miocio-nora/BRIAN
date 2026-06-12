@@ -137,6 +137,9 @@ def test_global_kv_ablation_report_passes_with_manifest_runs_and_long_context(tm
     assert report["checks"]["window_slots_vary"] is True
     assert report["checks"]["long_context_reports_match_run_config"] is True
     assert report["checks"]["long_context_coverage_passed"] is True
+    assert report["checks"]["window_sweep_performance_curve_present"] is True
+    assert report["checks"]["window_sweep_memory_budget_curve_present"] is True
+    assert report["checks"]["kv_budget_quality_curve_present"] is True
     assert report["checks"]["per_block_adapter_candidate_present"] is True
     assert report["checks"]["head_delta_adapter_candidate_present"] is True
     assert report["checks"]["per_block_head_delta_adapter_candidate_present"] is True
@@ -149,6 +152,7 @@ def test_global_kv_ablation_report_passes_with_manifest_runs_and_long_context(tm
     ] == -48
     assert report["comparisons"]["with_sink_vs_no_sink"]["sink_attention_mass_delta"] == 0.6
     assert [row["global_window_slots"] for row in report["comparisons"]["window_sweep"]] == [1, 6]
+    assert all(row["global_cache_mean_ratio"] is not None for row in report["comparisons"]["window_sweep"])
     assert report["comparisons"]["per_block_vs_compressed"]["global_adapter_scope_per_block"] == "per_block"
     assert report["comparisons"]["head_delta_vs_per_block"]["global_head_delta_rank_head_delta"] == 2
     assert report["entries"][0]["long_context"]["task_family_coverage_passed"] is True
@@ -328,6 +332,36 @@ def test_global_kv_ablation_report_warns_for_incomplete_long_context_coverage(tm
     assert report["entries"][1]["long_context"]["coverage"]["missing_difficulties"] == ["far"]
 
 
+def test_global_kv_ablation_report_warns_without_window_memory_curve(tmp_path: Path) -> None:
+    runs = _write_complete_global_kv_runs(tmp_path)
+    long_context_reports = [
+        _write_long_context(
+            tmp_path,
+            run,
+            index,
+            exact=0.5 + index * 0.01,
+            teacher=0.6 + index * 0.01,
+            omit_memory_ratios=run.name in {"window1", "window6"},
+        )
+        for index, run in enumerate(runs)
+    ]
+
+    output = make_global_kv_ablation_report(
+        "configs/experiments/tiny_global_kv.yaml",
+        runs,
+        output_path=tmp_path / "global_kv_ablation.json",
+        long_context_report_paths=long_context_reports,
+    )
+    report = json.loads(output.read_text(encoding="utf-8"))
+
+    assert report["overall_status"] == "warn"
+    assert report["checks"]["long_context_reports_match_run_config"] is True
+    assert report["checks"]["long_context_quality_metrics_present"] is True
+    assert report["checks"]["window_sweep_performance_curve_present"] is True
+    assert report["checks"]["window_sweep_memory_budget_curve_present"] is False
+    assert report["comparisons"]["window_sweep"][0]["global_cache_capacity_ratio"] is None
+
+
 def test_global_kv_ablation_report_fails_without_window_sweep(tmp_path: Path) -> None:
     runs = [
         _write_run(tmp_path, "local", global_kv=False, sink_slots=0, window_slots=0),
@@ -476,6 +510,115 @@ def _write_run(
     return run_dir
 
 
+def _write_complete_global_kv_runs(root: Path) -> list[Path]:
+    return [
+        _write_run(root, "local", global_kv=False, sink_slots=0, window_slots=0, validation_loss=10.0),
+        _write_run(
+            root,
+            "uncompressed",
+            global_kv=True,
+            global_code_dim=64,
+            sink_slots=1,
+            window_slots=3,
+            validation_loss=10.1,
+            sink_mass=0.5,
+            window_mass=0.5,
+        ),
+        _write_run(
+            root,
+            "compressed",
+            global_kv=True,
+            global_code_dim=16,
+            sink_slots=1,
+            window_slots=3,
+            validation_loss=10.0,
+            sink_mass=0.6,
+            window_mass=0.4,
+        ),
+        _write_run(
+            root,
+            "no_sink",
+            global_kv=True,
+            global_code_dim=16,
+            sink_slots=0,
+            window_slots=3,
+            validation_loss=10.1,
+            sink_mass=0.0,
+            window_mass=1.0,
+        ),
+        _write_run(
+            root,
+            "with_sink",
+            global_kv=True,
+            global_code_dim=16,
+            sink_slots=1,
+            window_slots=3,
+            validation_loss=10.0,
+            sink_mass=0.6,
+            window_mass=0.4,
+        ),
+        _write_run(
+            root,
+            "window1",
+            global_kv=True,
+            global_code_dim=16,
+            sink_slots=1,
+            window_slots=1,
+            validation_loss=10.2,
+            sink_mass=0.7,
+            window_mass=0.3,
+        ),
+        _write_run(
+            root,
+            "window6",
+            global_kv=True,
+            global_code_dim=16,
+            sink_slots=1,
+            window_slots=6,
+            validation_loss=9.9,
+            sink_mass=0.4,
+            window_mass=0.6,
+        ),
+        _write_run(
+            root,
+            "per_block",
+            global_kv=True,
+            global_code_dim=16,
+            sink_slots=1,
+            window_slots=3,
+            global_adapter_scope="per_block",
+            validation_loss=9.95,
+            sink_mass=0.55,
+            window_mass=0.45,
+        ),
+        _write_run(
+            root,
+            "head_delta",
+            global_kv=True,
+            global_code_dim=16,
+            sink_slots=1,
+            window_slots=3,
+            global_head_delta_rank=2,
+            validation_loss=9.94,
+            sink_mass=0.55,
+            window_mass=0.45,
+        ),
+        _write_run(
+            root,
+            "per_block_head_delta",
+            global_kv=True,
+            global_code_dim=16,
+            sink_slots=1,
+            window_slots=3,
+            global_adapter_scope="per_block",
+            global_head_delta_rank=2,
+            validation_loss=9.93,
+            sink_mass=0.55,
+            window_mass=0.45,
+        ),
+    ]
+
+
 def _write_long_context(
     tmp_path: Path,
     run_dir: Path,
@@ -487,6 +630,7 @@ def _write_long_context(
     route_mode: str = "scheduled",
     global_kv_enabled: bool | None = None,
     coverage: dict | None = None,
+    omit_memory_ratios: bool = False,
 ) -> Path:
     path = tmp_path / f"long_context_{index}.json"
     config = yaml.safe_load((run_dir / "config_resolved.yaml").read_text(encoding="utf-8"))
@@ -497,6 +641,14 @@ def _write_long_context(
         global_kv_enabled = bool(model_config.get("global_kv", False))
     if coverage is None:
         coverage = _passing_long_context_coverage()
+    memory_budget = {"global_kv_enabled": global_kv_enabled}
+    if not omit_memory_ratios:
+        memory_budget.update(
+            {
+                "estimated_global_cache_capacity_to_local_context_ratio": 0.1 + index * 0.01,
+                "estimated_global_cache_mean_to_local_context_ratio": 0.05 + index * 0.01,
+            }
+        )
     report = {
         "run_dir": str(run_dir),
         "stage": stage,
@@ -508,11 +660,7 @@ def _write_long_context(
             "truncation_rate": 0.0,
         },
         "coverage": coverage,
-        "memory_budget": {
-            "global_kv_enabled": global_kv_enabled,
-            "estimated_global_cache_capacity_to_local_context_ratio": 0.1 + index * 0.01,
-            "estimated_global_cache_mean_to_local_context_ratio": 0.05 + index * 0.01,
-        },
+        "memory_budget": memory_budget,
     }
     path.write_text(json.dumps(report), encoding="utf-8")
     return path

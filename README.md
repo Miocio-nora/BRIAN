@@ -453,7 +453,7 @@ python scripts/eval.py \
 
 This writes `reports/global_kv_ablation_report.json` with C0-C8 coverage checks, sink/no-sink retention deltas,
 window-size sweep rows, per-block and per-head low-rank adapter comparisons, and optional long-context memory/quality metrics.
-If the long-context reports do not cover every run, miss expected task-family/difficulty coverage, or their stage/route/Global KV metadata does not match the run config, the report stays at `warn` instead of `pass`.
+The report passes only when long-context reports cover every run, match the run config, cover expected task families and difficulties, and provide both window-size performance curves and KV memory-budget/quality curves. Missing or incomplete long-context curve evidence keeps the report at `warn` instead of `pass`.
 
 The fast smoke manifest is `configs/experiments/tiny_global_kv.yaml`;
 the BRIAN-R125 sweep manifest is `configs/experiments/route_core_global_kv.yaml`.

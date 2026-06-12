@@ -141,6 +141,15 @@ def _required_checks(rows: list[dict[str, Any]], *, expected_entry_count: int) -
 
 def _optional_checks(rows: list[dict[str, Any]]) -> dict[str, bool]:
     long_context_rows = [row for row in rows if row["long_context"]["present"]]
+    window_rows = [row for row in rows if row["kind"] == "window_sweep"]
+    global_quality_budget_rows = [
+        row
+        for row in rows
+        if row["global_kv_enabled"] and _quality_metrics_present(row) and _memory_budget_metrics_present(row)
+    ]
+    distinct_global_capacity_ratios = {
+        float(row["long_context"]["global_cache_capacity_ratio"]) for row in global_quality_budget_rows
+    }
     return {
         "long_context_reports_present": bool(rows) and len(long_context_rows) == len(rows),
         "long_context_reports_match_run_config": bool(rows)
@@ -155,6 +164,15 @@ def _optional_checks(rows: list[dict[str, Any]]) -> dict[str, bool]:
         "memory_budget_metrics_present": bool(rows)
         and len(long_context_rows) == len(rows)
         and any(_finite(row["long_context"].get("global_cache_capacity_ratio")) for row in long_context_rows),
+        "window_sweep_performance_curve_present": len(window_rows) >= 2
+        and len({row["global_window_slots"] for row in window_rows}) >= 2
+        and all(_quality_metrics_present(row) for row in window_rows),
+        "window_sweep_memory_budget_curve_present": len(window_rows) >= 2
+        and len({row["global_window_slots"] for row in window_rows}) >= 2
+        and all(_memory_budget_metrics_present(row) for row in window_rows)
+        and len({float(row["long_context"]["global_cache_capacity_ratio"]) for row in window_rows}) >= 2,
+        "kv_budget_quality_curve_present": len(global_quality_budget_rows) >= 2
+        and len(distinct_global_capacity_ratios) >= 2,
     }
 
 
@@ -269,6 +287,7 @@ def _window_sweep(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
             "exact_match_accuracy": row["long_context"].get("exact_match_accuracy"),
             "teacher_forced_token_accuracy": row["long_context"].get("teacher_forced_token_accuracy"),
             "global_cache_capacity_ratio": row["long_context"].get("global_cache_capacity_ratio"),
+            "global_cache_mean_ratio": row["long_context"].get("global_cache_mean_ratio"),
             "global_cache_slots_mean": row["global_metrics"].get("global_cache_slots_mean"),
             "global_attention_mass": row["global_metrics"].get("global_attention_mass"),
         }
@@ -448,6 +467,23 @@ def _long_context_coverage_passed(row: dict[str, Any]) -> bool:
     return (
         long_context.get("task_family_coverage_passed") is True
         and long_context.get("difficulty_coverage_passed") is True
+    )
+
+
+def _quality_metrics_present(row: dict[str, Any]) -> bool:
+    long_context = row["long_context"]
+    return (
+        _finite(row.get("validation_loss"))
+        and _finite(long_context.get("exact_match_accuracy"))
+        and _finite(long_context.get("teacher_forced_token_accuracy"))
+    )
+
+
+def _memory_budget_metrics_present(row: dict[str, Any]) -> bool:
+    long_context = row["long_context"]
+    return (
+        _finite(long_context.get("global_cache_capacity_ratio"))
+        and _finite(long_context.get("global_cache_mean_ratio"))
     )
 
 
