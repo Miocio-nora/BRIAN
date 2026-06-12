@@ -230,7 +230,9 @@ python scripts/eval.py \
 ```
 
 This writes a reasoning report with exact-match accuracy, teacher-forced target token accuracy,
-visible-CoT token estimates, per-task/per-difficulty summaries, and routed compute diagnostics.
+visible-CoT token estimates, per-task/per-difficulty summaries, routed compute diagnostics,
+`checks`, and `overall_status`. Downstream Go/No-Go and OUT-by-difficulty reports require
+passing reasoning reports before using reasoning accuracy or visible-CoT evidence.
 
 Summarize whether the OUT action reduces routed compute on easy samples:
 

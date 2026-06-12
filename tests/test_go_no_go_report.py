@@ -98,6 +98,8 @@ def _passing_out_by_difficulty() -> dict:
     return {
         "overall_status": "pass",
         "checks": {
+            "reasoning_report_present": True,
+            "reasoning_report_passed": True,
             "stage4_output_action_reasoning": True,
             "hard_exit_reasoning": True,
             "easy_and_hard_present": True,
@@ -109,6 +111,30 @@ def _passing_out_by_difficulty() -> dict:
             "hard_minus_easy_route_steps": 1.0,
             "hard_minus_easy_active_block_evals_per_token": 0.5,
             "easy_minus_hard_p_output": 0.2,
+        },
+    }
+
+
+def _reasoning_report(
+    *,
+    exact: float,
+    teacher: float = 1.0,
+    visible_cot: float = 0.0,
+    overall_status: str = "pass",
+) -> dict:
+    return {
+        "overall_status": overall_status,
+        "checks": {
+            "samples_present": True,
+            "exact_match_accuracy_present": True,
+            "teacher_forced_token_accuracy_present": True,
+            "visible_cot_tokens_present": True,
+        },
+        "overall": {
+            "sample_count": 1,
+            "exact_match_accuracy": exact,
+            "teacher_forced_token_accuracy": teacher,
+            "visible_cot_tokens_mean": visible_cot,
         },
     }
 
@@ -308,8 +334,8 @@ def test_go_no_go_r350_passes_with_compute_reasoning_and_memory_evidence(tmp_pat
             ],
         },
     )
-    reasoning_baseline = _write_json(tmp_path / "reasoning_base.json", {"overall": {"exact_match_accuracy": 0.2}})
-    reasoning_candidate = _write_json(tmp_path / "reasoning_candidate.json", {"overall": {"exact_match_accuracy": 0.3}})
+    reasoning_baseline = _write_json(tmp_path / "reasoning_base.json", _reasoning_report(exact=0.2))
+    reasoning_candidate = _write_json(tmp_path / "reasoning_candidate.json", _reasoning_report(exact=0.3))
     out = _write_json(tmp_path / "out.json", _passing_out_by_difficulty())
     long_context = _write_json(tmp_path / "long_context.json", _controlled_memory_compare())
     output = make_go_no_go_report(
@@ -353,8 +379,8 @@ def test_go_no_go_r350_treats_absent_global_kv_evidence_as_not_tested(tmp_path: 
             ],
         },
     )
-    reasoning_baseline = _write_json(tmp_path / "reasoning_base.json", {"overall": {"exact_match_accuracy": 0.2}})
-    reasoning_candidate = _write_json(tmp_path / "reasoning_candidate.json", {"overall": {"exact_match_accuracy": 0.3}})
+    reasoning_baseline = _write_json(tmp_path / "reasoning_base.json", _reasoning_report(exact=0.2))
+    reasoning_candidate = _write_json(tmp_path / "reasoning_candidate.json", _reasoning_report(exact=0.3))
     out = _write_json(tmp_path / "out.json", _passing_out_by_difficulty())
 
     output = make_go_no_go_report(
@@ -399,8 +425,8 @@ def test_go_no_go_r350_requires_all_compute_comparison_views(tmp_path: Path) -> 
             ],
         },
     )
-    reasoning_baseline = _write_json(tmp_path / "reasoning_base.json", {"overall": {"exact_match_accuracy": 0.2}})
-    reasoning_candidate = _write_json(tmp_path / "reasoning_candidate.json", {"overall": {"exact_match_accuracy": 0.3}})
+    reasoning_baseline = _write_json(tmp_path / "reasoning_base.json", _reasoning_report(exact=0.2))
+    reasoning_candidate = _write_json(tmp_path / "reasoning_candidate.json", _reasoning_report(exact=0.3))
     out = _write_json(tmp_path / "out.json", _passing_out_by_difficulty())
     long_context = _write_json(tmp_path / "long_context.json", _controlled_memory_compare())
 
@@ -450,8 +476,8 @@ def test_go_no_go_r350_requires_declared_stage0_compute_baseline(tmp_path: Path)
             ],
         },
     )
-    reasoning_baseline = _write_json(tmp_path / "reasoning_base.json", {"overall": {"exact_match_accuracy": 0.2}})
-    reasoning_candidate = _write_json(tmp_path / "reasoning_candidate.json", {"overall": {"exact_match_accuracy": 0.3}})
+    reasoning_baseline = _write_json(tmp_path / "reasoning_base.json", _reasoning_report(exact=0.2))
+    reasoning_candidate = _write_json(tmp_path / "reasoning_candidate.json", _reasoning_report(exact=0.3))
     out = _write_json(tmp_path / "out.json", _passing_out_by_difficulty())
     long_context = _write_json(tmp_path / "long_context.json", _controlled_memory_compare())
 
@@ -501,8 +527,8 @@ def test_go_no_go_r350_requires_comparison_to_declared_baseline(tmp_path: Path) 
             ],
         },
     )
-    reasoning_baseline = _write_json(tmp_path / "reasoning_base.json", {"overall": {"exact_match_accuracy": 0.2}})
-    reasoning_candidate = _write_json(tmp_path / "reasoning_candidate.json", {"overall": {"exact_match_accuracy": 0.3}})
+    reasoning_baseline = _write_json(tmp_path / "reasoning_base.json", _reasoning_report(exact=0.2))
+    reasoning_candidate = _write_json(tmp_path / "reasoning_candidate.json", _reasoning_report(exact=0.3))
     out = _write_json(tmp_path / "out.json", _passing_out_by_difficulty())
     long_context = _write_json(tmp_path / "long_context.json", _controlled_memory_compare())
 
@@ -552,8 +578,8 @@ def test_go_no_go_r350_rejects_empty_passing_long_context_report(tmp_path: Path)
             ],
         },
     )
-    reasoning_baseline = _write_json(tmp_path / "reasoning_base.json", {"overall": {"exact_match_accuracy": 0.2}})
-    reasoning_candidate = _write_json(tmp_path / "reasoning_candidate.json", {"overall": {"exact_match_accuracy": 0.3}})
+    reasoning_baseline = _write_json(tmp_path / "reasoning_base.json", _reasoning_report(exact=0.2))
+    reasoning_candidate = _write_json(tmp_path / "reasoning_candidate.json", _reasoning_report(exact=0.3))
     out = _write_json(tmp_path / "out.json", _passing_out_by_difficulty())
     long_context = _write_json(
         tmp_path / "long_context.json",
@@ -603,8 +629,8 @@ def test_go_no_go_r350_requires_stage5_long_context_roles(tmp_path: Path) -> Non
             ],
         },
     )
-    reasoning_baseline = _write_json(tmp_path / "reasoning_base.json", {"overall": {"exact_match_accuracy": 0.2}})
-    reasoning_candidate = _write_json(tmp_path / "reasoning_candidate.json", {"overall": {"exact_match_accuracy": 0.3}})
+    reasoning_baseline = _write_json(tmp_path / "reasoning_base.json", _reasoning_report(exact=0.2))
+    reasoning_candidate = _write_json(tmp_path / "reasoning_candidate.json", _reasoning_report(exact=0.3))
     out = _write_json(tmp_path / "out.json", _passing_out_by_difficulty())
     long_context_data = _controlled_memory_compare()
     long_context_data["comparisons"][0]["checks"]["candidate_stage5_global_kv"] = False
@@ -656,8 +682,8 @@ def test_go_no_go_r350_requires_long_context_coverage_contract(tmp_path: Path) -
             ],
         },
     )
-    reasoning_baseline = _write_json(tmp_path / "reasoning_base.json", {"overall": {"exact_match_accuracy": 0.2}})
-    reasoning_candidate = _write_json(tmp_path / "reasoning_candidate.json", {"overall": {"exact_match_accuracy": 0.3}})
+    reasoning_baseline = _write_json(tmp_path / "reasoning_base.json", _reasoning_report(exact=0.2))
+    reasoning_candidate = _write_json(tmp_path / "reasoning_candidate.json", _reasoning_report(exact=0.3))
     out = _write_json(tmp_path / "out.json", _passing_out_by_difficulty())
     long_context_data = _controlled_memory_compare()
     long_context_data["comparisons"][0]["checks"]["candidate_task_family_coverage"] = False
@@ -709,8 +735,8 @@ def test_go_no_go_r350_requires_passing_long_context_input_reports(tmp_path: Pat
             ],
         },
     )
-    reasoning_baseline = _write_json(tmp_path / "reasoning_base.json", {"overall": {"exact_match_accuracy": 0.2}})
-    reasoning_candidate = _write_json(tmp_path / "reasoning_candidate.json", {"overall": {"exact_match_accuracy": 0.3}})
+    reasoning_baseline = _write_json(tmp_path / "reasoning_base.json", _reasoning_report(exact=0.2))
+    reasoning_candidate = _write_json(tmp_path / "reasoning_candidate.json", _reasoning_report(exact=0.3))
     out = _write_json(tmp_path / "out.json", _passing_out_by_difficulty())
     long_context_data = _controlled_memory_compare()
     long_context_data["comparisons"][0]["checks"]["candidate_report_passed"] = False
@@ -762,8 +788,8 @@ def test_go_no_go_r350_rejects_empty_passing_out_by_difficulty_report(tmp_path: 
             ],
         },
     )
-    reasoning_baseline = _write_json(tmp_path / "reasoning_base.json", {"overall": {"exact_match_accuracy": 0.2}})
-    reasoning_candidate = _write_json(tmp_path / "reasoning_candidate.json", {"overall": {"exact_match_accuracy": 0.3}})
+    reasoning_baseline = _write_json(tmp_path / "reasoning_base.json", _reasoning_report(exact=0.2))
+    reasoning_candidate = _write_json(tmp_path / "reasoning_candidate.json", _reasoning_report(exact=0.3))
     out = _write_json(tmp_path / "out.json", {"overall_status": "pass"})
     long_context = _write_json(tmp_path / "long_context.json", _controlled_memory_compare())
 
@@ -810,8 +836,8 @@ def test_go_no_go_r350_requires_stage4_hard_exit_out_by_difficulty(tmp_path: Pat
             ],
         },
     )
-    reasoning_baseline = _write_json(tmp_path / "reasoning_base.json", {"overall": {"exact_match_accuracy": 0.2}})
-    reasoning_candidate = _write_json(tmp_path / "reasoning_candidate.json", {"overall": {"exact_match_accuracy": 0.3}})
+    reasoning_baseline = _write_json(tmp_path / "reasoning_base.json", _reasoning_report(exact=0.2))
+    reasoning_candidate = _write_json(tmp_path / "reasoning_candidate.json", _reasoning_report(exact=0.3))
     out_data = _passing_out_by_difficulty()
     out_data["checks"]["stage4_output_action_reasoning"] = False
     out_data["checks"]["hard_exit_reasoning"] = False
@@ -862,8 +888,8 @@ def test_go_no_go_r350_accepts_global_kv_ablation_memory_quality_evidence(tmp_pa
             ],
         },
     )
-    reasoning_baseline = _write_json(tmp_path / "reasoning_base.json", {"overall": {"exact_match_accuracy": 0.2}})
-    reasoning_candidate = _write_json(tmp_path / "reasoning_candidate.json", {"overall": {"exact_match_accuracy": 0.3}})
+    reasoning_baseline = _write_json(tmp_path / "reasoning_base.json", _reasoning_report(exact=0.2))
+    reasoning_candidate = _write_json(tmp_path / "reasoning_candidate.json", _reasoning_report(exact=0.3))
     out = _write_json(tmp_path / "out.json", _passing_out_by_difficulty())
     global_kv_ablation = _write_json(
         tmp_path / "global_kv_ablation.json",
@@ -930,8 +956,8 @@ def test_go_no_go_r350_requires_passing_global_kv_ablation_report(tmp_path: Path
             ],
         },
     )
-    reasoning_baseline = _write_json(tmp_path / "reasoning_base.json", {"overall": {"exact_match_accuracy": 0.2}})
-    reasoning_candidate = _write_json(tmp_path / "reasoning_candidate.json", {"overall": {"exact_match_accuracy": 0.3}})
+    reasoning_baseline = _write_json(tmp_path / "reasoning_base.json", _reasoning_report(exact=0.2))
+    reasoning_candidate = _write_json(tmp_path / "reasoning_candidate.json", _reasoning_report(exact=0.3))
     out = _write_json(tmp_path / "out.json", _passing_out_by_difficulty())
     global_kv_ablation = _write_json(
         tmp_path / "global_kv_ablation.json",
@@ -1055,10 +1081,13 @@ def test_go_no_go_r350_rejects_boolean_compute_loss_delta(tmp_path: Path) -> Non
 
 def test_go_no_go_r350_rejects_boolean_reasoning_scores(tmp_path: Path) -> None:
     stage_gate = _write_json(tmp_path / "stage_gate.json", _passing_stage_gate())
-    reasoning_baseline = _write_json(tmp_path / "reasoning_base.json", {"overall": {"exact_match_accuracy": False}})
+    reasoning_baseline = _write_json(
+        tmp_path / "reasoning_base.json",
+        {"overall_status": "pass", "overall": {"exact_match_accuracy": False}},
+    )
     reasoning_candidate = _write_json(
         tmp_path / "reasoning_candidate.json",
-        {"overall": {"exact_match_accuracy": True}},
+        {"overall_status": "pass", "overall": {"exact_match_accuracy": True}},
     )
 
     output = make_go_no_go_report(
@@ -1074,6 +1103,31 @@ def test_go_no_go_r350_rejects_boolean_reasoning_scores(tmp_path: Path) -> None:
 
     assert reasoning["status"] == "missing"
     assert reasoning["evidence"]["baseline_score"] is None
+    assert reasoning["evidence"]["candidate_scores"] == [None]
+
+
+def test_go_no_go_r350_requires_passing_reasoning_candidate_report(tmp_path: Path) -> None:
+    stage_gate = _write_json(tmp_path / "stage_gate.json", _passing_stage_gate())
+    reasoning_baseline = _write_json(tmp_path / "reasoning_base.json", _reasoning_report(exact=0.2))
+    reasoning_candidate = _write_json(
+        tmp_path / "reasoning_candidate.json",
+        _reasoning_report(exact=0.4, overall_status="fail"),
+    )
+
+    output = make_go_no_go_report(
+        stage_gate_report_path=stage_gate,
+        reasoning_baseline_report_path=reasoning_baseline,
+        reasoning_candidate_report_paths=[reasoning_candidate],
+        phase="r350_to_1b",
+        output_path=tmp_path / "go.json",
+    )
+    report = json.loads(output.read_text(encoding="utf-8"))
+    criteria = {item["name"]: item for item in report["phases"]["r350_to_1b"]["criteria"]}
+    reasoning = criteria["reasoning_or_synthetic_multistep_improves"]
+
+    assert reasoning["status"] == "fail"
+    assert reasoning["evidence"]["baseline_report_passed"] is True
+    assert reasoning["evidence"]["candidate_reports"][0]["report_passed"] is False
     assert reasoning["evidence"]["candidate_scores"] == [None]
 
 
@@ -1607,11 +1661,11 @@ def test_go_no_go_r1b_success_accepts_less_visible_cot_advantage(tmp_path: Path)
     long_context = _write_json(tmp_path / "long_context.json", _controlled_memory_compare())
     reasoning_baseline = _write_json(
         tmp_path / "reasoning_base.json",
-        {"overall": {"exact_match_accuracy": 0.6, "visible_cot_tokens_mean": 40.0}},
+        _reasoning_report(exact=0.6, visible_cot=40.0),
     )
     reasoning_candidate = _write_json(
         tmp_path / "reasoning_candidate.json",
-        {"overall": {"exact_match_accuracy": 0.6, "visible_cot_tokens_mean": 20.0}},
+        _reasoning_report(exact=0.6, visible_cot=20.0),
     )
 
     output = make_go_no_go_report(
@@ -1634,3 +1688,64 @@ def test_go_no_go_r1b_success_accepts_less_visible_cot_advantage(tmp_path: Path)
     assert criteria["inference_latency_remains_acceptable"]["status"] == "pass"
     assert cot_advantage["passed"] is True
     assert cot_advantage["evidence"]["candidate_comparisons"][0]["visible_cot_token_delta"] == -20.0
+
+
+def test_go_no_go_r1b_success_requires_passing_reasoning_report_for_visible_cot(tmp_path: Path) -> None:
+    stage_gate = _write_json(tmp_path / "stage_gate.json", _passing_stage_gate())
+    compute = _write_json(
+        tmp_path / "compute.json",
+        {
+            "run_count": 2,
+            "baseline_run": "baseline",
+            "runs": [
+                {
+                    "run_dir": "baseline",
+                    "stage": "stage0_baseline",
+                    "validation_loss": 10.0,
+                    "inference_latency_ms_per_token_latest": 1.0,
+                },
+                {
+                    "run_dir": "r1b_candidate",
+                    "validation_loss": 10.1,
+                    "inference_latency_ms_per_token_latest": 1.1,
+                    "baseline_comparison": {
+                        "baseline_run": "baseline",
+                        "same_parameter_count_view": True,
+                        "same_active_compute_view": True,
+                        "similar_training_flops_view": True,
+                        "estimated_flops_per_token_ratio": 1.0,
+                        "inference_latency_ms_per_token_ratio": 1.1,
+                    },
+                },
+            ],
+        },
+    )
+    long_context = _write_json(tmp_path / "long_context.json", _controlled_memory_compare())
+    reasoning_baseline = _write_json(
+        tmp_path / "reasoning_base.json",
+        _reasoning_report(exact=0.6, visible_cot=40.0),
+    )
+    reasoning_candidate = _write_json(
+        tmp_path / "reasoning_candidate.json",
+        _reasoning_report(exact=0.6, visible_cot=20.0, overall_status="fail"),
+    )
+
+    output = make_go_no_go_report(
+        stage_gate_report_path=stage_gate,
+        compute_report_path=compute,
+        long_context_compare_report_path=long_context,
+        reasoning_baseline_report_path=reasoning_baseline,
+        reasoning_candidate_report_paths=[reasoning_candidate],
+        phase="r1b_success",
+        output_path=tmp_path / "go.json",
+    )
+    report = json.loads(output.read_text(encoding="utf-8"))
+    criteria = {item["name"]: item for item in report["phases"]["r1b_success"]["criteria"]}
+    cot_advantage = criteria["at_least_one_core_advantage_stable"]["evidence"][
+        "less_visible_cot_for_similar_reasoning"
+    ]
+    comparison = cot_advantage["evidence"]["candidate_comparisons"][0]
+
+    assert cot_advantage["passed"] is False
+    assert comparison["candidate_report_passed"] is False
+    assert comparison["candidate_visible_cot_tokens"] is None

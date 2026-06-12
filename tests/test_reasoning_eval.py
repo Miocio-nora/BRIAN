@@ -8,6 +8,8 @@ from brian_sphere_llm.eval.reasoning import (
     ReasoningSample,
     _context_length,
     _load_tokenizer_from_run_config,
+    _overall_status,
+    _report_checks,
     _routing_summary,
     _visible_cot_token_count,
     evaluate_reasoning_sample,
@@ -70,6 +72,31 @@ def test_normalize_answer_and_summary() -> None:
     assert summary["exact_match_accuracy"] == 0.5
     assert summary["teacher_forced_token_accuracy"] == 0.75
     assert summary["visible_cot_tokens_mean"] == 2.0
+
+
+def test_reasoning_report_checks_and_status() -> None:
+    checks = _report_checks(
+        {
+            "sample_count": 2,
+            "exact_match_accuracy": 0.5,
+            "teacher_forced_token_accuracy": 0.75,
+            "visible_cot_tokens_mean": 2.0,
+        }
+    )
+
+    assert checks == {
+        "samples_present": True,
+        "exact_match_accuracy_present": True,
+        "teacher_forced_token_accuracy_present": True,
+        "visible_cot_tokens_present": True,
+    }
+    assert _overall_status(checks) == "pass"
+
+    warn_checks = {**checks, "visible_cot_tokens_present": False}
+    assert _overall_status(warn_checks) == "warn"
+
+    fail_checks = {**checks, "exact_match_accuracy_present": False}
+    assert _overall_status(fail_checks) == "fail"
 
 
 def test_reasoning_summary_rejects_boolean_numeric_metrics() -> None:

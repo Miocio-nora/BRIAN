@@ -33,6 +33,7 @@ def test_out_by_difficulty_passes_when_hard_uses_more_compute(tmp_path: Path) ->
 
     assert report["overall_status"] == "pass"
     assert report["checks"]["reasoning_report_present"] is True
+    assert report["checks"]["reasoning_report_passed"] is True
     assert report["checks"]["stage4_output_action_reasoning"] is True
     assert report["checks"]["hard_exit_reasoning"] is True
     assert report["by_difficulty"]["easy"]["sample_count"] == 2
@@ -59,6 +60,25 @@ def test_out_by_difficulty_reads_samples_from_reasoning_report(tmp_path: Path) -
     assert report["inputs"]["reasoning_run_dir"] == "run-a"
     assert report["inputs"]["reasoning_stage"] == "stage4_output_action"
     assert report["inputs"]["reasoning_hard_exit"] is True
+
+
+def test_out_by_difficulty_requires_passing_reasoning_report(tmp_path: Path) -> None:
+    samples = _write_jsonl(
+        tmp_path / "reasoning_samples.jsonl",
+        [
+            _sample("easy", route_steps=1.0, active=0.25, p_output=0.9),
+            _sample("hard", route_steps=2.0, active=0.50, p_output=0.1),
+        ],
+    )
+    reasoning = _write_reasoning_report(tmp_path / "reasoning.json", samples, overall_status="fail")
+
+    output = make_out_by_difficulty_report(reasoning_report_path=reasoning, output_path=tmp_path / "out.json")
+    report = json.loads(output.read_text(encoding="utf-8"))
+
+    assert report["overall_status"] == "fail"
+    assert report["checks"]["reasoning_report_present"] is True
+    assert report["checks"]["reasoning_report_passed"] is False
+    assert report["checks"]["route_steps_non_decreasing_with_difficulty"] is True
 
 
 def test_out_by_difficulty_fails_when_hard_exits_earlier(tmp_path: Path) -> None:
@@ -131,6 +151,7 @@ def test_out_by_difficulty_fails_without_stage4_hard_exit_reasoning_report(tmp_p
 
     assert report["overall_status"] == "fail"
     assert report["checks"]["reasoning_report_present"] is False
+    assert report["checks"]["reasoning_report_passed"] is False
     assert report["checks"]["stage4_output_action_reasoning"] is False
     assert report["checks"]["hard_exit_reasoning"] is False
     assert report["checks"]["route_steps_non_decreasing_with_difficulty"] is True
@@ -143,10 +164,18 @@ def _write_reasoning_report(
     run_dir: str = "stage4-run",
     stage: str = "stage4_output_action",
     hard_exit: bool = True,
+    overall_status: str = "pass",
 ) -> Path:
     return _write_json(
         path,
         {
+            "overall_status": overall_status,
+            "checks": {
+                "samples_present": True,
+                "exact_match_accuracy_present": True,
+                "teacher_forced_token_accuracy_present": True,
+                "visible_cot_tokens_present": True,
+            },
             "samples_path": samples_path.name,
             "run_dir": run_dir,
             "stage": stage,

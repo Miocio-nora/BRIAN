@@ -74,6 +74,8 @@ def make_reasoning_report(
         sample_output_path = output_path.with_name(output_path.stem + "_samples.jsonl")
     sample_output_path = Path(sample_output_path)
     _write_jsonl(rows, sample_output_path)
+    overall = summarize_reasoning_rows(rows)
+    checks = _report_checks(overall)
     report = {
         "run_dir": str(run_dir),
         "stage": str(config.get("stage", "")),
@@ -84,10 +86,12 @@ def make_reasoning_report(
         "seed": seed,
         "context_length": context_length,
         "samples_path": str(sample_output_path),
-        "overall": summarize_reasoning_rows(rows),
+        "overall": overall,
         "by_task_family": _group_summary(rows, "task_family"),
         "by_difficulty": _group_summary(rows, "difficulty"),
         "routing": _routing_summary(rows),
+        "checks": checks,
+        "overall_status": _overall_status(checks),
     }
     write_json(report, output_path)
     return output_path
@@ -193,7 +197,14 @@ def greedy_generate(
 
 def summarize_reasoning_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
     if not rows:
-        return {"sample_count": 0, "exact_match_accuracy": None, "teacher_forced_token_accuracy": None}
+        return {
+            "sample_count": 0,
+            "exact_match_accuracy": None,
+            "teacher_forced_token_accuracy": None,
+            "generated_tokens_mean": None,
+            "answer_tokens_mean": None,
+            "visible_cot_tokens_mean": None,
+        }
     return {
         "sample_count": len(rows),
         "exact_match_accuracy": sum(1 for row in rows if row["exact_match"]) / len(rows),
@@ -313,6 +324,28 @@ def _routing_summary(rows: list[dict[str, Any]]) -> dict[str, float | None]:
     return {key.removeprefix("routing_"): _mean([row.get(key) for row in rows]) for key in keys}
 
 
+def _report_checks(overall: dict[str, Any]) -> dict[str, bool]:
+    return {
+        "samples_present": _positive_number(overall.get("sample_count")),
+        "exact_match_accuracy_present": _num(overall.get("exact_match_accuracy")) is not None,
+        "teacher_forced_token_accuracy_present": _num(overall.get("teacher_forced_token_accuracy")) is not None,
+        "visible_cot_tokens_present": _num(overall.get("visible_cot_tokens_mean")) is not None,
+    }
+
+
+def _overall_status(checks: dict[str, bool]) -> str:
+    required = [
+        "samples_present",
+        "exact_match_accuracy_present",
+        "teacher_forced_token_accuracy_present",
+    ]
+    if not all(checks.get(key) is True for key in required):
+        return "fail"
+    if all(checks.values()):
+        return "pass"
+    return "warn"
+
+
 def _hard_exit_enabled(config: dict[str, Any]) -> bool | None:
     routing_config = config.get("routing", {})
     if isinstance(routing_config, Mapping) and isinstance(routing_config.get("hard_exit"), bool):
@@ -336,6 +369,11 @@ def _num(value: Any) -> float | None:
     if isinstance(value, (int, float)):
         return float(value)
     return None
+
+
+def _positive_number(value: Any) -> bool:
+    number = _num(value)
+    return number is not None and number > 0.0
 
 
 def _tokenizer_config(config: dict[str, Any]) -> Mapping[str, Any]:

@@ -115,6 +115,7 @@ def _checks(
     output_delta = deltas["easy_minus_hard_p_output"]
     return {
         "reasoning_report_present": reasoning_report_path is not None,
+        "reasoning_report_passed": _report_passed(reasoning_report),
         "stage4_output_action_reasoning": reasoning_report.get("stage") == "stage4_output_action",
         "hard_exit_reasoning": reasoning_report.get("hard_exit") is True,
         "easy_and_hard_present": easy_and_hard_present,
@@ -131,6 +132,20 @@ def _status(checks: dict[str, bool | None]) -> str:
     if any(value is None for value in values):
         return "warn"
     return "pass"
+
+
+def _report_passed(report: dict[str, Any]) -> bool | None:
+    if not report:
+        return False
+    checks = report.get("checks")
+    checks_passed = None
+    if isinstance(checks, dict):
+        checks_passed = bool(checks) and all(value is True for value in checks.values())
+    if report.get("overall_status") in {"fail", "warn"} or report.get("status") in {"fail", "warn"}:
+        return False
+    if report.get("overall_status") == "pass" or report.get("status") == "pass":
+        return False if checks_passed is False else True
+    return checks_passed
 
 
 def _at_least(value: float | None, threshold: float) -> bool | None:

@@ -394,14 +394,15 @@ def _gate_evidence(gates: dict[str, Any], gate_name: str, keys: list[str]) -> di
 def _report_passed(report: dict[str, Any]) -> bool | None:
     if not report:
         return None
-    if report.get("overall_status") == "pass" or report.get("status") == "pass":
-        return True
+    checks = report.get("checks")
+    checks_passed = None
+    if isinstance(checks, dict):
+        checks_passed = bool(checks) and all(value is True for value in checks.values())
     if report.get("overall_status") in {"fail", "warn"} or report.get("status") in {"fail", "warn"}:
         return False
-    checks = report.get("checks")
-    if isinstance(checks, dict):
-        return all(bool(value) for value in checks.values())
-    return None
+    if report.get("overall_status") == "pass" or report.get("status") == "pass":
+        return False if checks_passed is False else True
+    return checks_passed
 
 
 def _report_evidence(report: dict[str, Any]) -> dict[str, Any]:
@@ -961,28 +962,39 @@ def _visible_cot_reduced(
     max_reasoning_drop: float,
 ) -> bool | None:
     evidence = _visible_cot_evidence(baseline, candidates)
+    if evidence.get("baseline_report_passed") is False:
+        return False
     rows = evidence.get("candidate_comparisons", [])
     if not rows:
         return None
-    return any(
-        row.get("visible_cot_token_delta") is not None
-        and row["visible_cot_token_delta"] <= -min_visible_cot_reduction
-        and row.get("reasoning_score_delta") is not None
-        and row["reasoning_score_delta"] >= -max_reasoning_drop
-        for row in rows
-    )
+    decidable = False
+    for row in rows:
+        if row.get("candidate_report_passed") is False:
+            decidable = True
+        visible_delta = row.get("visible_cot_token_delta")
+        score_delta = row.get("reasoning_score_delta")
+        if visible_delta is None or score_delta is None:
+            continue
+        decidable = True
+        if visible_delta <= -min_visible_cot_reduction and score_delta >= -max_reasoning_drop:
+            return True
+    return False if decidable else None
 
 
 def _visible_cot_evidence(baseline: dict[str, Any], candidates: list[dict[str, Any]]) -> dict[str, Any]:
+    baseline_passed = _report_passed(baseline)
     baseline_score = _reasoning_score(baseline) if baseline else None
     baseline_cot = _visible_cot_tokens(baseline) if baseline else None
     comparisons = []
     for candidate in candidates:
+        candidate_passed = _report_passed(candidate)
         candidate_score = _reasoning_score(candidate)
         candidate_cot = _visible_cot_tokens(candidate)
         comparisons.append(
             {
                 "run_dir": candidate.get("run_dir"),
+                "candidate_report_status": candidate.get("overall_status"),
+                "candidate_report_passed": candidate_passed,
                 "baseline_reasoning_score": baseline_score,
                 "candidate_reasoning_score": candidate_score,
                 "reasoning_score_delta": _delta(candidate_score, baseline_score),
@@ -992,12 +1004,16 @@ def _visible_cot_evidence(baseline: dict[str, Any], candidates: list[dict[str, A
             }
         )
     return {
+        "baseline_report_status": baseline.get("overall_status") if baseline else None,
+        "baseline_report_passed": baseline_passed,
         "baseline_visible_cot_tokens": baseline_cot,
         "candidate_comparisons": comparisons,
     }
 
 
 def _visible_cot_tokens(report: dict[str, Any]) -> float | None:
+    if _report_passed(report) is not True:
+        return None
     overall = report.get("overall", {}) if isinstance(report, dict) else {}
     if not isinstance(overall, dict):
         return None
@@ -1109,15 +1125,21 @@ def _reasoning_improved(
 ) -> bool | None:
     if not baseline or not candidates:
         return None
+    baseline_passed = _report_passed(baseline)
+    if baseline_passed is not True:
+        return False if baseline_passed is False else None
+    candidate_passed = [_report_passed(candidate) for candidate in candidates]
     baseline_score = _reasoning_score(baseline)
     candidate_scores = [_reasoning_score(candidate) for candidate in candidates]
     candidate_scores = [score for score in candidate_scores if score is not None]
     if baseline_score is None or not candidate_scores:
-        return None
+        return False if any(passed is False for passed in candidate_passed) else None
     return max(candidate_scores) - baseline_score >= min_delta
 
 
 def _reasoning_score(report: dict[str, Any]) -> float | None:
+    if _report_passed(report) is not True:
+        return None
     overall = report.get("overall", {})
     if not isinstance(overall, dict):
         return None
@@ -1161,9 +1183,22 @@ def _nonempty_string(value: Any) -> bool:
 
 
 def _reasoning_evidence(baseline: dict[str, Any], candidates: list[dict[str, Any]]) -> dict[str, Any]:
+    candidate_reports = [
+        {
+            "run_dir": candidate.get("run_dir"),
+            "overall_status": candidate.get("overall_status"),
+            "status": candidate.get("status"),
+            "report_passed": _report_passed(candidate),
+            "score": _reasoning_score(candidate),
+        }
+        for candidate in candidates
+    ]
     return {
+        "baseline_report_status": baseline.get("overall_status") if baseline else None,
+        "baseline_report_passed": _report_passed(baseline),
         "baseline_score": _reasoning_score(baseline) if baseline else None,
-        "candidate_scores": [_reasoning_score(candidate) for candidate in candidates],
+        "candidate_scores": [candidate["score"] for candidate in candidate_reports],
+        "candidate_reports": candidate_reports,
         "candidate_count": len(candidates),
     }
 
