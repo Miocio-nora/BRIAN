@@ -425,6 +425,8 @@ def _out_by_difficulty_passed(report: dict[str, Any]) -> bool | None:
     if not isinstance(checks, dict):
         return False
     required = [
+        "reasoning_report_present",
+        "reasoning_report_passed",
         "stage4_output_action_reasoning",
         "hard_exit_reasoning",
         "easy_and_hard_present",

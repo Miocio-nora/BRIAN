@@ -550,6 +550,8 @@ def _gate_stage4(
         "cost_control_output_not_decreasing": bool(cost_checks.get("output_probability_not_decreasing_with_cost", False)),
         "out_by_difficulty_report_present": bool(out_by_difficulty_report),
         "out_by_difficulty_passed": bool(out_by_difficulty_report.get("overall_status") == "pass"),
+        "out_by_difficulty_reasoning_report_present": bool(out_checks.get("reasoning_report_present", False)),
+        "out_by_difficulty_reasoning_report_passed": bool(out_checks.get("reasoning_report_passed", False)),
         "out_by_difficulty_stage4_reasoning": bool(out_checks.get("stage4_output_action_reasoning", False)),
         "out_by_difficulty_hard_exit_reasoning": bool(out_checks.get("hard_exit_reasoning", False)),
         "hard_compute_not_below_easy": bool(out_checks.get("route_steps_non_decreasing_with_difficulty", False))

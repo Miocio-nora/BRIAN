@@ -1456,6 +1456,8 @@ def test_stage_gate_report_uses_cost_control_report(tmp_path: Path) -> None:
             {
                 "overall_status": "pass",
                 "checks": {
+                    "reasoning_report_present": True,
+                    "reasoning_report_passed": True,
                     "stage4_output_action_reasoning": True,
                     "hard_exit_reasoning": True,
                     "easy_and_hard_present": True,
@@ -1491,6 +1493,8 @@ def test_stage_gate_report_uses_cost_control_report(tmp_path: Path) -> None:
     assert gate["checks"]["cost_control_average_steps_not_increasing"] is True
     assert gate["checks"]["out_by_difficulty_report_present"] is True
     assert gate["checks"]["out_by_difficulty_passed"] is True
+    assert gate["checks"]["out_by_difficulty_reasoning_report_present"] is True
+    assert gate["checks"]["out_by_difficulty_reasoning_report_passed"] is True
     assert gate["checks"]["out_by_difficulty_stage4_reasoning"] is True
     assert gate["checks"]["out_by_difficulty_hard_exit_reasoning"] is True
     assert gate["checks"]["hard_exit_compare_report_present"] is True
@@ -1510,6 +1514,52 @@ def test_stage_gate_report_uses_cost_control_report(tmp_path: Path) -> None:
     assert report["supplemental_reports"]["cost_control_report"] == str(cost_report)
     assert report["supplemental_reports"]["out_by_difficulty_report"] == str(out_report)
     assert report["supplemental_reports"]["hard_exit_compare_report"] == str(hard_exit_report)
+
+
+def test_stage4_gate_requires_out_by_difficulty_reasoning_report_to_pass(tmp_path: Path) -> None:
+    stage4 = _write_run(
+        tmp_path,
+        "stage4",
+        stage="stage4_output_action",
+        val_loss=10.0,
+        train_row={
+            "average_route_steps": 2.0,
+            "max_route_steps": 4,
+            "forced_max_step_exit_fraction": 0.0,
+            "first_exit_step_histogram": {"1": 1, "2": 2},
+            "top1_block_histogram": {"0": 1, "1": 1, "2": 1},
+        },
+    )
+    out_report = tmp_path / "out_by_difficulty.json"
+    out_report.write_text(
+        json.dumps(
+            {
+                "overall_status": "pass",
+                "checks": {
+                    "reasoning_report_present": True,
+                    "reasoning_report_passed": False,
+                    "stage4_output_action_reasoning": True,
+                    "hard_exit_reasoning": True,
+                    "route_steps_non_decreasing_with_difficulty": True,
+                    "active_compute_non_decreasing_with_difficulty": True,
+                    "easy_output_probability_at_least_hard": True,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    report_path = make_stage_gate_report(
+        [stage4],
+        output_path=tmp_path / "gate.json",
+        out_by_difficulty_report_path=out_report,
+    )
+    gate = json.loads(report_path.read_text(encoding="utf-8"))["gates"]["stage4_to_5"]
+
+    assert gate["status"] == "warn"
+    assert gate["checks"]["out_by_difficulty_passed"] is True
+    assert gate["checks"]["out_by_difficulty_reasoning_report_present"] is True
+    assert gate["checks"]["out_by_difficulty_reasoning_report_passed"] is False
 
 
 def test_stage2_gate_rejects_boolean_block_histogram_counts(tmp_path: Path) -> None:
@@ -1689,6 +1739,8 @@ def test_stage4_gate_requires_forced_max_step_fallback_metric(tmp_path: Path) ->
             {
                 "overall_status": "pass",
                 "checks": {
+                    "reasoning_report_present": True,
+                    "reasoning_report_passed": True,
                     "stage4_output_action_reasoning": True,
                     "hard_exit_reasoning": True,
                     "route_steps_non_decreasing_with_difficulty": True,
@@ -1753,6 +1805,8 @@ def test_stage4_gate_requires_hard_exit_compare_report(tmp_path: Path) -> None:
             {
                 "overall_status": "pass",
                 "checks": {
+                    "reasoning_report_present": True,
+                    "reasoning_report_passed": True,
                     "stage4_output_action_reasoning": True,
                     "hard_exit_reasoning": True,
                     "route_steps_non_decreasing_with_difficulty": True,
@@ -1817,6 +1871,8 @@ def test_stage4_gate_requires_passing_hard_exit_compare_report(tmp_path: Path) -
             {
                 "overall_status": "pass",
                 "checks": {
+                    "reasoning_report_present": True,
+                    "reasoning_report_passed": True,
                     "stage4_output_action_reasoning": True,
                     "hard_exit_reasoning": True,
                     "route_steps_non_decreasing_with_difficulty": True,
@@ -1893,6 +1949,8 @@ def test_stage4_gate_requires_stage4_hard_exit_compare_roles(tmp_path: Path) -> 
             {
                 "overall_status": "pass",
                 "checks": {
+                    "reasoning_report_present": True,
+                    "reasoning_report_passed": True,
                     "stage4_output_action_reasoning": True,
                     "hard_exit_reasoning": True,
                     "route_steps_non_decreasing_with_difficulty": True,
@@ -1975,6 +2033,8 @@ def test_stage4_gate_requires_top1_hard_exit_rule(tmp_path: Path) -> None:
             {
                 "overall_status": "pass",
                 "checks": {
+                    "reasoning_report_present": True,
+                    "reasoning_report_passed": True,
                     "stage4_output_action_reasoning": True,
                     "hard_exit_reasoning": True,
                     "route_steps_non_decreasing_with_difficulty": True,
@@ -2043,6 +2103,8 @@ def test_stage4_gate_warns_when_model_never_exits(tmp_path: Path) -> None:
             {
                 "overall_status": "pass",
                 "checks": {
+                    "reasoning_report_present": True,
+                    "reasoning_report_passed": True,
                     "stage4_output_action_reasoning": True,
                     "hard_exit_reasoning": True,
                     "route_steps_non_decreasing_with_difficulty": True,
@@ -2105,6 +2167,8 @@ def test_stage4_gate_requires_average_steps_cost_control_trend(tmp_path: Path) -
             {
                 "overall_status": "pass",
                 "checks": {
+                    "reasoning_report_present": True,
+                    "reasoning_report_passed": True,
                     "stage4_output_action_reasoning": True,
                     "hard_exit_reasoning": True,
                     "route_steps_non_decreasing_with_difficulty": True,

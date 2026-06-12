@@ -864,6 +864,56 @@ def test_go_no_go_r350_requires_stage4_hard_exit_out_by_difficulty(tmp_path: Pat
     assert out_action["evidence"]["checks"]["hard_exit_reasoning"] is False
 
 
+def test_go_no_go_r350_requires_passing_reasoning_report_in_out_by_difficulty(tmp_path: Path) -> None:
+    stage_gate = _write_json(tmp_path / "stage_gate.json", _passing_stage_gate())
+    compute = _write_json(
+        tmp_path / "compute.json",
+        {
+            "run_count": 2,
+            "baseline_run": "baseline",
+            "runs": [
+                {"run_dir": "baseline", "stage": "stage0_baseline"},
+                {
+                    "run_dir": "routed",
+                    "stage": "stage4_output_action",
+                    "validation_loss": 9.9,
+                    "baseline_comparison": {
+                        "baseline_run": "baseline",
+                        "same_parameter_count_view": True,
+                        "same_active_compute_view": True,
+                        "similar_training_flops_view": True,
+                        "validation_loss_delta": -0.1,
+                    },
+                },
+            ],
+        },
+    )
+    reasoning_baseline = _write_json(tmp_path / "reasoning_base.json", _reasoning_report(exact=0.2))
+    reasoning_candidate = _write_json(tmp_path / "reasoning_candidate.json", _reasoning_report(exact=0.3))
+    out_data = _passing_out_by_difficulty()
+    out_data["checks"]["reasoning_report_passed"] = False
+    out = _write_json(tmp_path / "out.json", out_data)
+    long_context = _write_json(tmp_path / "long_context.json", _controlled_memory_compare())
+
+    output = make_go_no_go_report(
+        stage_gate_report_path=stage_gate,
+        compute_report_path=compute,
+        reasoning_baseline_report_path=reasoning_baseline,
+        reasoning_candidate_report_paths=[reasoning_candidate],
+        out_by_difficulty_report_path=out,
+        long_context_compare_report_path=long_context,
+        phase="r350_to_1b",
+        output_path=tmp_path / "go.json",
+    )
+    report = json.loads(output.read_text(encoding="utf-8"))
+    criteria = {item["name"]: item for item in report["phases"]["r350_to_1b"]["criteria"]}
+    out_action = criteria["out_action_reduces_compute_on_easy_samples"]
+
+    assert report["overall_status"] == "fail"
+    assert out_action["status"] == "fail"
+    assert out_action["evidence"]["checks"]["reasoning_report_passed"] is False
+
+
 def test_go_no_go_r350_accepts_global_kv_ablation_memory_quality_evidence(tmp_path: Path) -> None:
     stage_gate = _write_json(tmp_path / "stage_gate.json", _passing_stage_gate())
     compute = _write_json(
