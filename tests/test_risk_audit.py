@@ -101,6 +101,7 @@ def test_risk_audit_passes_with_clear_evidence(tmp_path: Path) -> None:
     global_ablation = _write_json(
         tmp_path / "global_ablation.json",
         {
+            "overall_status": "pass",
             "comparisons": {
                 "local_vs_global": [
                     {
@@ -238,6 +239,7 @@ def test_risk_audit_flags_triggered_symptoms(tmp_path: Path) -> None:
     global_ablation = _write_json(
         tmp_path / "global_ablation.json",
         {
+            "overall_status": "pass",
             "comparisons": {
                 "local_vs_global": [
                     {
@@ -332,7 +334,10 @@ def test_risk_audit_flags_never_exit_from_stage_gate_check(tmp_path: Path) -> No
     )
     retention = _write_json(tmp_path / "retention.json", {"overall_status": "pass", "checks": {}})
     long_context = _write_json(tmp_path / "long_context.json", {"overall_status": "pass", "comparisons": []})
-    global_ablation = _write_json(tmp_path / "global_ablation.json", {"comparisons": {"local_vs_global": []}})
+    global_ablation = _write_json(
+        tmp_path / "global_ablation.json",
+        {"overall_status": "pass", "comparisons": {"local_vs_global": []}},
+    )
     parallel_passing = _write_json(tmp_path / "parallel_passing.json", {"checks": {}})
     parallel_compare = _write_json(tmp_path / "parallel_compare.json", {"comparisons": []})
 
@@ -953,6 +958,49 @@ def test_risk_audit_requires_passing_long_context_report_for_global_kv_clearance
     assert no_difference["evidence"]["overall_status"] == "fail"
     assert no_difference["evidence"]["passing_comparison_count"] == 0
     assert candidate["passes_stage5_long_context_contract"] is True
+
+
+def test_risk_audit_requires_passing_global_kv_ablation_report_for_global_kv_clearance(tmp_path: Path) -> None:
+    retention = _write_json(
+        tmp_path / "retention.json",
+        {
+            "overall_status": "pass",
+            "metrics": {"global_attention_mass": 0.02},
+            "checks": {"global_attention_mass_nonzero": True},
+        },
+    )
+    global_ablation = _write_json(
+        tmp_path / "global_ablation.json",
+        {
+            "overall_status": "fail",
+            "comparisons": {
+                "local_vs_global": [
+                    {
+                        "validation_loss_delta_vs_local": -0.1,
+                        "exact_match_delta_vs_local": 0.05,
+                        "teacher_forced_token_accuracy_delta_vs_local": 0.02,
+                    }
+                ]
+            },
+        },
+    )
+
+    output = make_risk_audit_report(
+        output_path=tmp_path / "risk.json",
+        global_kv_retention_report_path=retention,
+        global_kv_ablation_report_path=global_ablation,
+    )
+    report = json.loads(output.read_text(encoding="utf-8"))
+    no_difference = _symptom(report, "global_kv_noise", "global_on_off_no_difference")
+    worsens_loss = _symptom(report, "global_kv_noise", "global_cache_worsens_loss")
+
+    assert report["risks"]["global_kv_noise"]["status"] == "fail"
+    assert no_difference["triggered"] is True
+    assert no_difference["evidence"]["overall_status"] == "fail"
+    assert no_difference["evidence"]["report_passed"] is False
+    assert no_difference["evidence"]["quality_deltas"] == [0.05, 0.02]
+    assert worsens_loss["triggered"] is None
+    assert worsens_loss["evidence"]["report_passed"] is False
 
 
 def test_risk_audit_eval_config_resolves() -> None:

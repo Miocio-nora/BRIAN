@@ -582,10 +582,22 @@ def _global_on_off_no_difference(
             ]
             if value is not None
         )
+    ablation_report_status = global_kv_ablation_report.get("overall_status") if global_kv_ablation_report else None
+    ablation_report_passed = ablation_report_status == "pass"
+    if global_kv_ablation_report and not ablation_report_passed:
+        return True, {
+            "source": "global_kv_ablation_report",
+            "overall_status": ablation_report_status,
+            "report_passed": False,
+            "quality_deltas": deltas,
+            "min_global_kv_quality_delta": min_delta,
+        }
     if deltas:
         flat = all(abs(value) <= min_delta for value in deltas)
         return flat, {
             "source": "global_kv_ablation_report",
+            "overall_status": ablation_report_status,
+            "report_passed": ablation_report_passed,
             "quality_deltas": deltas,
             "min_global_kv_quality_delta": min_delta,
         }
@@ -644,6 +656,8 @@ def _global_cache_worsens_loss(
     max_loss_delta: float,
 ) -> tuple[bool | None, dict[str, Any]]:
     local_vs_global = _list(_dict(global_kv_ablation_report.get("comparisons")).get("local_vs_global"))
+    ablation_report_status = global_kv_ablation_report.get("overall_status") if global_kv_ablation_report else None
+    ablation_report_passed = ablation_report_status == "pass"
     deltas = [
         value
         for row in local_vs_global
@@ -651,13 +665,25 @@ def _global_cache_worsens_loss(
         for value in [_num(row.get("validation_loss_delta_vs_local"))]
         if value is not None
     ]
+    if global_kv_ablation_report and not ablation_report_passed:
+        return None, {
+            "global_kv_ablation_present": True,
+            "overall_status": ablation_report_status,
+            "report_passed": False,
+            "validation_loss_deltas_vs_local": deltas,
+            "max_global_kv_loss_delta": max_loss_delta,
+        }
     if not deltas:
         return None, {
             "global_kv_ablation_present": bool(global_kv_ablation_report),
+            "overall_status": ablation_report_status,
+            "report_passed": ablation_report_passed if global_kv_ablation_report else None,
             "validation_loss_deltas_vs_local": [],
             "max_global_kv_loss_delta": max_loss_delta,
         }
     return any(value > max_loss_delta for value in deltas), {
+        "overall_status": ablation_report_status,
+        "report_passed": ablation_report_passed,
         "validation_loss_deltas_vs_local": deltas,
         "max_global_kv_loss_delta": max_loss_delta,
     }
