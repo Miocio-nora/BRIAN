@@ -1250,6 +1250,76 @@ def test_stage1_gate_requires_active_compute_in_validation_report(tmp_path: Path
     assert gate["validation_report_metrics"]["active_block_evals_per_token"] is None
 
 
+def test_stage1_gate_requires_eval_log_artifact(tmp_path: Path) -> None:
+    baseline = _write_run(
+        tmp_path,
+        "baseline",
+        stage="stage0_baseline",
+        val_loss=10.0,
+        train_row={},
+        determinism_status="pass",
+        resume_event={
+            "checkpoint": "checkpoint_latest",
+            "resumed_from_step": 1,
+            "target_max_steps": 2,
+            "optimizer_state_loaded": True,
+        },
+        baseline_difficulty_report=_baseline_difficulty_report(),
+    )
+    fixed = _write_run(
+        tmp_path,
+        "fixed",
+        stage="stage1_fixed_route",
+        val_loss=10.1,
+        train_row={
+            "route_imitation_accuracy": 0.99,
+            "position_norm_mean": 1.0,
+        },
+        fixed_route_stability_report={
+            "overall_status": "pass",
+            "checks": {
+                "forward_completed": True,
+                "logits_shape_matches": True,
+                "logits_finite": True,
+                "sample_losses_finite": True,
+                "fixed_route_matches_targets": True,
+                "route_imitation_accuracy_is_one": True,
+                "position_norm_finite": True,
+                "routing_summary_finite": True,
+            },
+        },
+    )
+    (fixed / "eval_log.jsonl").unlink()
+    (fixed / "lm_eval_report.json").write_text(
+        json.dumps(
+            {
+                "overall_status": "pass",
+                "checks": {
+                    "eval_log_present": True,
+                    "validation_loss_present": True,
+                    "perplexity_present": True,
+                    "requested_metrics_present": True,
+                },
+                "metrics": {
+                    "validation_loss": 10.1,
+                    "perplexity": 1.0,
+                    "tokens_per_second": 128.0,
+                    "active_block_evals_per_token": 0.5,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    report_path = make_stage_gate_report([baseline, fixed], output_path=tmp_path / "gate.json")
+    gate = json.loads(report_path.read_text(encoding="utf-8"))["gates"]["stage1_to_2"]
+
+    assert gate["status"] == "warn"
+    assert gate["checks"]["eval_log_present"] is False
+    assert gate["checks"]["validation_report_valid"] is True
+    assert gate["validation_report_checks"]["eval_log_present"] is True
+
+
 def test_stage1_gate_requires_best_checkpoint_artifact(tmp_path: Path) -> None:
     baseline = _write_run(
         tmp_path,

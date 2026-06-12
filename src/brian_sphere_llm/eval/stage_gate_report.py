@@ -991,6 +991,7 @@ def _baseline_run_artifact_gate_checks(summary: dict[str, Any] | None) -> dict[s
     return {
         "config_resolved_present": bool(summary and summary.get("config_resolved_present")),
         "train_log_present": bool(summary and summary.get("has_train_log")),
+        "eval_log_present": bool(summary and summary.get("has_eval_log")),
         "checkpoint_rank_state_present": bool(summary and summary.get("has_checkpoint_latest_rank_state")),
     }
 
