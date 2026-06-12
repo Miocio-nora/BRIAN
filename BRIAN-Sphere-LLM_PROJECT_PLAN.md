@@ -7,7 +7,7 @@
 **Expanded name:** **Block-Routed Inference with Adaptive Navigation over a Latent Operator Sphere**  
 **Status:** Long-range research and engineering plan  
 **Owner:** YMH-Latent-Sphere project  
-**Last updated:** 2026-06-11
+**Last updated:** 2026-06-13
 
 ---
 
@@ -1642,9 +1642,11 @@ These links are included for planning context and should be refreshed before for
 
 ## 25. Current Project Priority
 
-The immediate priority is **not** global KV or parallel passing.
+As of 2026-06-13, Package A on `r125_main_2b` has completed for A0-A7. The
+current priority is Package A analysis and the route-core go/no-go decision,
+not Global KV or parallel passing.
 
-The immediate priority is:
+The completed validation package was:
 
 ```text
 BRIAN-R125 route-core validation
@@ -1659,7 +1661,17 @@ Specifically:
 5. Validate block-position state.
 6. Validate output action.
 
-Only after that should the project add global KV memory.
+All A0-A7 runs reached the 2B-token target (`step=30518` at `batch_size: 32`),
+kept only `checkpoint_latest`, and produced routing reports. Local generated
+summary reports live under:
+
+```text
+experiments/generated/route_core_r125_2b_package/
+```
+
+The next decision should compare Package A evidence against the R125 go
+criteria before choosing a 5B R125 follow-up, R350 scaling, or additional
+route-core fixes. Only after that should the project add Global KV memory.
 
 ---
 

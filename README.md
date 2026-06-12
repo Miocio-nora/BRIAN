@@ -38,6 +38,28 @@ The immediate priority is **BRIAN-R125 route-core validation**:
 5. Validate the block-position state.
 6. Validate `OUT` as a terminal routing action.
 
+Formal Package A on `r125_main_2b` completed on 2026-06-13 with `batch_size: 32`
+and one single-GPU job per GPU across GPUs 0-3. All A0-A7 runs reached
+`step=30518`, wrote final eval rows, kept only `checkpoint_latest`, and produced
+`routing_report.json`. Generated local package reports are under
+`experiments/generated/route_core_r125_2b_package/`:
+
+| ID | Run | Final validation loss |
+|---|---|---:|
+| A0 | fixed Transformer baseline | 3.1861 |
+| A1 | fixed route wrapper | 3.0954 |
+| A2 | sequential router imitation | 3.0957 |
+| A3 | skip/recur router imitation | 3.3930 |
+| A4 | free router + block-position | 3.2631 |
+| A5 | no block-position ablation | 3.2828 |
+| A6 | no output action ablation | 3.2513 |
+| A7 | no location loss ablation | 3.3055 |
+
+The package report status is `warn` because routed A3-A7 deliberately use lower
+active layer compute than the fixed baseline, so the generic same-active-compute
+comparison view does not pass. Run artifacts, generated reports, data, and
+checkpoints are local outputs and remain git-ignored.
+
 See [BRIAN-Sphere-LLM_PROJECT_PLAN.md](./BRIAN-Sphere-LLM_PROJECT_PLAN.md) for the full technical plan.
 See [CODEX_GUIDANCE.md](./CODEX_GUIDANCE.md) for implementation guidance.
 
