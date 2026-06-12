@@ -143,6 +143,9 @@ def _optional_checks(rows: list[dict[str, Any]]) -> dict[str, bool]:
     long_context_rows = [row for row in rows if row["long_context"]["present"]]
     return {
         "long_context_reports_present": bool(rows) and len(long_context_rows) == len(rows),
+        "long_context_reports_match_run_config": bool(rows)
+        and len(long_context_rows) == len(rows)
+        and all(_long_context_matches_run(row) for row in long_context_rows),
         "long_context_quality_metrics_present": bool(rows)
         and len(long_context_rows) == len(rows)
         and all(_finite(row["long_context"].get("exact_match_accuracy")) for row in long_context_rows),
@@ -387,6 +390,9 @@ def _long_context_summary(report: dict[str, Any]) -> dict[str, Any]:
     if not report:
         return {
             "present": False,
+            "stage": None,
+            "route_mode": None,
+            "global_kv_enabled": None,
             "exact_match_accuracy": None,
             "teacher_forced_token_accuracy": None,
             "global_cache_capacity_ratio": None,
@@ -397,6 +403,9 @@ def _long_context_summary(report: dict[str, Any]) -> dict[str, Any]:
     return {
         "present": True,
         "report_path": report.get("_report_path"),
+        "stage": report.get("stage"),
+        "route_mode": report.get("route_mode"),
+        "global_kv_enabled": memory.get("global_kv_enabled"),
         "sample_count": _num(report.get("sample_count")),
         "exact_match_accuracy": _num(overall.get("exact_match_accuracy")),
         "teacher_forced_token_accuracy": _num(overall.get("teacher_forced_token_accuracy")),
@@ -412,6 +421,15 @@ def _global_metrics_present(row: dict[str, Any]) -> bool:
         _finite(metrics.get("global_attention_mass"))
         and _finite(metrics.get("global_read_gate_mean"))
         and _finite(metrics.get("global_cache_slots_mean"))
+    )
+
+
+def _long_context_matches_run(row: dict[str, Any]) -> bool:
+    long_context = row["long_context"]
+    return (
+        long_context.get("stage") == row.get("stage")
+        and long_context.get("route_mode") == "scheduled"
+        and long_context.get("global_kv_enabled") is row.get("global_kv_enabled")
     )
 
 
