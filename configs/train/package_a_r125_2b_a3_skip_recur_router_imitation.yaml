@@ -1,10 +1,11 @@
 extends: stage3_pseudo_skip_recur.yaml
 run_name: package_a_r125_2b_A3_skip_recur_router_imitation
 data_config: ../data/r125_main_2b.yaml
-max_steps: 244141
-eval_interval: 10000
-save_interval: 10000
+batch_size: 32
+max_steps: 30518
+eval_interval: 2500
+save_interval: 2500
 save_best_checkpoint: false
 wandb:
-  group: package_a_r125_2b
-  tags: [package_a, r125, 2b, A3, skip_recur_router_imitation]
+  group: package_a_r125_2b_bs32
+  tags: [package_a, r125, 2b, bs32, A3, skip_recur_router_imitation]
