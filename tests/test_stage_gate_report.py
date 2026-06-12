@@ -453,13 +453,19 @@ def test_stage_gate_report_writes_json(tmp_path: Path) -> None:
             "overall_status": "pass",
             "checks": {
                 "baseline_samples_present": True,
+                "baseline_cross_entropy_numeric": True,
+                "baseline_cross_entropy_ordered_by_difficulty": True,
                 "difficulty_bins_present": True,
                 "mixed_skip_recur_policy": True,
                 "stage3_pseudo_skip_recur_stage": True,
                 "pseudo_routing_mode": True,
                 "easy_has_skip_or_small_pool": True,
+                "easy_uses_skip_or_early_exit": True,
                 "hard_has_recur_transition": True,
+                "hard_uses_recurrence": True,
                 "exit_action_supervised": True,
+                "out_supervised": True,
+                "supervised_out_targets_present": True,
                 "easy_exits_no_later_than_hard": True,
                 "route_length_conditioned_by_difficulty": True,
             },
@@ -637,6 +643,15 @@ def test_stage_gate_report_writes_json(tmp_path: Path) -> None:
     assert report["gates"]["stage2_to_3"]["checks"]["pseudo_route_curriculum_mixed_policy"] is True
     assert report["gates"]["stage2_to_3"]["checks"]["pseudo_route_curriculum_correct_stage"] is True
     assert report["gates"]["stage2_to_3"]["checks"]["pseudo_route_curriculum_pseudo_mode"] is True
+    assert report["gates"]["stage2_to_3"]["checks"]["pseudo_route_curriculum_baseline_samples"] is True
+    assert report["gates"]["stage2_to_3"]["checks"]["pseudo_route_curriculum_difficulty_bins"] is True
+    assert report["gates"]["stage2_to_3"]["checks"]["pseudo_route_curriculum_baseline_ce_numeric"] is True
+    assert report["gates"]["stage2_to_3"]["checks"]["pseudo_route_curriculum_baseline_ce_ordered"] is True
+    assert report["gates"]["stage2_to_3"]["checks"]["pseudo_route_curriculum_easy_targets"] is True
+    assert report["gates"]["stage2_to_3"]["checks"]["pseudo_route_curriculum_hard_targets"] is True
+    assert report["gates"]["stage2_to_3"]["checks"]["pseudo_route_curriculum_out_supervised"] is True
+    assert report["gates"]["stage2_to_3"]["checks"]["pseudo_route_curriculum_easy_before_hard"] is True
+    assert report["gates"]["stage2_to_3"]["checks"]["pseudo_route_curriculum_route_length_conditioned"] is True
     assert report["gates"]["stage2_to_3"]["checks"]["pseudo_route_curriculum_passed"] is True
     assert report["gates"]["stage2_to_3"]["sequential_stage"] == "stage2_router_imitation"
     assert report["gates"]["stage2_to_3"]["mixed_stage"] == "stage3_pseudo_skip_recur"
@@ -1275,6 +1290,57 @@ def test_stage2_gate_rejects_boolean_block_histogram_counts(tmp_path: Path) -> N
 
     assert gate["checks"]["block_usage_non_degenerate"] is False
     assert gate["checks"]["block_load_entropy_present"] is True
+
+
+def test_stage2_gate_requires_curriculum_behavior_evidence(tmp_path: Path) -> None:
+    stage2 = _write_run(
+        tmp_path,
+        "stage2",
+        stage="stage2_router_imitation",
+        val_loss=10.0,
+        train_row={
+            "route_imitation_accuracy": 0.95,
+            "block_load_entropy": 0.5,
+            "top1_block_histogram": {"0": 2, "1": 2, "2": 1},
+        },
+        routing={"mode": "pseudo", "pseudo_policy": "sequential"},
+    )
+    mixed_pseudo = _write_run(
+        tmp_path,
+        "stage3_pseudo",
+        stage="stage3_pseudo_skip_recur",
+        val_loss=10.0,
+        train_row={
+            "route_imitation_accuracy": 0.95,
+            "block_load_entropy": 0.5,
+            "top1_block_histogram": {"0": 2, "1": 2, "2": 1},
+        },
+        routing={"mode": "pseudo", "pseudo_policy": "mixed_skip_recur"},
+        pseudo_route_curriculum_report={
+            "overall_status": "pass",
+            "checks": {
+                "baseline_samples_present": True,
+                "baseline_cross_entropy_numeric": True,
+                "baseline_cross_entropy_ordered_by_difficulty": True,
+                "difficulty_bins_present": True,
+                "mixed_skip_recur_policy": True,
+                "stage3_pseudo_skip_recur_stage": True,
+                "pseudo_routing_mode": True,
+                "easy_uses_skip_or_early_exit": True,
+                "hard_uses_recurrence": False,
+                "supervised_out_targets_present": True,
+                "easy_exits_no_later_than_hard": True,
+                "route_length_conditioned_by_difficulty": True,
+            },
+        },
+    )
+
+    report_path = make_stage_gate_report([stage2, mixed_pseudo], output_path=tmp_path / "gate.json")
+    gate = json.loads(report_path.read_text(encoding="utf-8"))["gates"]["stage2_to_3"]
+
+    assert gate["status"] != "pass"
+    assert gate["checks"]["pseudo_route_curriculum_hard_targets"] is False
+    assert gate["checks"]["pseudo_route_curriculum_passed"] is False
 
 
 def test_stage2_gate_requires_mixed_pseudo_policy_for_curriculum(tmp_path: Path) -> None:

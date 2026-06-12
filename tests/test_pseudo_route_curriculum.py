@@ -71,10 +71,56 @@ def test_pseudo_route_curriculum_report_uses_baseline_difficulty_bins(tmp_path: 
     assert report["checks"]["baseline_cross_entropy_numeric"] is True
     assert report["checks"]["baseline_cross_entropy_ordered_by_difficulty"] is True
     assert report["checks"]["easy_has_skip_or_small_pool"] is True
+    assert report["checks"]["easy_uses_skip_or_early_exit"] is True
     assert report["checks"]["hard_has_recur_transition"] is True
+    assert report["checks"]["hard_uses_recurrence"] is True
     assert report["checks"]["exit_action_supervised"] is True
+    assert report["checks"]["out_supervised"] is True
+    assert report["checks"]["all_samples_have_supervised_out"] is True
+    assert report["checks"]["supervised_out_targets_present"] is True
     assert report["by_difficulty"]["easy"]["mean_internal_route_steps"] == 2.0
     assert report["by_difficulty"]["hard"]["recur_transition_count"] == 1
+
+
+def test_pseudo_route_curriculum_report_fails_when_hard_lacks_recurrence(tmp_path: Path) -> None:
+    run_dir = tmp_path / "stage3_pseudo"
+    run_dir.mkdir()
+    (run_dir / "config_resolved.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "stage": "stage3_pseudo_skip_recur",
+                "routing": {"mode": "pseudo", "pseudo_policy": "mixed_skip_recur"},
+                "model_config_resolved": {
+                    "architecture": "brian_route_core",
+                    "route_pool_blocks": 5,
+                    "max_route_steps": 2,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    samples = tmp_path / "baseline_samples.jsonl"
+    _write_jsonl(
+        samples,
+        [
+            {"sample_id": 0, "baseline_cross_entropy": 1.0, "difficulty_bin": "easy"},
+            {"sample_id": 1, "baseline_cross_entropy": 2.0, "difficulty_bin": "medium"},
+            {"sample_id": 2, "baseline_cross_entropy": 3.0, "difficulty_bin": "hard"},
+        ],
+    )
+    baseline_report = tmp_path / "baseline_difficulty_report.json"
+    baseline_report.write_text(json.dumps({"samples_path": str(samples), "sample_count": 3}), encoding="utf-8")
+
+    output = make_pseudo_route_curriculum_report(
+        run_dir,
+        baseline_difficulty_report_path=baseline_report,
+        output_path=tmp_path / "curriculum.json",
+    )
+    report = json.loads(output.read_text(encoding="utf-8"))
+
+    assert report["overall_status"] == "fail"
+    assert report["checks"]["hard_has_recur_transition"] is False
+    assert report["checks"]["hard_uses_recurrence"] is False
 
 
 def test_pseudo_route_curriculum_report_fails_boolean_baseline_ce(tmp_path: Path) -> None:

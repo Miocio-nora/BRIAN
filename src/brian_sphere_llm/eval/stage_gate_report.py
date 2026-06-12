@@ -326,6 +326,7 @@ def _gate_stage2(
     thresholds: dict[str, float],
 ) -> dict[str, Any]:
     curriculum_checks = mixed_stage.get("pseudo_route_curriculum_checks", {}) if mixed_stage else {}
+    curriculum_behavior_checks = _pseudo_route_curriculum_behavior_checks(curriculum_checks)
     checks = {
         "sequential_pseudo_run_present": bool(sequential_stage),
         "sequential_pseudo_policy": _routing_policy_matches(sequential_stage, "sequential"),
@@ -356,6 +357,19 @@ def _gate_stage2(
         "pseudo_route_curriculum_pseudo_mode": bool(
             isinstance(curriculum_checks, dict) and curriculum_checks.get("pseudo_routing_mode") is True
         ),
+        "pseudo_route_curriculum_baseline_samples": curriculum_behavior_checks["baseline_samples_present"],
+        "pseudo_route_curriculum_difficulty_bins": curriculum_behavior_checks["difficulty_bins_present"],
+        "pseudo_route_curriculum_baseline_ce_numeric": curriculum_behavior_checks["baseline_cross_entropy_numeric"],
+        "pseudo_route_curriculum_baseline_ce_ordered": curriculum_behavior_checks[
+            "baseline_cross_entropy_ordered_by_difficulty"
+        ],
+        "pseudo_route_curriculum_easy_targets": curriculum_behavior_checks["easy_uses_skip_or_early_exit"],
+        "pseudo_route_curriculum_hard_targets": curriculum_behavior_checks["hard_uses_recurrence"],
+        "pseudo_route_curriculum_out_supervised": curriculum_behavior_checks["supervised_out_targets_present"],
+        "pseudo_route_curriculum_easy_before_hard": curriculum_behavior_checks["easy_exits_no_later_than_hard"],
+        "pseudo_route_curriculum_route_length_conditioned": curriculum_behavior_checks[
+            "route_length_conditioned_by_difficulty"
+        ],
         "pseudo_route_curriculum_passed": bool(
             mixed_stage
             and mixed_stage.get("pseudo_route_curriculum_status") == "pass"
@@ -363,6 +377,7 @@ def _gate_stage2(
             and curriculum_checks.get("mixed_skip_recur_policy") is True
             and curriculum_checks.get("stage3_pseudo_skip_recur_stage") is True
             and curriculum_checks.get("pseudo_routing_mode") is True
+            and all(curriculum_behavior_checks.values())
         ),
         "checkpoint_present": bool(mixed_stage and mixed_stage["has_checkpoint_latest"]),
         **_prefixed_checks("sequential", _routed_run_artifact_gate_checks(sequential_stage)),
@@ -819,6 +834,40 @@ def _baseline_difficulty_checks(summary: dict[str, Any] | None) -> dict[str, boo
         and len(finite_means) >= 3
         and all(next_value >= value for value, next_value in zip(finite_means, finite_means[1:])),
     }
+
+
+def _pseudo_route_curriculum_behavior_checks(checks: Any) -> dict[str, bool]:
+    if not isinstance(checks, dict):
+        checks = {}
+    return {
+        "baseline_samples_present": _curriculum_check_true(checks, "baseline_samples_present"),
+        "difficulty_bins_present": _curriculum_check_true(checks, "difficulty_bins_present"),
+        "baseline_cross_entropy_numeric": _curriculum_check_true(checks, "baseline_cross_entropy_numeric"),
+        "baseline_cross_entropy_ordered_by_difficulty": _curriculum_check_true(
+            checks, "baseline_cross_entropy_ordered_by_difficulty"
+        ),
+        "easy_uses_skip_or_early_exit": _curriculum_check_true(
+            checks, "easy_uses_skip_or_early_exit", "easy_has_skip_or_small_pool"
+        ),
+        "hard_uses_recurrence": _curriculum_check_true(
+            checks, "hard_uses_recurrence", "hard_has_recur_transition"
+        ),
+        "supervised_out_targets_present": _curriculum_check_true(
+            checks,
+            "supervised_out_targets_present",
+            "all_samples_have_supervised_out",
+            "out_supervised",
+            "exit_action_supervised",
+        ),
+        "easy_exits_no_later_than_hard": _curriculum_check_true(checks, "easy_exits_no_later_than_hard"),
+        "route_length_conditioned_by_difficulty": _curriculum_check_true(
+            checks, "route_length_conditioned_by_difficulty"
+        ),
+    }
+
+
+def _curriculum_check_true(checks: dict[str, Any], *names: str) -> bool:
+    return any(checks.get(name) is True for name in names)
 
 
 def _rank_state_resume_event_checks(event: Any, summary: dict[str, Any] | None) -> dict[str, bool]:

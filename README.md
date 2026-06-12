@@ -208,7 +208,7 @@ python scripts/eval.py \
   --baseline-report <stage0_baseline_run>/baseline_difficulty_report.json
 ```
 
-This writes `pseudo_route_curriculum_report.json` showing that easy samples receive skip/early-exit targets, hard samples receive recurrent targets, and all samples include supervised `OUT`. Stage 2 gates use it as explicit curriculum evidence.
+This writes `pseudo_route_curriculum_report.json` showing that easy samples receive skip/early-exit targets, hard samples receive recurrent targets, and all samples include supervised `OUT`. Stage 2 gates require those behavior checks plus baseline sample/bin and cross-entropy ordering evidence as explicit curriculum evidence.
 
 Generate Stage 3 scheduled-routing evidence:
 

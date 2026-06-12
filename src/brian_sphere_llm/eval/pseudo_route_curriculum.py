@@ -167,6 +167,15 @@ def _checks(
     easy_steps = _num(easy.get("mean_internal_route_steps"))
     medium_steps = _num(medium.get("mean_internal_route_steps"))
     hard_steps = _num(hard.get("mean_internal_route_steps"))
+    easy_rows = [row for row in rows if row["difficulty_bin"] == "easy"]
+    hard_rows = [row for row in rows if row["difficulty_bin"] == "hard"]
+    easy_uses_skip_or_early_exit = bool(easy_rows) and all(
+        _has_skip_or_early_exit(row) for row in easy_rows
+    )
+    hard_uses_recurrence = bool(hard_rows) and all(
+        int(row.get("recur_transition_count") or 0) > 0 for row in hard_rows
+    )
+    out_supervised = bool(rows) and all(row["has_exit_supervision"] for row in rows)
     return {
         "stage3_pseudo_skip_recur_stage": stage == "stage3_pseudo_skip_recur",
         "pseudo_routing_mode": routing_mode == "pseudo",
@@ -181,9 +190,15 @@ def _checks(
         ),
         "difficulty_bins_present": all(by_difficulty[label]["sample_count"] > 0 for label in DIFFICULTY_TO_ID),
         "mixed_skip_recur_policy": pseudo_policy == "mixed_skip_recur",
-        "easy_has_skip_or_small_pool": route_pool_blocks <= 2 or int(easy.get("skip_transition_count") or 0) > 0,
+        "easy_has_skip_or_small_pool": bool(easy_rows)
+        and (route_pool_blocks <= 2 or int(easy.get("skip_transition_count") or 0) > 0),
+        "easy_uses_skip_or_early_exit": easy_uses_skip_or_early_exit,
         "hard_has_recur_transition": int(hard.get("recur_transition_count") or 0) > 0,
-        "exit_action_supervised": all(row["has_exit_supervision"] for row in rows),
+        "hard_uses_recurrence": hard_uses_recurrence,
+        "exit_action_supervised": out_supervised,
+        "out_supervised": out_supervised,
+        "all_samples_have_supervised_out": out_supervised,
+        "supervised_out_targets_present": out_supervised,
         "easy_exits_no_later_than_hard": easy_exit is not None and hard_exit is not None and easy_exit <= hard_exit,
         "route_length_conditioned_by_difficulty": (
             easy_steps is not None
@@ -193,6 +208,15 @@ def _checks(
             and easy_steps <= hard_steps
         ),
     }
+
+
+def _has_skip_or_early_exit(row: dict[str, Any]) -> bool:
+    first_exit_step = int(row.get("first_exit_step") or 0)
+    actions = row.get("actions")
+    path_length = len(actions) if isinstance(actions, list) else 0
+    return int(row.get("skip_transition_count") or 0) > 0 or (
+        first_exit_step > 0 and path_length > 0 and first_exit_step < path_length
+    )
 
 
 def _difficulty_id(value: Any) -> int:
