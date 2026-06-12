@@ -77,6 +77,7 @@ def summarize_run(
     routing_config = config.get("routing", {}) if isinstance(config.get("routing"), dict) else {}
     model_config = config.get("model_config_resolved", {})
     model_config = model_config if isinstance(model_config, dict) else {}
+    top_k = _top_k(model_stats, model_config)
 
     parameter_count = int(_num(model_stats.get("parameter_count")) or 0)
     physical_layers = _physical_layer_count(model_stats, config)
@@ -98,6 +99,7 @@ def summarize_run(
         "global_kv_enabled": _model_bool_value(model_config, "global_kv", default=False),
         "parallel_passing_enabled": _model_bool_value(model_config, "parallel_passing", default=False),
         "hard_exit_enabled": _hard_exit_enabled(config),
+        "top_k": top_k,
         "distributed_world_size": _world_size(config),
         "micro_batch_size": _batch_size(config),
         "gradient_accumulation_steps": _gradient_accumulation_steps(config),
@@ -138,6 +140,19 @@ def summarize_run(
     if baseline:
         summary["baseline_comparison"] = compare_to_baseline(summary, baseline)
     return summary
+
+
+def _top_k(model_stats: dict[str, Any], model_config: dict[str, Any]) -> float | None:
+    top_k = _num(model_stats.get("top_k"))
+    if top_k is None:
+        top_k = _num(model_config.get("top_k"))
+    later_top_k = _num(model_stats.get("later_top_k"))
+    if later_top_k is None:
+        later_top_k = _num(model_config.get("later_top_k"))
+    values = [value for value in [top_k, later_top_k] if value is not None]
+    if not values:
+        return None
+    return max(values)
 
 
 def compare_to_baseline(summary: dict[str, Any], baseline: dict[str, Any]) -> dict[str, Any]:
@@ -196,13 +211,8 @@ def _active_layer_evals(model_stats: dict[str, Any], config: dict[str, Any], rou
     if internal_fraction is None:
         internal_fraction = 1.0
     model_config = config.get("model_config_resolved", {})
-    top_k = _num(model_stats.get("top_k"))
-    if top_k is None and isinstance(model_config, dict):
-        top_k = _num(model_config.get("top_k"))
-    later_top_k = _num(model_stats.get("later_top_k"))
-    if later_top_k is None and isinstance(model_config, dict):
-        later_top_k = _num(model_config.get("later_top_k"))
-    top_k = max(1.0, float(top_k or 1.0), float(later_top_k or 1.0))
+    model_config = model_config if isinstance(model_config, dict) else {}
+    top_k = max(1.0, float(_top_k(model_stats, model_config) or 1.0))
     weighted_ratio = max(0.0, min(1.0, float(_num(routing_summary.get("weighted_fusion_ratio")) or 0.0)))
     parallel_branch_count = max(1.0, float(_num(routing_summary.get("parallel_branch_count_mean")) or 1.0))
     route_exec_multiplier = (1.0 + weighted_ratio * (top_k - 1.0)) * parallel_branch_count

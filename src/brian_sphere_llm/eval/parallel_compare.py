@@ -63,7 +63,10 @@ def _compare_candidate(
     min_parallel_branch_count: float,
 ) -> dict[str, Any]:
     comparison = candidate.get("baseline_comparison", {})
+    baseline_routing = baseline.get("routing", {})
     routing = candidate.get("routing", {})
+    baseline_top_k = _num(baseline.get("top_k"))
+    baseline_weighted_fusion_ratio = _num(baseline_routing.get("weighted_fusion_ratio"))
     branch_count = _num(routing.get("parallel_branch_count_mean"))
     score_margin = _num(routing.get("parallel_score_margin_mean"))
     validation_delta = _num(comparison.get("validation_loss_delta"))
@@ -74,6 +77,12 @@ def _compare_candidate(
     baseline_scheduled = baseline.get("route_mode") == "scheduled"
     baseline_global_kv = baseline.get("global_kv_enabled") is True
     baseline_non_parallel = baseline.get("parallel_passing_enabled") is False
+    baseline_topk_weighted = (
+        baseline_top_k is not None
+        and baseline_top_k > 1.0
+        and baseline_weighted_fusion_ratio is not None
+        and baseline_weighted_fusion_ratio > 0.0
+    )
     candidate_parallel_stage = candidate.get("stage") in {"stage6_parallel_passing", "stage7_parallel_passing"}
     candidate_parallel_route = candidate.get("route_mode") == "parallel"
     candidate_parallel_enabled = candidate.get("parallel_passing_enabled") is True
@@ -97,6 +106,7 @@ def _compare_candidate(
         "baseline_scheduled_route_mode": baseline_scheduled,
         "baseline_global_kv_enabled": baseline_global_kv,
         "baseline_parallel_passing_disabled": baseline_non_parallel,
+        "baseline_topk_weighted_fusion": baseline_topk_weighted,
         "candidate_parallel_stage": candidate_parallel_stage,
         "candidate_parallel_route_mode": candidate_parallel_route,
         "candidate_parallel_passing_enabled": candidate_parallel_enabled,
@@ -113,6 +123,8 @@ def _compare_candidate(
         "candidate_run": candidate["run_dir"],
         "candidate_stage": candidate.get("stage"),
         "baseline_stage": baseline.get("stage"),
+        "baseline_top_k": baseline_top_k,
+        "baseline_weighted_fusion_ratio": baseline_weighted_fusion_ratio,
         "candidate_route_mode": candidate.get("route_mode"),
         "baseline_route_mode": baseline.get("route_mode"),
         "candidate": _summary_row(candidate),
@@ -138,6 +150,7 @@ def _summary_row(summary: dict[str, Any]) -> dict[str, Any]:
         "run_dir": summary.get("run_dir"),
         "stage": summary.get("stage"),
         "route_mode": summary.get("route_mode"),
+        "top_k": summary.get("top_k"),
         "global_kv_enabled": summary.get("global_kv_enabled"),
         "parallel_passing_enabled": summary.get("parallel_passing_enabled"),
         "validation_loss": summary.get("validation_loss"),

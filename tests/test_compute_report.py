@@ -105,6 +105,7 @@ def test_summarize_run_estimates_active_route_compute(tmp_path: Path) -> None:
     assert summary["physical_layer_count"] == 4
     assert summary["route_mode"] == "scheduled"
     assert summary["hard_exit_enabled"] is False
+    assert summary["top_k"] == 2.0
     assert summary["active_layer_evals_per_token"] == pytest.approx(5.0)
     assert summary["active_layer_ratio"] == pytest.approx(1.25)
     assert summary["trained_tokens_estimate"] == 32
@@ -142,6 +143,7 @@ def test_summarize_run_uses_later_top_k_for_weighted_fusion_compute(tmp_path: Pa
     summary = summarize_run(run, tflops_per_gpu=1.0, utilization=1.0)
 
     assert summary["active_layer_evals_per_token"] == pytest.approx(5.0)
+    assert summary["top_k"] == 2.0
 
 
 def test_summarize_run_accounts_for_gradient_accumulation_tokens(tmp_path: Path) -> None:

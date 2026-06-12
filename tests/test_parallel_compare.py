@@ -99,6 +99,7 @@ def test_parallel_compare_passes_bounded_parallel_candidate(tmp_path: Path) -> N
     assert row["checks"]["baseline_scheduled_route_mode"] is True
     assert row["checks"]["baseline_global_kv_enabled"] is True
     assert row["checks"]["baseline_parallel_passing_disabled"] is True
+    assert row["checks"]["baseline_topk_weighted_fusion"] is True
     assert row["checks"]["candidate_parallel_stage"] is True
     assert row["checks"]["candidate_parallel_route_mode"] is True
     assert row["checks"]["candidate_parallel_passing_enabled"] is True
@@ -107,6 +108,9 @@ def test_parallel_compare_passes_bounded_parallel_candidate(tmp_path: Path) -> N
     assert row["checks"]["parallel_score_margin_present"] is True
     assert row["checks"]["quality_not_worse"] is True
     assert row["checks"]["parallel_branch_benefit_proxy"] is True
+    assert row["baseline_top_k"] == 2.0
+    assert row["baseline_weighted_fusion_ratio"] == 1.0
+    assert report["baseline"]["top_k"] == 2.0
     assert row["baseline_comparison"]["validation_loss_delta"] < 0.0
 
 
@@ -182,6 +186,43 @@ def test_parallel_compare_requires_stage5_to_parallel_roles(tmp_path: Path) -> N
     assert row["checks"]["candidate_parallel_passing_enabled"] is False
     assert row["checks"]["parallel_branch_active"] is True
     assert row["checks"]["quality_not_worse"] is True
+
+
+def test_parallel_compare_requires_topk_weighted_baseline(tmp_path: Path) -> None:
+    baseline = _write_run(
+        tmp_path,
+        "top1",
+        stage="stage5_global_kv",
+        validation_loss=10.0,
+        tokens_per_second=100,
+        routing_summary={
+            "average_route_steps": 2.0,
+            "active_block_evals_per_token": 0.5,
+            "weighted_fusion_ratio": 0.0,
+        },
+    )
+    candidate = _write_run(
+        tmp_path,
+        "parallel",
+        stage="stage6_parallel_passing",
+        validation_loss=9.9,
+        tokens_per_second=120,
+        routing_summary={
+            "average_route_steps": 2.0,
+            "active_block_evals_per_token": 0.25,
+            "parallel_branch_count_mean": 2.0,
+            "parallel_score_margin_mean": 0.1,
+        },
+    )
+
+    output = make_parallel_comparison_report(baseline, [candidate], output_path=tmp_path / "parallel_compare.json")
+    row = json.loads(output.read_text(encoding="utf-8"))["comparisons"][0]
+
+    assert row["status"] == "warn"
+    assert row["baseline_top_k"] == 2.0
+    assert row["baseline_weighted_fusion_ratio"] == 0.0
+    assert row["checks"]["baseline_topk_weighted_fusion"] is False
+    assert row["checks"]["parallel_branch_benefit_proxy"] is True
 
 
 def test_parallel_compare_rejects_boolean_parallel_metrics(tmp_path: Path) -> None:

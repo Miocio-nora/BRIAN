@@ -658,6 +658,7 @@ def _gate_stage6(
         "baseline_scheduled_route_mode",
         "baseline_global_kv_enabled",
         "baseline_parallel_passing_disabled",
+        "baseline_topk_weighted_fusion",
         "candidate_parallel_stage",
         "candidate_parallel_route_mode",
         "candidate_parallel_passing_enabled",

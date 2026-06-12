@@ -289,6 +289,7 @@ def _parallel_compare_report(*, checks: dict[str, bool] | None = None) -> dict:
         "baseline_scheduled_route_mode": True,
         "baseline_global_kv_enabled": True,
         "baseline_parallel_passing_disabled": True,
+        "baseline_topk_weighted_fusion": True,
         "candidate_parallel_stage": True,
         "candidate_parallel_route_mode": True,
         "candidate_parallel_passing_enabled": True,
@@ -2121,6 +2122,7 @@ def test_stage6_gate_uses_parallel_compare_report(tmp_path: Path) -> None:
                             "baseline_scheduled_route_mode": True,
                             "baseline_global_kv_enabled": True,
                             "baseline_parallel_passing_disabled": True,
+                            "baseline_topk_weighted_fusion": True,
                             "candidate_parallel_stage": True,
                             "candidate_parallel_route_mode": True,
                             "candidate_parallel_passing_enabled": True,
@@ -2229,6 +2231,7 @@ def test_stage6_gate_accepts_stage7_parallel_alias(tmp_path: Path) -> None:
                             "baseline_scheduled_route_mode": True,
                             "baseline_global_kv_enabled": True,
                             "baseline_parallel_passing_disabled": True,
+                            "baseline_topk_weighted_fusion": True,
                             "candidate_parallel_stage": True,
                             "candidate_parallel_route_mode": True,
                             "candidate_parallel_passing_enabled": True,
@@ -2338,6 +2341,39 @@ def test_stage6_gate_requires_parallel_compare_stage_roles(tmp_path: Path) -> No
     compare["overall_status"] = "pass"
     compare["comparisons"][0]["status"] = "pass"
     compare["comparisons"][0]["checks"]["candidate_parallel_stage"] = False
+    compare_report = tmp_path / "parallel_compare.json"
+    compare_report.write_text(json.dumps(compare), encoding="utf-8")
+
+    report_path = make_stage_gate_report(
+        [stage6],
+        output_path=tmp_path / "gate.json",
+        parallel_compare_report_path=compare_report,
+    )
+    gate = json.loads(report_path.read_text(encoding="utf-8"))["gates"]["stage6_to_scale"]
+
+    assert gate["status"] == "warn"
+    assert gate["checks"]["parallel_compare_passed"] is True
+    assert gate["checks"]["parallel_branch_benefit_proxy"] is False
+
+
+def test_stage6_gate_requires_topk_weighted_parallel_baseline(tmp_path: Path) -> None:
+    stage6 = _write_run(
+        tmp_path,
+        "parallel",
+        stage="stage6_parallel_passing",
+        val_loss=10.0,
+        train_row={
+            "parallel_branch_count_mean": 2.0,
+            "parallel_score_margin_mean": 0.1,
+            "global_cache_slots_mean": 2.0,
+            "top1_block_histogram": {"0": 1, "1": 1, "2": 1},
+        },
+        parallel_passing_report=_parallel_passing_report(),
+    )
+    compare = _parallel_compare_report()
+    compare["overall_status"] = "pass"
+    compare["comparisons"][0]["status"] = "pass"
+    compare["comparisons"][0]["checks"]["baseline_topk_weighted_fusion"] = False
     compare_report = tmp_path / "parallel_compare.json"
     compare_report.write_text(json.dumps(compare), encoding="utf-8")
 
