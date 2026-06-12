@@ -470,7 +470,7 @@ def _long_context_matches_run(row: dict[str, Any]) -> bool:
 
 def _long_context_report_passed(row: dict[str, Any]) -> bool:
     status = row["long_context"].get("overall_status")
-    return status is None or status == "pass"
+    return status == "pass"
 
 
 def _long_context_coverage_passed(row: dict[str, Any]) -> bool:
