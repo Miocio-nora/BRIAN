@@ -23,6 +23,28 @@ DEFAULT_THRESHOLDS = {
 }
 
 
+PARALLEL_COMPARE_ROLE_CHECKS = [
+    "baseline_stage5_global_kv",
+    "baseline_scheduled_route_mode",
+    "baseline_global_kv_enabled",
+    "baseline_parallel_passing_disabled",
+    "candidate_parallel_stage",
+    "candidate_parallel_route_mode",
+    "candidate_parallel_passing_enabled",
+    "candidate_global_kv_enabled",
+]
+
+
+LONG_CONTEXT_STAGE5_ROLE_CHECKS = [
+    "baseline_stage4_output_action",
+    "baseline_scheduled_route_mode",
+    "baseline_local_kv",
+    "candidate_stage5_global_kv",
+    "candidate_scheduled_route_mode",
+    "candidate_global_kv_enabled",
+]
+
+
 MITIGATIONS = {
     "router_collapse": [
         "extend pseudo-route imitation",
@@ -353,7 +375,7 @@ def _parallel_passing_cost_explosion(reports: dict[str, dict[str, Any]]) -> dict
     branch_bounded = _report_check(passing_report, "branch_count_bounded_by_beam")
     delta_cache_bounded = _report_check(passing_report, "delta_cache_bounded_by_window")
     score_margin_measured = _report_check(passing_report, "score_margin_measured")
-    compare_benefit = _parallel_compare_benefit(compare_report)
+    compare_benefit, compare_benefit_evidence = _parallel_compare_benefit(compare_report)
 
     if score_margin_measured is False:
         credit_unstable = True
@@ -390,6 +412,7 @@ def _parallel_passing_cost_explosion(reports: dict[str, dict[str, Any]]) -> dict
                 "score_margin_measured": score_margin_measured,
                 "parallel_compare_benefit_proxy": compare_benefit,
                 "parallel_compare_status": compare_report.get("overall_status") if compare_report else None,
+                "parallel_compare_candidates": compare_benefit_evidence,
             },
         ),
     ]
@@ -498,19 +521,23 @@ def _global_on_off_no_difference(
 ) -> tuple[bool | None, dict[str, Any]]:
     comparisons = _list(long_context_compare_report.get("comparisons"))
     if comparisons:
-        statuses = [item.get("status") for item in comparisons if isinstance(item, dict)]
-        if any(status == "pass" for status in statuses):
+        candidates = _long_context_compare_candidates(comparisons)
+        if any(candidate["passes_stage5_long_context_contract"] is True for candidate in candidates):
             return False, {
                 "source": "long_context_compare_report",
                 "overall_status": long_context_compare_report.get("overall_status"),
                 "candidate_count": long_context_compare_report.get("candidate_count"),
-                "passing_comparison_count": statuses.count("pass"),
+                "passing_comparison_count": sum(
+                    1 for candidate in candidates if candidate["passes_stage5_long_context_contract"] is True
+                ),
+                "comparison_candidates": candidates,
             }
         return True, {
             "source": "long_context_compare_report",
             "overall_status": long_context_compare_report.get("overall_status"),
             "candidate_count": long_context_compare_report.get("candidate_count"),
             "passing_comparison_count": 0,
+            "comparison_candidates": candidates,
         }
 
     local_vs_global = _list(_dict(global_kv_ablation_report.get("comparisons")).get("local_vs_global"))
@@ -540,6 +567,39 @@ def _global_on_off_no_difference(
     }
 
 
+def _long_context_compare_candidates(comparisons: list[Any]) -> list[dict[str, Any]]:
+    candidates = []
+    for row in comparisons:
+        if not isinstance(row, dict):
+            continue
+        checks = _dict(row.get("checks"))
+        role_checks = _selected_checks(checks, LONG_CONTEXT_STAGE5_ROLE_CHECKS)
+        role_contract_passed = all(value is True for value in role_checks.values())
+        stage5_contract = (
+            row.get("status") == "pass"
+            and role_contract_passed
+            and checks.get("global_kv_active") is True
+            and checks.get("quality_not_worse") is True
+            and checks.get("memory_budget_present") is True
+            and checks.get("global_budget_below_local_context") is True
+        )
+        candidates.append(
+            {
+                "candidate_report": row.get("candidate_report"),
+                "candidate_run_dir": row.get("candidate_run_dir"),
+                "status": row.get("status"),
+                "role_checks": role_checks,
+                "role_contract_passed": role_contract_passed,
+                "global_kv_active": checks.get("global_kv_active"),
+                "quality_not_worse": checks.get("quality_not_worse"),
+                "memory_budget_present": checks.get("memory_budget_present"),
+                "global_budget_below_local_context": checks.get("global_budget_below_local_context"),
+                "passes_stage5_long_context_contract": stage5_contract,
+            }
+        )
+    return candidates
+
+
 def _global_cache_worsens_loss(
     global_kv_ablation_report: dict[str, Any],
     max_loss_delta: float,
@@ -564,25 +624,49 @@ def _global_cache_worsens_loss(
     }
 
 
-def _parallel_compare_benefit(report: dict[str, Any]) -> bool | None:
+def _parallel_compare_benefit(report: dict[str, Any]) -> tuple[bool | None, list[dict[str, Any]]]:
     comparisons = _list(report.get("comparisons"))
     if not comparisons:
-        return None
+        return None, []
     values = []
+    evidence = []
     for row in comparisons:
         if not isinstance(row, dict):
             continue
         checks = _dict(row.get("checks"))
-        value = checks.get("parallel_branch_benefit_proxy")
-        if isinstance(value, bool):
+        role_checks = _selected_checks(checks, PARALLEL_COMPARE_ROLE_CHECKS)
+        role_contract_passed = all(value is True for value in role_checks.values())
+        benefit = checks.get("parallel_branch_benefit_proxy")
+        value = benefit is True and role_contract_passed
+        if isinstance(benefit, bool):
             values.append(value)
-        elif row.get("status") == "pass":
-            values.append(True)
         elif row.get("status") == "fail":
             values.append(False)
+        else:
+            evidence.append(
+                {
+                    "candidate_run": row.get("candidate_run"),
+                    "status": row.get("status"),
+                    "role_checks": role_checks,
+                    "role_contract_passed": role_contract_passed,
+                    "parallel_branch_benefit_proxy": benefit,
+                    "passes_parallel_compare_contract": None,
+                }
+            )
+            continue
+        evidence.append(
+            {
+                "candidate_run": row.get("candidate_run"),
+                "status": row.get("status"),
+                "role_checks": role_checks,
+                "role_contract_passed": role_contract_passed,
+                "parallel_branch_benefit_proxy": benefit,
+                "passes_parallel_compare_contract": value,
+            }
+        )
     if not values:
-        return None
-    return any(values)
+        return None, evidence
+    return any(values), evidence
 
 
 def _first_exit_histogram(
@@ -630,6 +714,10 @@ def _gate(report: dict[str, Any], gate_name: str) -> dict[str, Any]:
 def _report_check(report: dict[str, Any], check_name: str) -> bool | None:
     value = _dict(report.get("checks")).get(check_name)
     return value if isinstance(value, bool) else None
+
+
+def _selected_checks(checks: dict[str, Any], names: list[str]) -> dict[str, Any]:
+    return {name: checks.get(name) for name in names}
 
 
 def _first_num(*values: Any) -> float | None:

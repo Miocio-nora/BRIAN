@@ -62,7 +62,29 @@ def test_risk_audit_passes_with_clear_evidence(tmp_path: Path) -> None:
     )
     long_context = _write_json(
         tmp_path / "long_context_compare.json",
-        {"overall_status": "pass", "candidate_count": 1, "comparisons": [{"status": "pass"}]},
+        {
+            "overall_status": "pass",
+            "candidate_count": 1,
+            "comparisons": [
+                {
+                    "candidate_report": "global.json",
+                    "candidate_run_dir": "global",
+                    "status": "pass",
+                    "checks": {
+                        "baseline_stage4_output_action": True,
+                        "baseline_scheduled_route_mode": True,
+                        "baseline_local_kv": True,
+                        "candidate_stage5_global_kv": True,
+                        "candidate_scheduled_route_mode": True,
+                        "candidate_global_kv_enabled": True,
+                        "global_kv_active": True,
+                        "quality_not_worse": True,
+                        "memory_budget_present": True,
+                        "global_budget_below_local_context": True,
+                    },
+                }
+            ],
+        },
     )
     global_ablation = _write_json(
         tmp_path / "global_ablation.json",
@@ -94,7 +116,23 @@ def test_risk_audit_passes_with_clear_evidence(tmp_path: Path) -> None:
         tmp_path / "parallel_compare.json",
         {
             "overall_status": "pass",
-            "comparisons": [{"status": "pass", "checks": {"parallel_branch_benefit_proxy": True}}],
+            "comparisons": [
+                {
+                    "candidate_run": "parallel",
+                    "status": "pass",
+                    "checks": {
+                        "baseline_stage5_global_kv": True,
+                        "baseline_scheduled_route_mode": True,
+                        "baseline_global_kv_enabled": True,
+                        "baseline_parallel_passing_disabled": True,
+                        "candidate_parallel_stage": True,
+                        "candidate_parallel_route_mode": True,
+                        "candidate_parallel_passing_enabled": True,
+                        "candidate_global_kv_enabled": True,
+                        "parallel_branch_benefit_proxy": True,
+                    },
+                }
+            ],
         },
     )
 
@@ -311,6 +349,109 @@ def test_risk_audit_rejects_boolean_numeric_evidence(tmp_path: Path) -> None:
     assert constant_position["evidence"]["position_norm_trajectory_count"] == 0
     assert location_structure["status"] == "missing"
     assert location_structure["evidence"]["location_distance_mean"] is None
+
+
+def test_risk_audit_requires_parallel_compare_stage_roles(tmp_path: Path) -> None:
+    passing = _write_json(
+        tmp_path / "parallel_passing.json",
+        {
+            "checks": {
+                "branch_count_bounded_by_beam": True,
+                "delta_cache_bounded_by_window": True,
+                "score_margin_measured": True,
+            },
+        },
+    )
+    compare = _write_json(
+        tmp_path / "parallel_compare.json",
+        {
+            "overall_status": "pass",
+            "comparisons": [
+                {
+                    "candidate_run": "not_parallel",
+                    "status": "pass",
+                    "checks": {
+                        "baseline_stage5_global_kv": True,
+                        "baseline_scheduled_route_mode": True,
+                        "baseline_global_kv_enabled": True,
+                        "baseline_parallel_passing_disabled": True,
+                        "candidate_parallel_stage": False,
+                        "candidate_parallel_route_mode": True,
+                        "candidate_parallel_passing_enabled": True,
+                        "candidate_global_kv_enabled": True,
+                        "parallel_branch_benefit_proxy": True,
+                    },
+                }
+            ],
+        },
+    )
+
+    output = make_risk_audit_report(
+        output_path=tmp_path / "risk.json",
+        parallel_passing_report_path=passing,
+        parallel_compare_report_path=compare,
+    )
+    report = json.loads(output.read_text(encoding="utf-8"))
+    unstable = _symptom(report, "parallel_passing_cost_explosion", "branch_credit_assignment_unstable")
+    candidate = unstable["evidence"]["parallel_compare_candidates"][0]
+
+    assert report["risks"]["parallel_passing_cost_explosion"]["status"] == "fail"
+    assert unstable["triggered"] is True
+    assert candidate["role_checks"]["candidate_parallel_stage"] is False
+    assert candidate["role_contract_passed"] is False
+    assert candidate["passes_parallel_compare_contract"] is False
+
+
+def test_risk_audit_requires_stage5_long_context_roles(tmp_path: Path) -> None:
+    retention = _write_json(
+        tmp_path / "retention.json",
+        {
+            "overall_status": "pass",
+            "metrics": {"global_attention_mass": 0.02},
+            "checks": {"global_attention_mass_nonzero": True},
+        },
+    )
+    long_context = _write_json(
+        tmp_path / "long_context_compare.json",
+        {
+            "overall_status": "pass",
+            "candidate_count": 1,
+            "comparisons": [
+                {
+                    "candidate_report": "wrong.json",
+                    "candidate_run_dir": "wrong",
+                    "status": "pass",
+                    "checks": {
+                        "baseline_stage4_output_action": True,
+                        "baseline_scheduled_route_mode": True,
+                        "baseline_local_kv": True,
+                        "candidate_stage5_global_kv": False,
+                        "candidate_scheduled_route_mode": True,
+                        "candidate_global_kv_enabled": True,
+                        "global_kv_active": True,
+                        "quality_not_worse": True,
+                        "memory_budget_present": True,
+                        "global_budget_below_local_context": True,
+                    },
+                }
+            ],
+        },
+    )
+
+    output = make_risk_audit_report(
+        output_path=tmp_path / "risk.json",
+        global_kv_retention_report_path=retention,
+        long_context_compare_report_path=long_context,
+    )
+    report = json.loads(output.read_text(encoding="utf-8"))
+    no_difference = _symptom(report, "global_kv_noise", "global_on_off_no_difference")
+    candidate = no_difference["evidence"]["comparison_candidates"][0]
+
+    assert report["risks"]["global_kv_noise"]["status"] == "fail"
+    assert no_difference["triggered"] is True
+    assert candidate["role_checks"]["candidate_stage5_global_kv"] is False
+    assert candidate["role_contract_passed"] is False
+    assert candidate["passes_stage5_long_context_contract"] is False
 
 
 def test_risk_audit_eval_config_resolves() -> None:
