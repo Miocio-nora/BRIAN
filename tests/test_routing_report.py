@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from brian_sphere_llm.eval.routing_report import make_routing_report
+from brian_sphere_llm.eval.routing_report import _overall_status, make_routing_report
 
 
 def test_routing_report_preserves_latest_route_examples_and_trajectories(tmp_path: Path) -> None:
@@ -200,6 +200,27 @@ def test_routing_report_warns_when_route_behavior_is_missing(tmp_path: Path) -> 
     assert report["checks"]["training_timing_metrics_present"] is False
     assert report["checks"]["inference_timing_metrics_present"] is False
     assert report["checks"]["route_loss_terms_present"] is False
+
+
+def test_routing_report_status_requires_explicit_boolean_true_checks() -> None:
+    checks = {
+        "train_log_present": True,
+        "eval_log_present": True,
+        "latest_eval_validation_loss_present": True,
+        "route_metrics_present": True,
+    }
+    assert _overall_status(checks) == "pass"
+    assert _overall_status(checks | {"route_metrics_present": "yes"}) == "warn"
+    assert (
+        _overall_status(
+            {
+                "train_log_present": "yes",
+                "eval_log_present": "yes",
+                "latest_eval_validation_loss_present": "yes",
+            }
+        )
+        == "unknown"
+    )
 
 
 def test_routing_report_rejects_boolean_route_metrics(tmp_path: Path) -> None:

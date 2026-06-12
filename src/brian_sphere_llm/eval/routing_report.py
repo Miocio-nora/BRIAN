@@ -175,9 +175,13 @@ def _report_checks(
 
 
 def _overall_status(checks: dict[str, bool]) -> str:
-    if all(checks.values()):
+    if all(value is True for value in checks.values()):
         return "pass"
-    required_logs = [checks["train_log_present"], checks["eval_log_present"], checks["latest_eval_validation_loss_present"]]
+    required_logs = [
+        checks.get("train_log_present") is True,
+        checks.get("eval_log_present") is True,
+        checks.get("latest_eval_validation_loss_present") is True,
+    ]
     if not all(required_logs):
         return "fail" if any(required_logs) else "unknown"
     return "warn"
