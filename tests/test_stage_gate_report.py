@@ -231,6 +231,10 @@ def _long_context_compare_report(*, checks: dict[str, bool] | None = None) -> di
         "candidate_stage5_global_kv": True,
         "candidate_scheduled_route_mode": True,
         "candidate_global_kv_enabled": True,
+        "baseline_task_family_coverage": True,
+        "baseline_difficulty_coverage": True,
+        "candidate_task_family_coverage": True,
+        "candidate_difficulty_coverage": True,
         "global_kv_active": True,
         "quality_metrics_present": True,
         "quality_not_worse": True,
@@ -569,6 +573,10 @@ def test_stage_gate_report_writes_json(tmp_path: Path) -> None:
                             "candidate_stage5_global_kv": True,
                             "candidate_scheduled_route_mode": True,
                             "candidate_global_kv_enabled": True,
+                            "baseline_task_family_coverage": True,
+                            "baseline_difficulty_coverage": True,
+                            "candidate_task_family_coverage": True,
+                            "candidate_difficulty_coverage": True,
                             "global_kv_active": True,
                             "quality_metrics_present": True,
                             "quality_not_worse": True,
@@ -1941,6 +1949,50 @@ def test_stage5_gate_requires_long_context_compare_stage_roles(tmp_path: Path) -
     compare["overall_status"] = "pass"
     compare["comparisons"][0]["status"] = "pass"
     compare["comparisons"][0]["checks"]["candidate_stage5_global_kv"] = False
+    compare_report = tmp_path / "long_context_compare.json"
+    compare_report.write_text(json.dumps(compare), encoding="utf-8")
+
+    report_path = make_stage_gate_report(
+        [stage4, stage5],
+        output_path=tmp_path / "gate.json",
+        long_context_compare_report_path=compare_report,
+    )
+    gate = json.loads(report_path.read_text(encoding="utf-8"))["gates"]["stage5_to_6"]
+
+    assert gate["status"] == "warn"
+    assert gate["checks"]["long_context_compare_passed"] is True
+    assert gate["checks"]["long_context_global_kv_benefit_proxy"] is False
+
+
+def test_stage5_gate_requires_long_context_compare_coverage_checks(tmp_path: Path) -> None:
+    stage4 = _write_run(
+        tmp_path,
+        "stage4",
+        stage="stage4_output_action",
+        val_loss=10.0,
+        train_row={
+            "average_route_steps": 2.0,
+            "first_exit_step_histogram": {"1": 1, "2": 2},
+            "top1_block_histogram": {"0": 1, "1": 1, "2": 1},
+        },
+    )
+    stage5 = _write_run(
+        tmp_path,
+        "global",
+        stage="stage5_global_kv",
+        val_loss=10.0,
+        train_row={
+            "global_attention_mass": 1.0,
+            "global_read_gate_mean": 0.01,
+            "global_cache_slots_mean": 2.0,
+            "top1_block_histogram": {"0": 1, "1": 1, "2": 1},
+        },
+        global_kv_retention_report=_global_kv_retention_report(),
+    )
+    compare = _long_context_compare_report()
+    compare["overall_status"] = "pass"
+    compare["comparisons"][0]["status"] = "pass"
+    compare["comparisons"][0]["checks"]["candidate_task_family_coverage"] = False
     compare_report = tmp_path / "long_context_compare.json"
     compare_report.write_text(json.dumps(compare), encoding="utf-8")
 

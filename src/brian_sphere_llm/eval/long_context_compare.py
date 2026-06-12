@@ -73,6 +73,8 @@ def _compare_candidate(
     exact_delta = _delta(candidate_exact, baseline_exact)
     candidate_memory = candidate.get("memory_budget", {})
     baseline_memory = baseline.get("memory_budget", {})
+    baseline_coverage = baseline.get("coverage", {})
+    candidate_coverage = candidate.get("coverage", {})
     baseline_global_enabled = _bool_value(baseline_memory.get("global_kv_enabled"))
     candidate_global_enabled = _bool_value(candidate_memory.get("global_kv_enabled"))
     candidate_capacity_ratio = _num(candidate_memory.get("estimated_global_cache_capacity_to_local_context_ratio"))
@@ -94,6 +96,10 @@ def _compare_candidate(
     quality_not_worse = quality_metrics_present and teacher_delta >= -quality_tolerance and exact_delta >= -quality_tolerance
     memory_budget_present = candidate_global_kv and candidate_capacity_ratio is not None
     global_budget_below_local_context = memory_budget_present and candidate_capacity_ratio < 1.0
+    baseline_task_family_coverage = _coverage_passed(baseline_coverage, "task_family_coverage_passed")
+    baseline_difficulty_coverage = _coverage_passed(baseline_coverage, "difficulty_coverage_passed")
+    candidate_task_family_coverage = _coverage_passed(candidate_coverage, "task_family_coverage_passed")
+    candidate_difficulty_coverage = _coverage_passed(candidate_coverage, "difficulty_coverage_passed")
     checks = {
         "baseline_stage4_output_action": baseline_stage4,
         "baseline_scheduled_route_mode": baseline_scheduled,
@@ -101,6 +107,10 @@ def _compare_candidate(
         "candidate_stage5_global_kv": candidate_stage5,
         "candidate_scheduled_route_mode": candidate_scheduled,
         "candidate_global_kv_enabled": candidate_global_kv,
+        "baseline_task_family_coverage": baseline_task_family_coverage,
+        "baseline_difficulty_coverage": baseline_difficulty_coverage,
+        "candidate_task_family_coverage": candidate_task_family_coverage,
+        "candidate_difficulty_coverage": candidate_difficulty_coverage,
         "global_kv_active": global_active,
         "quality_metrics_present": quality_metrics_present,
         "quality_not_worse": quality_not_worse,
@@ -136,6 +146,10 @@ def _compare_candidate(
         "memory_budget": {
             "baseline": _memory_summary(baseline_memory),
             "candidate": _memory_summary(candidate_memory),
+        },
+        "coverage": {
+            "baseline": _coverage_summary(baseline_coverage),
+            "candidate": _coverage_summary(candidate_coverage),
         },
         "checks": checks,
         "status": _status(checks),
@@ -193,6 +207,28 @@ def _memory_summary(memory_budget: Any) -> dict[str, Any]:
         "estimated_global_cache_mean_to_local_context_ratio",
     ]
     return {key: memory_budget.get(key) for key in keys}
+
+
+def _coverage_passed(coverage: Any, key: str) -> bool:
+    if not isinstance(coverage, dict):
+        return False
+    return coverage.get(key) is True
+
+
+def _coverage_summary(coverage: Any) -> dict[str, Any]:
+    if not isinstance(coverage, dict):
+        return {}
+    keys = [
+        "expected_task_families",
+        "observed_task_families",
+        "missing_task_families",
+        "task_family_coverage_passed",
+        "expected_difficulties",
+        "observed_difficulties",
+        "missing_difficulties",
+        "difficulty_coverage_passed",
+    ]
+    return {key: coverage.get(key) for key in keys}
 
 
 def _read_json(path: Path) -> dict[str, Any]:

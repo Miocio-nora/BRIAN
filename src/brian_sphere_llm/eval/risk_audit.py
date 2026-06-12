@@ -44,6 +44,13 @@ LONG_CONTEXT_STAGE5_ROLE_CHECKS = [
     "candidate_global_kv_enabled",
 ]
 
+LONG_CONTEXT_COVERAGE_CHECKS = [
+    "baseline_task_family_coverage",
+    "baseline_difficulty_coverage",
+    "candidate_task_family_coverage",
+    "candidate_difficulty_coverage",
+]
+
 
 MITIGATIONS = {
     "router_collapse": [
@@ -575,9 +582,12 @@ def _long_context_compare_candidates(comparisons: list[Any]) -> list[dict[str, A
         checks = _dict(row.get("checks"))
         role_checks = _selected_checks(checks, LONG_CONTEXT_STAGE5_ROLE_CHECKS)
         role_contract_passed = all(value is True for value in role_checks.values())
+        coverage_checks = _selected_checks(checks, LONG_CONTEXT_COVERAGE_CHECKS)
+        coverage_contract_passed = all(value is True for value in coverage_checks.values())
         stage5_contract = (
             row.get("status") == "pass"
             and role_contract_passed
+            and coverage_contract_passed
             and checks.get("global_kv_active") is True
             and checks.get("quality_not_worse") is True
             and checks.get("memory_budget_present") is True
@@ -590,6 +600,8 @@ def _long_context_compare_candidates(comparisons: list[Any]) -> list[dict[str, A
                 "status": row.get("status"),
                 "role_checks": role_checks,
                 "role_contract_passed": role_contract_passed,
+                "coverage_checks": coverage_checks,
+                "coverage_contract_passed": coverage_contract_passed,
                 "global_kv_active": checks.get("global_kv_active"),
                 "quality_not_worse": checks.get("quality_not_worse"),
                 "memory_budget_present": checks.get("memory_budget_present"),

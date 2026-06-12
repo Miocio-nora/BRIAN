@@ -20,9 +20,12 @@ def _write_long_context_report(
     sink_attention_mass: float | None = None,
     window_attention_mass: float | None = None,
     global_kv_enabled: bool | None = None,
+    coverage: dict | None = None,
 ) -> Path:
     if global_kv_enabled is None:
         global_kv_enabled = attention_mass is not None
+    if coverage is None:
+        coverage = _passing_coverage()
     path.write_text(
         json.dumps(
             {
@@ -35,6 +38,7 @@ def _write_long_context_report(
                     "teacher_forced_token_accuracy": teacher_accuracy,
                     "truncation_rate": 0.5,
                 },
+                "coverage": coverage,
                 "global_kv": {
                     "global_attention_mass": attention_mass,
                     "global_sink_attention_mass": sink_attention_mass,
@@ -59,6 +63,19 @@ def _write_long_context_report(
         encoding="utf-8",
     )
     return path
+
+
+def _passing_coverage() -> dict:
+    return {
+        "expected_task_families": ["needle_retrieval", "two_hop_tracing"],
+        "observed_task_families": ["needle_retrieval", "two_hop_tracing"],
+        "missing_task_families": [],
+        "task_family_coverage_passed": True,
+        "expected_difficulties": ["near", "middle", "far"],
+        "observed_difficulties": ["near", "middle", "far"],
+        "missing_difficulties": [],
+        "difficulty_coverage_passed": True,
+    }
 
 
 def test_long_context_compare_passes_active_global_kv_not_worse(tmp_path: Path) -> None:
@@ -95,6 +112,10 @@ def test_long_context_compare_passes_active_global_kv_not_worse(tmp_path: Path) 
     assert row["checks"]["candidate_stage5_global_kv"] is True
     assert row["checks"]["candidate_scheduled_route_mode"] is True
     assert row["checks"]["candidate_global_kv_enabled"] is True
+    assert row["checks"]["baseline_task_family_coverage"] is True
+    assert row["checks"]["baseline_difficulty_coverage"] is True
+    assert row["checks"]["candidate_task_family_coverage"] is True
+    assert row["checks"]["candidate_difficulty_coverage"] is True
     assert row["checks"]["global_kv_active"] is True
     assert row["checks"]["quality_metrics_present"] is True
     assert row["checks"]["quality_not_worse"] is True
@@ -103,6 +124,8 @@ def test_long_context_compare_passes_active_global_kv_not_worse(tmp_path: Path) 
     assert row["global_kv"]["global_sink_attention_mass"] == 0.03
     assert row["global_kv"]["global_window_attention_mass"] == 0.07
     assert row["memory_budget"]["candidate"]["estimated_global_cache_capacity_bytes_fp16"] == 128.0
+    assert row["coverage"]["candidate"]["task_family_coverage_passed"] is True
+    assert row["coverage"]["candidate"]["difficulty_coverage_passed"] is True
     assert row["teacher_forced_token_accuracy_delta"] == pytest.approx(0.05)
 
 
@@ -174,6 +197,53 @@ def test_long_context_compare_requires_stage4_local_to_stage5_global_roles(tmp_p
     assert row["checks"]["candidate_global_kv_enabled"] is False
     assert row["checks"]["global_kv_active"] is True
     assert row["checks"]["memory_budget_present"] is False
+
+
+def test_long_context_compare_requires_task_family_and_difficulty_coverage(tmp_path: Path) -> None:
+    baseline = _write_long_context_report(
+        tmp_path / "local.json",
+        run_dir="runs/local",
+        stage="stage4_output_action",
+        exact_match=0.25,
+        teacher_accuracy=0.50,
+    )
+    incomplete_coverage = _passing_coverage() | {
+        "observed_task_families": ["needle_retrieval"],
+        "missing_task_families": ["two_hop_tracing"],
+        "task_family_coverage_passed": False,
+        "observed_difficulties": ["near", "middle"],
+        "missing_difficulties": ["far"],
+        "difficulty_coverage_passed": False,
+    }
+    candidate = _write_long_context_report(
+        tmp_path / "global.json",
+        run_dir="runs/global",
+        stage="stage5_global_kv",
+        exact_match=0.25,
+        teacher_accuracy=0.55,
+        attention_mass=0.1,
+        sink_attention_mass=0.03,
+        window_attention_mass=0.07,
+        read_gate=0.2,
+        cache_slots=3.0,
+        coverage=incomplete_coverage,
+    )
+
+    output = make_long_context_comparison_report(baseline, [candidate], output_path=tmp_path / "compare.json")
+    report = json.loads(output.read_text(encoding="utf-8"))
+    row = report["comparisons"][0]
+
+    assert report["overall_status"] == "warn"
+    assert row["status"] == "warn"
+    assert row["checks"]["global_kv_active"] is True
+    assert row["checks"]["quality_not_worse"] is True
+    assert row["checks"]["global_budget_below_local_context"] is True
+    assert row["checks"]["baseline_task_family_coverage"] is True
+    assert row["checks"]["baseline_difficulty_coverage"] is True
+    assert row["checks"]["candidate_task_family_coverage"] is False
+    assert row["checks"]["candidate_difficulty_coverage"] is False
+    assert row["coverage"]["candidate"]["missing_task_families"] == ["two_hop_tracing"]
+    assert row["coverage"]["candidate"]["missing_difficulties"] == ["far"]
 
 
 def test_long_context_compare_rejects_boolean_metrics(tmp_path: Path) -> None:
