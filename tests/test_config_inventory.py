@@ -295,6 +295,13 @@ def test_first_milestone_train_configs_match_guide_sequence() -> None:
     assert "configs/train/stage3_scheduled_free_routing.yaml" in guidance
     assert "--run <stage3_scheduled_free_routing_run>" in guidance
 
+    readme = Path("README.md").read_text(encoding="utf-8")
+    assert "<stage2_sequential_router_imitation_run>" in readme
+    assert "<stage3_pseudo_skip_recur_run>" in readme
+    assert "<stage3_scheduled_free_routing_run>" in readme
+    assert "<stage2_run>" not in readme
+    assert "<stage3_run>" not in readme
+
 
 def test_scaled_train_configs_keep_b200_memory_controls() -> None:
     r350_configs = [

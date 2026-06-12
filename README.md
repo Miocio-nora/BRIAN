@@ -156,7 +156,13 @@ Include Stage 4 cost-control, OUT-by-difficulty, and hard-exit comparison eviden
 ```bash
 python scripts/eval.py \
   --config configs/eval/stage_gate_eval.yaml \
-  --runs <stage0_run> <stage1_run> <stage2_run> <stage3_run> <stage4_run> \
+  --runs \
+    <stage0_run> \
+    <stage1_run> \
+    <stage2_sequential_router_imitation_run> \
+    <stage3_pseudo_skip_recur_run> \
+    <stage3_scheduled_free_routing_run> \
+    <stage4_run> \
   --cost-control-report <cost_control_report.json> \
   --out-by-difficulty-report <out_by_difficulty_report.json> \
   --hard-exit-compare-report <hard_exit_compare.json>
@@ -288,7 +294,14 @@ The comparison report checks that Global KV is active, the estimated Global KV c
 ```bash
 python scripts/eval.py \
   --config configs/eval/stage_gate_eval.yaml \
-  --runs <stage0_run> <stage1_run> <stage2_run> <stage3_run> <stage4_run> <stage5_run> \
+  --runs \
+    <stage0_run> \
+    <stage1_run> \
+    <stage2_sequential_router_imitation_run> \
+    <stage3_pseudo_skip_recur_run> \
+    <stage3_scheduled_free_routing_run> \
+    <stage4_run> \
+    <stage5_run> \
   --global-kv-retention-report <stage5_global_kv_run>/global_kv_retention_report.json \
   --long-context-compare-report reports/long_context_compare.json
 ```
@@ -467,7 +480,15 @@ The safety report checks beam size, branch cost, branch count pruning, score-mar
 ```bash
 python scripts/eval.py \
   --config configs/eval/stage_gate_eval.yaml \
-  --runs <stage0_run> <stage1_run> <stage2_run> <stage3_run> <stage4_run> <stage5_run> <stage6_run> \
+  --runs \
+    <stage0_run> \
+    <stage1_run> \
+    <stage2_sequential_router_imitation_run> \
+    <stage3_pseudo_skip_recur_run> \
+    <stage3_scheduled_free_routing_run> \
+    <stage4_run> \
+    <stage5_run> \
+    <stage6_run> \
   --parallel-passing-report <stage6_parallel_run>/parallel_passing_report.json \
   --parallel-compare-report reports/parallel_compare.json
 ```
