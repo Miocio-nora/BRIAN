@@ -560,7 +560,7 @@ def _long_context_benefit_candidates(report: dict[str, Any]) -> list[dict[str, A
 def _global_kv_ablation_has_memory_quality_candidate(report: dict[str, Any]) -> bool | None:
     if not report:
         return None
-    if report.get("overall_status") != "pass":
+    if _report_passed(report) is not True:
         return False
     candidates = _global_kv_ablation_benefit_candidates(report)
     if not candidates:
@@ -573,7 +573,7 @@ def _global_kv_ablation_benefit_candidates(report: dict[str, Any]) -> list[dict[
     rows = comparisons.get("local_vs_global", []) if isinstance(comparisons, dict) else []
     if not isinstance(rows, list):
         return []
-    report_passed = report.get("overall_status") == "pass"
+    report_passed = _report_passed(report)
     candidates = []
     for row in rows:
         if not isinstance(row, dict):
@@ -582,7 +582,7 @@ def _global_kv_ablation_benefit_candidates(report: dict[str, Any]) -> list[dict[
         exact_delta = _num(row.get("exact_match_delta_vs_local"))
         teacher_delta = _num(row.get("teacher_forced_token_accuracy_delta_vs_local"))
         passes = (
-            report_passed
+            report_passed is True
             and capacity_ratio is not None
             and capacity_ratio < 1.0
             and exact_delta is not None
@@ -779,7 +779,7 @@ def _global_kv_ablation_memory_candidates(
     rows = comparisons.get("local_vs_global", []) if isinstance(comparisons, dict) else []
     if not isinstance(rows, list):
         return []
-    report_passed = report.get("overall_status") == "pass"
+    report_passed = _report_passed(report)
     candidates = []
     for row in rows:
         if not isinstance(row, dict):
@@ -792,7 +792,7 @@ def _global_kv_ablation_memory_candidates(
                 "run_dir": row.get("run_dir"),
                 "report_passed": report_passed,
                 "global_cache_capacity_ratio": capacity_ratio,
-                "passes_memory_control_proxy": report_passed
+                "passes_memory_control_proxy": report_passed is True
                 and capacity_ratio is not None
                 and capacity_ratio <= max_global_kv_cache_capacity_ratio,
             }
