@@ -253,6 +253,43 @@ def test_train_configs_resolve_stage_model_and_data_refs() -> None:
     assert errors == []
 
 
+def test_first_milestone_train_configs_match_guide_sequence() -> None:
+    expected = {
+        "stage0_baseline.yaml": {
+            "stage": "stage0_baseline",
+            "mode": None,
+            "pseudo_policy": None,
+        },
+        "stage1_fixed_route.yaml": {
+            "stage": "stage1_fixed_route",
+            "mode": "fixed",
+            "pseudo_policy": "sequential",
+        },
+        "stage2_router_imitation.yaml": {
+            "stage": "stage2_router_imitation",
+            "mode": "pseudo",
+            "pseudo_policy": "sequential",
+        },
+        "stage3_pseudo_skip_recur.yaml": {
+            "stage": "stage3_pseudo_skip_recur",
+            "mode": "pseudo",
+            "pseudo_policy": "mixed_skip_recur",
+        },
+        "stage3_scheduled_free_routing.yaml": {
+            "stage": "stage3_scheduled_free_routing",
+            "mode": "scheduled",
+            "pseudo_policy": "mixed_skip_recur",
+        },
+    }
+
+    for filename, values in expected.items():
+        config = load_config(CONFIG_ROOT / "train" / filename)
+        routing = config.get("routing", {})
+        assert config["stage"] == values["stage"]
+        assert routing.get("mode") == values["mode"]
+        assert routing.get("pseudo_policy") == values["pseudo_policy"]
+
+
 def test_scaled_train_configs_keep_b200_memory_controls() -> None:
     r350_configs = [
         "stage0_r350_baseline.yaml",
