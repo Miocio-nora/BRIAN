@@ -1021,7 +1021,7 @@ def _model_stats_gate_checks(summary: dict[str, Any] | None) -> dict[str, bool]:
     checks = summary.get("model_stats_checks", {}) if summary else {}
     return {
         "model_stats_present": bool(summary and summary.get("model_stats_present")),
-        "model_stats_valid": isinstance(checks, dict) and all(checks.values()),
+        "model_stats_valid": _checks_all_true(checks),
     }
 
 
@@ -1176,7 +1176,7 @@ def _data_manifest_gate_checks(summary: dict[str, Any] | None) -> dict[str, bool
     checks = summary.get("data_manifest_ref_checks", {}) if summary else {}
     return {
         "data_manifest_ref_present": bool(summary and summary.get("data_manifest_ref_present")),
-        "data_manifest_ref_valid": isinstance(checks, dict) and all(checks.values()),
+        "data_manifest_ref_valid": _checks_all_true(checks),
     }
 
 

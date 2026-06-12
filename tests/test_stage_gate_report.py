@@ -5,7 +5,12 @@ import yaml
 import pytest
 
 from brian_sphere_llm.eval.difficulty import difficulty_step_correlation
-from brian_sphere_llm.eval.stage_gate_report import make_stage_gate_report, pearson_correlation
+from brian_sphere_llm.eval.stage_gate_report import (
+    _data_manifest_gate_checks,
+    _model_stats_gate_checks,
+    make_stage_gate_report,
+    pearson_correlation,
+)
 
 
 def _write_run(
@@ -1079,6 +1084,24 @@ def test_stage0_gate_requires_valid_model_stats(tmp_path: Path) -> None:
     assert gate["checks"]["model_stats_valid"] is False
     assert gate["model_stats_checks"]["model_name_present"] is True
     assert gate["model_stats_checks"]["parameter_count_positive_integer"] is False
+
+
+def test_stage0_gate_requires_boolean_model_and_manifest_checks() -> None:
+    summary = {
+        "model_stats_present": True,
+        "model_stats_checks": {
+            "model_name_present": "yes",
+            "parameter_count_positive_integer": 1,
+        },
+        "data_manifest_ref_present": True,
+        "data_manifest_ref_checks": {
+            "path_present": "yes",
+            "path_exists": 1,
+        },
+    }
+
+    assert _model_stats_gate_checks(summary)["model_stats_valid"] is False
+    assert _data_manifest_gate_checks(summary)["data_manifest_ref_valid"] is False
 
 
 def test_stage0_gate_requires_valid_validation_report(tmp_path: Path) -> None:
