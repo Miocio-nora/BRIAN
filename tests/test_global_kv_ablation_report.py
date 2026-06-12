@@ -395,6 +395,37 @@ def test_global_kv_ablation_report_warns_for_missing_long_context_status(tmp_pat
     assert report["entries"][5]["long_context"]["overall_status"] is None
 
 
+def test_global_kv_ablation_report_warns_for_failed_long_context_checks(tmp_path: Path) -> None:
+    runs = _write_complete_global_kv_runs(tmp_path)
+    long_context_reports = [
+        _write_long_context(
+            tmp_path,
+            run,
+            index,
+            exact=0.5 + index * 0.01,
+            teacher=0.6 + index * 0.01,
+            checks={"teacher_forced_token_accuracy_present": False} if index == 5 else None,
+        )
+        for index, run in enumerate(runs)
+    ]
+
+    output = make_global_kv_ablation_report(
+        "configs/experiments/tiny_global_kv.yaml",
+        runs,
+        output_path=tmp_path / "global_kv_ablation.json",
+        long_context_report_paths=long_context_reports,
+    )
+    report = json.loads(output.read_text(encoding="utf-8"))
+
+    assert report["overall_status"] == "warn"
+    assert report["checks"]["long_context_reports_present"] is True
+    assert report["checks"]["long_context_reports_passed"] is False
+    assert report["checks"]["long_context_coverage_passed"] is False
+    assert report["checks"]["long_context_quality_metrics_present"] is False
+    assert report["entries"][5]["long_context"]["overall_status"] == "pass"
+    assert report["entries"][5]["long_context"]["checks"]["teacher_forced_token_accuracy_present"] is False
+
+
 def test_global_kv_ablation_report_warns_without_window_memory_curve(tmp_path: Path) -> None:
     runs = _write_complete_global_kv_runs(tmp_path)
     long_context_reports = [
@@ -695,6 +726,8 @@ def _write_long_context(
     coverage: dict | None = None,
     omit_memory_ratios: bool = False,
     overall_status: str | None = "pass",
+    checks: dict | None = None,
+    include_checks: bool = True,
 ) -> Path:
     path = tmp_path / f"long_context_{index}.json"
     config = yaml.safe_load((run_dir / "config_resolved.yaml").read_text(encoding="utf-8"))
@@ -728,6 +761,20 @@ def _write_long_context(
     }
     if overall_status is not None:
         report["overall_status"] = overall_status
+    if include_checks:
+        report_checks = {
+            "samples_present": True,
+            "exact_match_accuracy_present": True,
+            "teacher_forced_token_accuracy_present": True,
+            "truncation_rate_present": True,
+            "task_family_coverage_passed": True,
+            "difficulty_coverage_passed": True,
+            "local_memory_budget_present": True,
+            "global_memory_budget_present_or_not_applicable": True,
+        }
+        if checks is not None:
+            report_checks |= checks
+        report["checks"] = report_checks
     path.write_text(json.dumps(report), encoding="utf-8")
     return path
 

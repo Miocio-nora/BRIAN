@@ -427,6 +427,7 @@ def _long_context_summary(report: dict[str, Any]) -> dict[str, Any]:
             "task_family_coverage_passed": None,
             "difficulty_coverage_passed": None,
             "coverage": {},
+            "checks": {},
         }
     overall = report.get("overall", {}) if isinstance(report.get("overall"), dict) else {}
     memory = report.get("memory_budget", {}) if isinstance(report.get("memory_budget"), dict) else {}
@@ -447,6 +448,7 @@ def _long_context_summary(report: dict[str, Any]) -> dict[str, Any]:
         "task_family_coverage_passed": coverage.get("task_family_coverage_passed") is True,
         "difficulty_coverage_passed": coverage.get("difficulty_coverage_passed") is True,
         "coverage": _coverage_summary(coverage),
+        "checks": report.get("checks", {}) if isinstance(report.get("checks"), dict) else {},
     }
 
 
@@ -469,8 +471,14 @@ def _long_context_matches_run(row: dict[str, Any]) -> bool:
 
 
 def _long_context_report_passed(row: dict[str, Any]) -> bool:
-    status = row["long_context"].get("overall_status")
-    return status == "pass"
+    long_context = row["long_context"]
+    checks = long_context.get("checks")
+    return (
+        long_context.get("overall_status") == "pass"
+        and isinstance(checks, dict)
+        and bool(checks)
+        and all(value is True for value in checks.values())
+    )
 
 
 def _long_context_coverage_passed(row: dict[str, Any]) -> bool:

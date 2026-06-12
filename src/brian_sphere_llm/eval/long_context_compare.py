@@ -86,8 +86,8 @@ def _compare_candidate(
     candidate_global_kv = candidate_global_enabled is True
     baseline_report_status = baseline.get("overall_status")
     candidate_report_status = candidate.get("overall_status")
-    baseline_report_passed = _report_passed(baseline_report_status)
-    candidate_report_passed = _report_passed(candidate_report_status)
+    baseline_report_passed = _report_passed(baseline)
+    candidate_report_passed = _report_passed(candidate)
     global_active = (
         attention_mass is not None
         and attention_mass >= min_global_attention_mass
@@ -223,8 +223,11 @@ def _coverage_passed(coverage: Any, key: str) -> bool:
     return coverage.get(key) is True
 
 
-def _report_passed(status: Any) -> bool:
-    return status == "pass"
+def _report_passed(report: Any) -> bool:
+    if not isinstance(report, dict) or report.get("overall_status") != "pass":
+        return False
+    checks = report.get("checks")
+    return isinstance(checks, dict) and bool(checks) and all(value is True for value in checks.values())
 
 
 def _coverage_summary(coverage: Any) -> dict[str, Any]:

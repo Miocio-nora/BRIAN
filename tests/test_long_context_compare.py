@@ -22,6 +22,8 @@ def _write_long_context_report(
     global_kv_enabled: bool | None = None,
     coverage: dict | None = None,
     report_status: str | None = "pass",
+    report_checks: dict | None = None,
+    include_checks: bool = True,
 ) -> Path:
     if global_kv_enabled is None:
         global_kv_enabled = attention_mass is not None
@@ -60,6 +62,20 @@ def _write_long_context_report(
     }
     if report_status is not None:
         report["overall_status"] = report_status
+    if include_checks:
+        checks = {
+            "samples_present": True,
+            "exact_match_accuracy_present": True,
+            "teacher_forced_token_accuracy_present": True,
+            "truncation_rate_present": True,
+            "task_family_coverage_passed": True,
+            "difficulty_coverage_passed": True,
+            "local_memory_budget_present": True,
+            "global_memory_budget_present_or_not_applicable": True,
+        }
+        if report_checks is not None:
+            checks |= report_checks
+        report["checks"] = checks
     path.write_text(
         json.dumps(report),
         encoding="utf-8",
@@ -236,6 +252,43 @@ def test_long_context_compare_requires_explicit_input_report_status(tmp_path: Pa
     assert row["candidate_report_status"] == "pass"
     assert row["checks"]["baseline_report_passed"] is False
     assert row["checks"]["candidate_report_passed"] is True
+    assert row["checks"]["global_kv_active"] is True
+    assert row["checks"]["quality_not_worse"] is True
+
+
+def test_long_context_compare_requires_passing_input_report_checks(tmp_path: Path) -> None:
+    baseline = _write_long_context_report(
+        tmp_path / "local.json",
+        run_dir="runs/local",
+        stage="stage4_output_action",
+        exact_match=0.25,
+        teacher_accuracy=0.50,
+        report_checks={"teacher_forced_token_accuracy_present": False},
+    )
+    candidate = _write_long_context_report(
+        tmp_path / "global.json",
+        run_dir="runs/global",
+        stage="stage5_global_kv",
+        exact_match=0.25,
+        teacher_accuracy=0.55,
+        attention_mass=0.1,
+        sink_attention_mass=0.03,
+        window_attention_mass=0.07,
+        read_gate=0.2,
+        cache_slots=3.0,
+        include_checks=False,
+    )
+
+    output = make_long_context_comparison_report(baseline, [candidate], output_path=tmp_path / "compare.json")
+    report = json.loads(output.read_text(encoding="utf-8"))
+    row = report["comparisons"][0]
+
+    assert report["overall_status"] == "warn"
+    assert row["status"] == "warn"
+    assert row["baseline_report_status"] == "pass"
+    assert row["candidate_report_status"] == "pass"
+    assert row["checks"]["baseline_report_passed"] is False
+    assert row["checks"]["candidate_report_passed"] is False
     assert row["checks"]["global_kv_active"] is True
     assert row["checks"]["quality_not_worse"] is True
 
