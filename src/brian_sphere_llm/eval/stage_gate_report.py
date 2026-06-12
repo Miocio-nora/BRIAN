@@ -624,6 +624,8 @@ def _gate_stage5(
         loss_ratio = stage5["validation_loss"] / max(1e-9, stage4_reference["validation_loss"])
     comparisons = long_context_compare_report.get("comparisons", []) if long_context_compare_report else []
     long_context_key_checks = [
+        "baseline_report_passed",
+        "candidate_report_passed",
         "baseline_stage4_output_action",
         "baseline_scheduled_route_mode",
         "baseline_local_kv",
