@@ -395,11 +395,11 @@ def _finite_number(value: Any) -> bool:
 
 def _package_status(checks: dict[str, bool], entries: list[dict[str, Any]]) -> str:
     entry_statuses = [str(entry.get("status")) for entry in entries]
-    if checks and all(checks.values()) and all(status == "pass" for status in entry_statuses):
+    if checks and all(value is True for value in checks.values()) and all(status == "pass" for status in entry_statuses):
         return "pass"
     if any(status == "fail" for status in entry_statuses):
         return "fail"
-    if any(not passed for passed in checks.values()):
+    if any(value is not True for value in checks.values()):
         return "warn"
     return "unknown"
 

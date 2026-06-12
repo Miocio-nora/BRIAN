@@ -1074,7 +1074,7 @@ def _baseline_data_config_consistent(baseline: dict[str, Any] | None, entries: l
 
 
 def _overall_status(checks: dict[str, bool], requirements: list[dict[str, Any]]) -> str:
-    if not checks.get("profile_known", False):
+    if checks.get("profile_known") is not True:
         return "fail"
     if any(requirement["status"] == "fail" for requirement in requirements):
         return "fail"
@@ -1106,9 +1106,9 @@ def _overall_status(checks: dict[str, bool], requirements: list[dict[str, Any]])
     ]:
         if checks.get(critical_check) is False:
             return "fail"
-    if checks and all(checks.values()):
+    if checks and all(value is True for value in checks.values()):
         return "pass"
-    if any(checks.values()):
+    if any(value is True for value in checks.values()):
         return "warn"
     return "fail"
 

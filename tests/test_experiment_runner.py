@@ -3,7 +3,12 @@ from pathlib import Path
 
 import yaml
 
-from brian_sphere_llm.experiments.runner import build_experiment_plan, make_experiment_package_report, run_experiment
+from brian_sphere_llm.experiments.runner import (
+    _package_status,
+    build_experiment_plan,
+    make_experiment_package_report,
+    run_experiment,
+)
 from brian_sphere_llm.train.stage_runner import train_mode_for_stage
 from brian_sphere_llm.utils.config import load_config
 
@@ -21,6 +26,13 @@ def test_build_experiment_plan_resolves_repo_paths() -> None:
     assert plan.entries[8].train_config.name == "stage3_position_no_location_loss_tiny_debug.yaml"
     assert plan.entries[9].train_config.name == "stage3_position_direct_add_tiny_debug.yaml"
     assert plan.entries[10].train_config.name == "stage3_position_separate_state_tiny_debug.yaml"
+
+
+def test_experiment_package_status_requires_boolean_checks() -> None:
+    entries = [{"status": "pass"}]
+
+    assert _package_status({"all_runs_present": True}, entries) == "pass"
+    assert _package_status({"all_runs_present": "yes"}, entries) == "warn"
 
 
 def test_r125_package_experiment_manifest_resolves_repo_paths() -> None:
