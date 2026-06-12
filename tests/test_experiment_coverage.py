@@ -38,12 +38,16 @@ def test_r125_formal_package_coverage_passes(tmp_path: Path) -> None:
         "A8",
         "A9",
     ]
+    assert _requirement(report, "A2")["checks"]["routing_flags_match"] is True
+    assert _requirement(report, "A3")["checks"]["routing_flags_match"] is True
     assert _requirement(report, "A5")["checks"]["model_flags_match"] is True
     assert _requirement(report, "A7")["checks"]["loss_weights_match"] is True
     assert _requirement(report, "A8")["checks"]["model_flags_match"] is True
     assert _requirement(report, "A9")["checks"]["model_flags_match"] is True
     assert _entry(report, "A0")["model"]["estimated_parameter_count_in_plan_range"] is True
     assert _entry(report, "A1")["model"]["estimated_parameter_count_in_plan_range"] is True
+    assert _entry(report, "A2")["routing"]["pseudo_policy"] == "sequential"
+    assert _entry(report, "A3")["routing"]["pseudo_policy"] == "mixed_skip_recur"
 
 
 def test_r350_scaling_package_coverage_passes(tmp_path: Path) -> None:
@@ -421,6 +425,43 @@ def test_experiment_coverage_fails_missing_required_entry(tmp_path: Path) -> Non
 
     assert report["overall_status"] == "fail"
     assert _requirement(report, "A7")["checks"]["entry_present"] is False
+
+
+def test_package_a_coverage_requires_a2_sequential_pseudo_policy(tmp_path: Path) -> None:
+    manifest = tmp_path / "wrong_a2_policy.yaml"
+    source = load_config("configs/experiments/route_core_r125_package.yaml")
+    mixed_a2_train = tmp_path / "mixed_a2_train.yaml"
+    mixed_a2_train.write_text(
+        yaml.safe_dump(
+            {
+                "extends": str(Path("configs/train/stage2_sequential_router_imitation.yaml").resolve()),
+                "routing": {
+                    "mode": "pseudo",
+                    "pseudo_policy": "mixed_skip_recur",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    for row in source["ablations"]:
+        if row["id"] == "A2":
+            row["train_config"] = str(mixed_a2_train)
+    manifest.write_text(yaml.safe_dump(source), encoding="utf-8")
+
+    output = make_experiment_coverage_report(
+        manifest,
+        output_path=tmp_path / "coverage.json",
+        profile="package_a",
+    )
+    report = json.loads(output.read_text(encoding="utf-8"))
+    requirement = _requirement(report, "A2")
+
+    assert report["overall_status"] == "fail"
+    assert requirement["checks"]["entry_present"] is True
+    assert requirement["checks"]["stage_matches"] is True
+    assert requirement["checks"]["mode_matches"] is True
+    assert requirement["checks"]["routing_flags_match"] is False
+    assert _entry(report, "A2")["routing"]["pseudo_policy"] == "mixed_skip_recur"
 
 
 def test_experiment_coverage_rejects_boolean_numeric_model_flags(tmp_path: Path) -> None:

@@ -126,8 +126,20 @@ def _requirements(profile: str, plan: ExperimentPlan, entries: list[dict[str, An
             [
                 _req("A0", "fixed Transformer baseline", stage="stage0_baseline", mode="baseline"),
                 _req("A1", "fixed route wrapper", stage="stage1_fixed_route", mode="fixed"),
-                _req("A2", "sequential router imitation", stage="stage2_router_imitation", mode="pseudo"),
-                _req("A3", "skip/recur router imitation", stage="stage3_pseudo_skip_recur", mode="pseudo"),
+                _req(
+                    "A2",
+                    "sequential router imitation",
+                    stage="stage2_router_imitation",
+                    mode="pseudo",
+                    routing_flags={"pseudo_policy": "sequential"},
+                ),
+                _req(
+                    "A3",
+                    "skip/recur router imitation",
+                    stage="stage3_pseudo_skip_recur",
+                    mode="pseudo",
+                    routing_flags={"pseudo_policy": "mixed_skip_recur"},
+                ),
                 _req("A4", "free router + block-position", stage="stage3_scheduled_free_routing", mode="scheduled"),
                 _req(
                     "A5",
@@ -368,6 +380,7 @@ def _req(
     *,
     stage: str | None = None,
     mode: str | None = None,
+    routing_flags: dict[str, Any] | None = None,
     model_flags: dict[str, Any] | None = None,
     data_flags: dict[str, Any] | None = None,
     loss_weights: dict[str, float] | None = None,
@@ -378,6 +391,7 @@ def _req(
         "description": description,
         "stage": stage,
         "mode": mode,
+        "routing_flags": routing_flags or {},
         "model_flags": model_flags or {},
         "data_flags": data_flags or {},
         "loss_weights": loss_weights or {},
@@ -698,6 +712,7 @@ def _requirement_row(spec: dict[str, Any], matches: list[dict[str, Any]]) -> dic
         "entry_present": entry is not None,
         "stage_matches": _check_stage(entry, spec.get("stage")),
         "mode_matches": _check_mode(entry, spec.get("mode")),
+        "routing_flags_match": _check_mapping(entry, "routing", spec["routing_flags"]),
         "model_flags_match": _check_mapping(entry, "model", spec["model_flags"]),
         "data_flags_match": _check_mapping(entry, "data", spec["data_flags"]),
         "loss_weights_match": _check_mapping(entry, "loss_weights", spec["loss_weights"]),
@@ -777,6 +792,11 @@ def _summarize_train_config(train_config_path: Path) -> dict[str, Any]:
         "stage": stage or None,
         "train_mode": train_mode,
         "routing_mode": routing.get("mode"),
+        "routing": {
+            "mode": routing.get("mode"),
+            "pseudo_policy": routing.get("pseudo_policy"),
+            "hard_exit": routing.get("hard_exit"),
+        },
         "train": {
             "precision": train_config.get("precision", "fp32"),
             "activation_checkpointing": train_config.get("activation_checkpointing", False),
