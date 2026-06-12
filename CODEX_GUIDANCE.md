@@ -144,7 +144,9 @@ BRIAN-Sphere-LLM/
       stage1_fixed_route.yaml
       stage2_router_imitation.yaml
       stage3_pseudo_skip_recur.yaml
+      stage3_scheduled_free_routing.yaml
       stage4_scheduled_free_routing.yaml
+      stage4_output_action.yaml
       stage5_output_action.yaml
       stage5_global_kv.yaml
       stage6_parallel_passing.yaml
@@ -1128,7 +1130,8 @@ Then:
 ```bash
 python scripts/train.py --config configs/train/stage2_router_imitation.yaml
 python scripts/train.py --config configs/train/stage3_pseudo_skip_recur.yaml
-python scripts/eval.py --config configs/eval/routing_eval.yaml --run <run_dir>
+python scripts/train.py --config configs/train/stage3_scheduled_free_routing.yaml
+python scripts/eval.py --config configs/eval/routing_eval.yaml --run <stage3_scheduled_free_routing_run>
 ```
 
 ---

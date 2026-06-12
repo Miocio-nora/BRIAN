@@ -289,6 +289,12 @@ def test_first_milestone_train_configs_match_guide_sequence() -> None:
         assert routing.get("mode") == values["mode"]
         assert routing.get("pseudo_policy") == values["pseudo_policy"]
 
+    guidance = Path("CODEX_GUIDANCE.md").read_text(encoding="utf-8")
+    assert "configs/train/stage2_router_imitation.yaml" in guidance
+    assert "configs/train/stage3_pseudo_skip_recur.yaml" in guidance
+    assert "configs/train/stage3_scheduled_free_routing.yaml" in guidance
+    assert "--run <stage3_scheduled_free_routing_run>" in guidance
+
 
 def test_scaled_train_configs_keep_b200_memory_controls() -> None:
     r350_configs = [
