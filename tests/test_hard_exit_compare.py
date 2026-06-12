@@ -3,7 +3,7 @@ from pathlib import Path
 
 import yaml
 
-from brian_sphere_llm.eval.hard_exit_compare import make_hard_exit_comparison_report
+from brian_sphere_llm.eval.hard_exit_compare import _status, make_hard_exit_comparison_report
 
 
 def _write_run(
@@ -118,6 +118,12 @@ def test_hard_exit_compare_passes_when_timing_and_route_steps_improve(tmp_path: 
     assert row["baseline_comparison"]["inference_latency_ms_per_token_ratio"] == 0.5
     assert row["baseline_comparison"]["inference_time_seconds_ratio"] == 0.5
     assert row["baseline_comparison"]["average_route_steps_ratio"] == 0.5
+
+
+def test_hard_exit_status_requires_explicit_boolean_true_checks() -> None:
+    assert _status({"a": True, "b": True}) == "pass"
+    assert _status({"a": True, "b": "yes"}) == "warn"
+    assert _status({"a": "yes", "b": 1}) == "fail"
 
 
 def test_hard_exit_compare_requires_top1_exit_rule(tmp_path: Path) -> None:
