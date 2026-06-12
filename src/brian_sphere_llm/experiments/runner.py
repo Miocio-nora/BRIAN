@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
@@ -12,6 +13,11 @@ from brian_sphere_llm.utils.config import load_config, save_yaml
 from brian_sphere_llm.utils.logging import write_json
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
+BASELINE_COMPARISON_VIEW_KEYS = [
+    "same_parameter_count_view",
+    "same_active_compute_view",
+    "similar_training_flops_view",
+]
 
 
 @dataclass(frozen=True)
@@ -196,8 +202,10 @@ def make_experiment_package_report(
         run_stage_matches_entry = run_stage is not None and run_stage == expected_stage
         compute_stage_matches_run = has_compute_row and compute_stage is not None and compute_stage == run_stage
         comparison = compute_row.get("baseline_comparison") if isinstance(compute_row, dict) else None
+        baseline_comparison_view_checks = _baseline_comparison_view_checks(comparison)
         baseline_comparison_present = entry.role == "baseline" or bool(isinstance(comparison, dict))
         baseline_comparison_views_present = entry.role == "baseline" or _baseline_comparison_views_present(comparison)
+        baseline_comparison_views_passed = entry.role == "baseline" or _baseline_comparison_views_passed(comparison)
         entry_rows.append(
             {
                 **entry.to_json(),
@@ -215,7 +223,9 @@ def make_experiment_package_report(
                 "compute_stage_matches_run_config": compute_stage_matches_run,
                 "compute_row_present": has_compute_row,
                 "baseline_comparison_present": baseline_comparison_present,
+                "baseline_comparison_view_checks": baseline_comparison_view_checks,
                 "baseline_comparison_views_present": baseline_comparison_views_present,
+                "baseline_comparison_views_passed": baseline_comparison_views_passed,
                 "status": _entry_status(
                     result_present=result is not None,
                     run_dir_present=bool(run_dir),
@@ -227,6 +237,7 @@ def make_experiment_package_report(
                     compute_stage_matches_run_config=compute_stage_matches_run,
                     baseline_comparison_present=baseline_comparison_present,
                     baseline_comparison_views_present=baseline_comparison_views_present,
+                    baseline_comparison_views_passed=baseline_comparison_views_passed,
                     baseline_required=bool(baseline_run_str) and entry.role != "baseline",
                 ),
             }
@@ -252,6 +263,8 @@ def make_experiment_package_report(
         and all(row["baseline_comparison_present"] for row in non_baseline_rows),
         "non_baseline_compute_comparison_views_present": bool(non_baseline_rows)
         and all(row["baseline_comparison_views_present"] for row in non_baseline_rows),
+        "non_baseline_compute_comparison_views_passed": bool(non_baseline_rows)
+        and all(row["baseline_comparison_views_passed"] for row in non_baseline_rows),
     }
     report = {
         "experiment_name": plan.experiment_name,
@@ -333,6 +346,7 @@ def _entry_status(
     compute_stage_matches_run_config: bool,
     baseline_comparison_present: bool,
     baseline_comparison_views_present: bool,
+    baseline_comparison_views_passed: bool,
     baseline_required: bool,
 ) -> str:
     required = [
@@ -348,6 +362,7 @@ def _entry_status(
     if baseline_required:
         required.append(baseline_comparison_present)
         required.append(baseline_comparison_views_present)
+        required.append(baseline_comparison_views_passed)
     if all(required):
         return "pass"
     if any(required):
@@ -358,13 +373,24 @@ def _entry_status(
 def _baseline_comparison_views_present(comparison: Any) -> bool:
     if not isinstance(comparison, dict):
         return False
-    required = [
-        "same_parameter_count_view",
-        "same_active_compute_view",
-        "similar_training_flops_view",
-        "validation_loss_delta",
-    ]
-    return all(key in comparison for key in required)
+    return all(key in comparison for key in [*BASELINE_COMPARISON_VIEW_KEYS, "validation_loss_delta"])
+
+
+def _baseline_comparison_views_passed(comparison: Any) -> bool:
+    checks = _baseline_comparison_view_checks(comparison)
+    return all(checks[key] is True for key in BASELINE_COMPARISON_VIEW_KEYS) and _finite_number(
+        checks["validation_loss_delta"]
+    )
+
+
+def _baseline_comparison_view_checks(comparison: Any) -> dict[str, Any]:
+    if not isinstance(comparison, dict):
+        return {key: None for key in [*BASELINE_COMPARISON_VIEW_KEYS, "validation_loss_delta"]}
+    return {key: comparison.get(key) for key in [*BASELINE_COMPARISON_VIEW_KEYS, "validation_loss_delta"]}
+
+
+def _finite_number(value: Any) -> bool:
+    return not isinstance(value, bool) and isinstance(value, (int, float)) and math.isfinite(float(value))
 
 
 def _package_status(checks: dict[str, bool], entries: list[dict[str, Any]]) -> str:
