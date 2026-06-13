@@ -2,7 +2,7 @@
 
 Date: 2026-06-13
 
-Scope: completed `r125_main_2b` Package A runs A0-A7. This judgment uses the
+Scope: completed `r125_main_2b` Package A runs A0-A8. This judgment uses the
 experimental design and observed results, not merely the presence of artifacts.
 
 ## Decision
@@ -18,14 +18,12 @@ Recommended next step:
 
 1. Treat A6, the scheduled router without output action, as the current best
    routed candidate.
-2. Run the prepared A8 follow-up before scaling:
-   - `configs/train/package_a_r125_2b_a8_output_action_location_loss.yaml`
-   - `configs/experiments/route_core_r125_2b_decision_followup.yaml`
-   - Compare against completed A6 with `configs/eval/hard_exit_compare.yaml`.
-3. If A8 does not beat or match A6 under hard-exit comparison, treat OUT as not
-   ready and scale only the A6-style local route-core path.
-4. Do not spend on R350 until the selected R125 path is confirmed at 5B or the
-   OUT/hard-exit missing cell is resolved.
+2. Treat hard OUT as not ready for scale-up: A8 fixed the A7 location-loss
+   confound but still trails A6 by 0.0235 validation loss.
+3. If scaling evidence is needed, scale the A6-style local route-core path
+   first; keep OUT/hard-exit as a targeted follow-up rather than the main path.
+4. Do not spend on R350 until the selected R125 path is confirmed at 5B and the
+   remaining cost/difficulty evidence is addressed.
 
 ## Main Results
 
@@ -39,6 +37,7 @@ Recommended next step:
 | A5 | no block position | 3.2828 | 0.628 | position helps modestly |
 | A6 | no output action | 3.2513 | 0.642 | best current routed candidate |
 | A7 | no location loss, hard exit enabled | 3.3055 | 0.630 | OUT/hard-exit not proven |
+| A8 | output action + location loss | 3.2748 | 0.630 | OUT improved vs A7, still worse than A6 |
 
 ## What The Experiment Shows
 
@@ -58,9 +57,10 @@ Block-position state is useful but not decisive. A5 is 0.0197 worse than A4 and
 the position ablation report passes. This supports keeping block-position state
 in the route-core path, but the effect is modest.
 
-OUT/hard-exit is not established. The hard-exit comparison A6 to A7 passes the
-role and timing checks, but A7 is 0.0542 worse in validation loss. Also, A7
-removes location loss, so this experiment does not isolate OUT/hard-exit cleanly.
+OUT/hard-exit is not established. A7 removes location loss and is 0.0542 worse
+than A6. A8 restores location loss and improves over A7, but remains 0.0235
+worse than A6. The A6-to-A8 hard-exit comparison has valid roles and slightly
+better latency/active compute for A8, but fails the validation-loss check.
 
 ## What Is Not Proven
 
@@ -87,22 +87,34 @@ Generated local reports:
 - `experiments/generated/route_core_r125_2b_package/hard_exit_compare.json`
 - `experiments/generated/route_core_r125_2b_package/stage_gate_report.json`
 - `experiments/generated/route_core_r125_2b_package/go_no_go_r125_to_r350.json`
+- `experiments/generated/route_core_r125_2b_decision_followup/hard_exit_compare.json`
+- `experiments/generated/route_core_r125_2b_decision_followup/compute_report.json`
 
 The formal go/no-go report returns `stop` for R125 to R350. This is the correct
 strict-plan outcome, but the practical interpretation is narrower: the local
 route-core mechanism is promising, while OUT/cost/difficulty evidence is still
 missing.
 
-## Prepared Follow-Up
+## A8 Follow-Up
 
-A8 has been declared to isolate the missing Stage 4 comparison:
+A8 was run to isolate the missing Stage 4 comparison:
 
-```bash
-CUDA_VISIBLE_DEVICES=0 PYTHONPATH=src python scripts/train.py \
-  --config configs/train/package_a_r125_2b_a8_output_action_location_loss.yaml
-```
+| Comparison | A6 no OUT | A8 OUT + location loss |
+|---|---:|---:|
+| Validation loss | 3.2513 | 3.2748 |
+| Validation delta vs A6 | 0.0000 | +0.0235 |
+| Perplexity | 25.82 | 26.44 |
+| Active layer compute vs A6 | 1.000 | 0.982 |
+| Inference latency vs A6 | 1.000 | 0.994 |
+| Location distance mean | 0.0072 | 0.0120 |
 
-Post-run comparison:
+The A6-to-A8 hard-exit comparison status is `warn`: A8 passes the role,
+hard-exit, timing, and route-step checks, but fails `validation_loss_not_worse`.
+A8 also fixes the A7 location-loss confound: A7's location distance was 0.3395,
+while A8's is 0.0120. The practical conclusion is that location loss is needed,
+but hard OUT is still not the best R125 route-core path.
+
+Recompute the comparison:
 
 ```bash
 PYTHONPATH=src python scripts/eval.py --config configs/eval/hard_exit_compare.yaml \

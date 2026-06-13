@@ -1642,7 +1642,7 @@ These links are included for planning context and should be refreshed before for
 
 ## 25. Current Project Priority
 
-As of 2026-06-13, Package A on `r125_main_2b` has completed for A0-A7. The
+As of 2026-06-13, Package A on `r125_main_2b` has completed for A0-A8. The
 current priority is Package A analysis and the route-core go/no-go decision,
 not Global KV or parallel passing.
 
@@ -1661,7 +1661,7 @@ Specifically:
 5. Validate block-position state.
 6. Validate output action.
 
-All A0-A7 runs reached the 2B-token target (`step=30518` at `batch_size: 32`),
+All A0-A8 runs reached the 2B-token target (`step=30518` at `batch_size: 32`),
 kept only `checkpoint_latest`, and produced routing reports. Local generated
 summary reports live under:
 
@@ -1680,17 +1680,18 @@ still stop: OUT/hard-exit, cost-control, and difficulty-conditioned compute are
 not proven by Package A. The recommended next step is a minimal R125 follow-up,
 not R350, Global KV, or parallel passing.
 
-The first follow-up unit is now declared as A8:
+The first follow-up unit, A8, has completed:
 
 ```text
 configs/train/package_a_r125_2b_a8_output_action_location_loss.yaml
 configs/experiments/route_core_r125_2b_decision_followup.yaml
 ```
 
-A8 keeps the 2B data recipe and Package A batch schedule, enables Stage 4
-hard `OUT`, and keeps location loss enabled. Its comparison reference is A6
-(`package_a_r125_2b_A6_no_output_action`) so the next decision can isolate
-whether hard output action helps when location supervision is not removed.
+A8 kept the 2B data recipe and Package A batch schedule, enabled Stage 4 hard
+`OUT`, and kept location loss enabled. It improved over A7 but remained worse
+than A6 by 0.0235 validation loss. The current scale-up candidate is therefore
+the A6-style local route-core path without hard OUT; OUT/hard-exit should remain
+a targeted follow-up rather than the main R125-to-R350 path.
 
 ---
 

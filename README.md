@@ -39,7 +39,7 @@ The immediate priority is **BRIAN-R125 route-core validation**:
 6. Validate `OUT` as a terminal routing action.
 
 Formal Package A on `r125_main_2b` completed on 2026-06-13 with `batch_size: 32`
-and one single-GPU job per GPU across GPUs 0-3. All A0-A7 runs reached
+and one single-GPU job per GPU across GPUs 0-3. All A0-A8 runs reached
 `step=30518`, wrote final eval rows, kept only `checkpoint_latest`, and produced
 `routing_report.json`. Generated local package reports are under
 `experiments/generated/route_core_r125_2b_package/`:
@@ -54,6 +54,7 @@ and one single-GPU job per GPU across GPUs 0-3. All A0-A7 runs reached
 | A5 | no block-position ablation | 3.2828 |
 | A6 | no output action ablation | 3.2513 |
 | A7 | no location loss ablation | 3.3055 |
+| A8 | output action + location loss follow-up | 3.2748 |
 
 The package report status is `warn` because routed A3-A7 deliberately use lower
 active layer compute than the fixed baseline, so the generic same-active-compute
@@ -66,15 +67,10 @@ In short: the local route-core mechanism is trainable and measurable, but R125
 has not yet passed the full go/no-go case for R350 because OUT/hard-exit,
 cost-control, and difficulty-conditioned compute are not proven.
 
-The next minimal executable follow-up is A8:
-
-```bash
-CUDA_VISIBLE_DEVICES=0 PYTHONPATH=src python scripts/train.py \
-  --config configs/train/package_a_r125_2b_a8_output_action_location_loss.yaml
-```
-
-A8 isolates the missing Stage 4 cell: hard `OUT` enabled with location loss
-kept on. Compare it against completed A6 with:
+A8 isolated the missing Stage 4 cell: hard `OUT` enabled with location loss
+kept on. It improved over A7 but remained worse than A6 by 0.0235 validation
+loss, so the current scale-up candidate remains the A6-style local route-core
+path without hard OUT. Recompute the A6-vs-A8 comparison with:
 
 ```bash
 PYTHONPATH=src python scripts/eval.py --config configs/eval/hard_exit_compare.yaml \
