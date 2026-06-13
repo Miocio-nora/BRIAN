@@ -57,9 +57,13 @@ def make_route_path_visualization(
     device = _device(device_name)
     model = _load_model_for_run(run_dir, checkpoint, device)
     model.eval()
-    positions = _route_positions(model)
-    nodes, projection_report = _project_nodes(positions)
-    out_action = len(nodes) - 1
+    position_payload = _route_positions(model)
+    nodes, projection_report = _project_nodes(
+        position_payload["action_positions"],
+        input_position=position_payload.get("input_position"),
+    )
+    out_action = int(position_payload["out_action"])
+    input_node = _input_node_index(nodes)
 
     aggregates: list[dict[str, Any]] = []
     if source in {"checkpoint", "both"}:
@@ -73,6 +77,7 @@ def make_route_path_visualization(
                 batch_size=batch_size,
                 max_batches=max_batches,
                 out_action=out_action,
+                input_node=input_node,
                 device=device,
                 max_paths=top_paths,
             )
@@ -82,6 +87,7 @@ def make_route_path_visualization(
             _train_log_aggregate(
                 run_dir,
                 out_action=out_action,
+                input_node=input_node,
                 timeline_max_frames=timeline_max_frames,
                 max_paths=top_paths,
             )
@@ -118,11 +124,15 @@ def make_route_path_visualization_from_train_log(
     run_dir = Path(run_dir)
     output_path = Path(output_path)
     sidecar_path = output_path.with_suffix(".json")
-    positions = _route_positions(model)
-    nodes, projection_report = _project_nodes(positions)
+    position_payload = _route_positions(model)
+    nodes, projection_report = _project_nodes(
+        position_payload["action_positions"],
+        input_position=position_payload.get("input_position"),
+    )
     aggregate = _train_log_aggregate(
         run_dir,
-        out_action=len(nodes) - 1,
+        out_action=int(position_payload["out_action"]),
+        input_node=_input_node_index(nodes),
         timeline_max_frames=timeline_max_frames,
         max_paths=top_paths,
     )
@@ -157,6 +167,7 @@ def _checkpoint_aggregate(
     batch_size: int | None,
     max_batches: int,
     out_action: int,
+    input_node: int | None,
     device: "torch.device",
     max_paths: int,
 ) -> dict[str, Any]:
@@ -190,7 +201,12 @@ def _checkpoint_aggregate(
                 route_mode=route_mode,
                 global_step=step,
             )
-            for path in _paths_from_route_info(output.get("route_info", {}), batch_size=batch.size(0), out_action=out_action):
+            for path in _paths_from_route_info(
+                output.get("route_info", {}),
+                batch_size=batch.size(0),
+                out_action=out_action,
+                input_node=input_node,
+            ):
                 path_counts[tuple(path)] += 1
             batch_count += 1
             sample_count += int(batch.size(0))
@@ -214,6 +230,7 @@ def _train_log_aggregate(
     run_dir: Path,
     *,
     out_action: int,
+    input_node: int | None,
     timeline_max_frames: int,
     max_paths: int,
 ) -> dict[str, Any]:
@@ -224,7 +241,7 @@ def _train_log_aggregate(
     frame_rows: list[dict[str, Any]] = []
     rows_with_paths = 0
     for row_index, row in enumerate(rows):
-        row_counts, row_exact = _path_counts_from_train_row(row, out_action=out_action)
+        row_counts, row_exact = _path_counts_from_train_row(row, out_action=out_action, input_node=input_node)
         if row_counts:
             rows_with_paths += 1
         if row_counts and not row_exact:
@@ -292,7 +309,7 @@ def _forward_routed_for_visualization(
     )
 
 
-def _route_positions(model: Any) -> np.ndarray:
+def _route_positions(model: Any) -> dict[str, Any]:
     table = getattr(model, "position_table", None)
     embeddings = getattr(table, "embeddings", None)
     if embeddings is None:
@@ -300,11 +317,30 @@ def _route_positions(model: Any) -> np.ndarray:
     values = embeddings.detach().float().cpu().numpy()
     if values.ndim != 2 or values.shape[0] < 2:
         raise ValueError("Route position embeddings must have shape [actions, position_dim].")
-    return values
+    input_position = getattr(table, "input_position", None)
+    input_values = None
+    if input_position is not None:
+        input_values = torch.nn.functional.normalize(input_position.detach().float(), dim=-1).cpu().numpy()
+    return {
+        "action_positions": values,
+        "input_position": input_values,
+        "out_action": values.shape[0] - 1,
+    }
 
 
-def _project_nodes(positions: np.ndarray) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    centered = positions - positions.mean(axis=0, keepdims=True)
+def _project_nodes(
+    positions: np.ndarray,
+    *,
+    input_position: np.ndarray | None = None,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    if input_position is not None:
+        input_row = np.asarray(input_position, dtype=positions.dtype).reshape(1, -1)
+        projection_positions = np.concatenate([positions, input_row], axis=0)
+        input_node = projection_positions.shape[0] - 1
+    else:
+        projection_positions = positions
+        input_node = None
+    centered = projection_positions - projection_positions.mean(axis=0, keepdims=True)
     if centered.shape[1] == 0:
         coords = np.zeros((centered.shape[0], 3), dtype=np.float64)
         explained = [0.0, 0.0, 0.0]
@@ -322,10 +358,23 @@ def _project_nodes(positions: np.ndarray) -> tuple[list[dict[str, Any]], dict[st
     nodes = []
     out_action = positions.shape[0] - 1
     for action, coord in enumerate(coords):
-        label = "OUT" if action == out_action else f"B{action}"
+        if input_node is not None and action == input_node:
+            label = "IN"
+            kind = "input"
+            route_action = None
+        elif action == out_action:
+            label = "OUT"
+            kind = "out"
+            route_action = int(action)
+        else:
+            label = f"B{action}"
+            kind = "block"
+            route_action = int(action)
         nodes.append(
             {
                 "action": int(action),
+                "route_action": route_action,
+                "kind": kind,
                 "label": label,
                 "x": float(coord[0]),
                 "y": float(coord[1]),
@@ -335,18 +384,34 @@ def _project_nodes(positions: np.ndarray) -> tuple[list[dict[str, Any]], dict[st
     return nodes, {"method": "pca", "explained_variance_ratio": explained}
 
 
-def _paths_from_route_info(route_info: dict[str, Any], *, batch_size: int, out_action: int) -> list[list[int]]:
+def _paths_from_route_info(
+    route_info: dict[str, Any],
+    *,
+    batch_size: int,
+    out_action: int,
+    input_node: int | None = None,
+) -> list[list[int]]:
     actions = route_info.get("selected_actions") or []
     if not actions:
         return []
     stacked = torch.stack(actions).detach().cpu()
     paths = []
     for sample_index in range(batch_size):
-        paths.append(_truncate_at_out([int(value) for value in stacked[:, sample_index].tolist()], out_action=out_action))
+        paths.append(
+            _path_with_input_node(
+                _truncate_at_out([int(value) for value in stacked[:, sample_index].tolist()], out_action=out_action),
+                input_node=input_node,
+            )
+        )
     return paths
 
 
-def _path_counts_from_train_row(row: dict[str, Any], *, out_action: int) -> tuple[Counter[tuple[int, ...]], bool]:
+def _path_counts_from_train_row(
+    row: dict[str, Any],
+    *,
+    out_action: int,
+    input_node: int | None = None,
+) -> tuple[Counter[tuple[int, ...]], bool]:
     counts: Counter[tuple[int, ...]] = Counter()
     exact_items = row.get("route_path_counts")
     if isinstance(exact_items, list):
@@ -356,7 +421,14 @@ def _path_counts_from_train_row(row: dict[str, Any], *, out_action: int) -> tupl
             actions = _actions_from_value(item.get("actions"))
             count = _safe_int(item.get("count"), default=0)
             if actions and count > 0:
-                counts[tuple(_truncate_at_out(actions, out_action=out_action))] += count
+                counts[
+                    tuple(
+                        _path_with_input_node(
+                            _truncate_at_out(actions, out_action=out_action),
+                            input_node=input_node,
+                        )
+                    )
+                ] += count
         return counts, True
     examples = row.get("route_path_examples")
     if isinstance(examples, list):
@@ -365,7 +437,14 @@ def _path_counts_from_train_row(row: dict[str, Any], *, out_action: int) -> tupl
                 continue
             actions = _actions_from_value(item.get("actions"))
             if actions:
-                counts[tuple(_truncate_at_out(actions, out_action=out_action))] += 1
+                counts[
+                    tuple(
+                        _path_with_input_node(
+                            _truncate_at_out(actions, out_action=out_action),
+                            input_node=input_node,
+                        )
+                    )
+                ] += 1
         return counts, False
     return counts, True
 
@@ -616,7 +695,10 @@ def _node_trace(nodes: list[dict[str, Any]], node_counts: dict[int, int]):
 
     max_count = max(node_counts.values() or [1])
     sizes = [8.0 + 18.0 * math.sqrt(node_counts.get(int(node["action"]), 0) / max(1, max_count)) for node in nodes]
-    colors = ["#d1495b" if node["label"] == "OUT" else "#2a9d8f" for node in nodes]
+    colors = [
+        "#457b9d" if node.get("kind") == "input" else "#d1495b" if node.get("kind") == "out" else "#2a9d8f"
+        for node in nodes
+    ]
     hover = [f"{node['label']}<br>visits={node_counts.get(int(node['action']), 0)}" for node in nodes]
     return go.Scatter3d(
         x=[node["x"] for node in nodes],
@@ -674,6 +756,19 @@ def _truncate_at_out(actions: list[int], *, out_action: int) -> list[int]:
         if action == out_action:
             break
     return truncated
+
+
+def _path_with_input_node(actions: list[int], *, input_node: int | None) -> list[int]:
+    if input_node is None:
+        return actions
+    return [int(input_node), *actions]
+
+
+def _input_node_index(nodes: list[dict[str, Any]]) -> int | None:
+    for index, node in enumerate(nodes):
+        if node.get("kind") == "input":
+            return index
+    return None
 
 
 def _counts_by_action(rows: Any) -> dict[int, int]:

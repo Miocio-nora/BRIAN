@@ -55,9 +55,10 @@ These runs are defined by
 | Apos | A0 without block-position input/loss | running | in-progress; latest eval step 17500, validation loss 3.2516 |
 | Aout | A0 without hard OUT termination | running | in-progress; latest eval step 17500, validation loss 3.2093 |
 | Atop1 | A0 with top1-only routing | complete | final validation loss 3.2347; route collapse to repeated block 7 |
+| Ain | A0 with an independent learnable IN position | restarted | 4-GPU run with local batch 8, global batch 32; IN node is included in route-path visualizations |
 
 The in-progress values above are snapshots only. Do not compare them as final
-outcomes until A0opt, Apos, and Aout reach `step=30518`.
+outcomes until active follow-ups reach `step=30518`.
 
 ## Practical Next Step
 
@@ -66,6 +67,11 @@ path-diversity metrics, block histograms, and route-path visualizations. If
 A0opt reduces concentration without hurting LM loss too much, it becomes the
 next R125 5B candidate. If Aout keeps improving, hard OUT should remain under
 question rather than being treated as settled.
+
+The fine-grained branch is implemented as a separate follow-up:
+`configs/train/finegrained_r125_2b_pool16_ain_coverage_no23.yaml`. It uses 16
+route-pool nodes, smaller route-block FFNs, 32 max route steps, and independent
+IN. It is intended to test denser sphere navigation after the current Ain run.
 
 ## Evidence
 
@@ -79,6 +85,9 @@ Train configs:
 - `configs/train/corrected_package_a_r125_2b_apos_no_position.yaml`
 - `configs/train/corrected_package_a_r125_2b_aout_no_hard_exit.yaml`
 - `configs/train/corrected_package_a_r125_2b_atop1_top1_only.yaml`
+- `configs/train/corrected_package_a_r125_2b_ain_independent_in.yaml`
+- `configs/train/corrected_package_a_r125_2b_ain_independent_in_4gpu.yaml`
+- `configs/train/finegrained_r125_2b_pool16_ain_coverage_no23.yaml`
 
 Experiment manifests:
 

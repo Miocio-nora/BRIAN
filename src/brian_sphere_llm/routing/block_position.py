@@ -15,7 +15,14 @@ ModuleBase = nn.Module if nn is not None else object
 
 
 class BlockPositionTable(ModuleBase):
-    def __init__(self, num_internal_blocks: int, position_dim: int, *, mode: str = "open_arc") -> None:
+    def __init__(
+        self,
+        num_internal_blocks: int,
+        position_dim: int,
+        *,
+        mode: str = "open_arc",
+        independent_input_position: bool = False,
+    ) -> None:
         if torch is None:
             raise ModuleNotFoundError("PyTorch is required for block-position state.")
         super().__init__()
@@ -24,8 +31,13 @@ class BlockPositionTable(ModuleBase):
         self.num_actions = num_internal_blocks + 1
         self.out_action = num_internal_blocks
         self.mode = mode
+        self.independent_input_position = independent_input_position
         init = self._init_embeddings(mode)
         self.embeddings = nn.Parameter(init, requires_grad=mode != "none")
+        if independent_input_position:
+            self.input_position = nn.Parameter(init[0].clone(), requires_grad=mode != "none")
+        else:
+            self.register_parameter("input_position", None)
 
     def _init_embeddings(self, mode: str) -> torch.Tensor:
         if mode == "none":
@@ -53,6 +65,10 @@ class BlockPositionTable(ModuleBase):
         return F.normalize(torch.stack(rows, dim=0), dim=-1)
 
     def initial(self, batch_size: int, device: torch.device) -> torch.Tensor:
+        if self.mode == "none":
+            return torch.zeros(batch_size, self.position_dim, dtype=self.embeddings.dtype, device=device)
+        if self.input_position is not None:
+            return F.normalize(self.input_position, dim=-1).to(device).expand(batch_size, -1)
         return self.embeddings[0].detach().to(device).expand(batch_size, -1)
 
     def by_action(self, action: torch.Tensor) -> torch.Tensor:

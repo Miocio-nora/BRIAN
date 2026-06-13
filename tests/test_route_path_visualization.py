@@ -1,5 +1,6 @@
 from collections import Counter
 from pathlib import Path
+import json
 
 import numpy as np
 import pytest
@@ -31,6 +32,17 @@ def test_project_nodes_uses_pca_and_labels_out_action() -> None:
     assert len(report["explained_variance_ratio"]) == 3
 
 
+def test_project_nodes_can_include_independent_input_position() -> None:
+    positions = np.eye(3, 4)
+    input_position = np.array([0.5, 0.5, 0.0, 0.0])
+
+    nodes, _ = _project_nodes(positions, input_position=input_position)
+
+    assert [node["label"] for node in nodes] == ["B0", "B1", "OUT", "IN"]
+    assert nodes[-1]["kind"] == "input"
+    assert nodes[-1]["route_action"] is None
+
+
 def test_train_log_path_counts_are_exact_and_truncated_at_out() -> None:
     counts, exact = _path_counts_from_train_row(
         {
@@ -45,6 +57,17 @@ def test_train_log_path_counts_are_exact_and_truncated_at_out() -> None:
 
     assert exact is True
     assert counts == Counter({(0, 1, 2): 3, (1, 2): 1})
+
+
+def test_train_log_path_counts_can_prepend_input_node() -> None:
+    counts, exact = _path_counts_from_train_row(
+        {"route_path_counts": [{"actions": [0, 1, 2], "count": 3}]},
+        out_action=2,
+        input_node=3,
+    )
+
+    assert exact is True
+    assert counts == Counter({(3, 0, 1, 2): 3})
 
 
 def test_train_log_path_examples_are_approximate_fallback() -> None:
@@ -110,6 +133,7 @@ def test_make_route_path_visualization_from_train_log(tmp_path: Path) -> None:
 
     class PositionTable:
         embeddings = torch.eye(3, 4)
+        input_position = torch.tensor([0.5, 0.5, 0.0, 0.0])
 
     class Model:
         position_table = PositionTable()
@@ -132,4 +156,7 @@ def test_make_route_path_visualization_from_train_log(tmp_path: Path) -> None:
     assert output_path.exists()
     sidecar = output_path.with_suffix(".json")
     assert sidecar.exists()
-    assert '"overall_status": "pass"' in sidecar.read_text(encoding="utf-8")
+    report = json.loads(sidecar.read_text(encoding="utf-8"))
+    assert report["overall_status"] == "pass"
+    assert report["nodes"][-1]["label"] == "IN"
+    assert report["aggregates"][0]["path_counts"][0]["actions"] == [3, 0, 1, 2]

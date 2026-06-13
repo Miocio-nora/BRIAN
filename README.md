@@ -90,8 +90,8 @@ Corrected free-sphere R125 2B experiments completed on 2026-06-13:
 | B0 | pure free, no 2/3 losses | 3.1557 | weaker LM quality with route concentration |
 | B1 | pure free + selected-balance + transition-diversity | 3.1143 | improves over B0 but remains behind coverage warmup |
 
-The current follow-up package keeps A0 coverage warmup as the anchor and runs
-four ablations from `configs/experiments/route_core_r125_2b_corrected_package_a_followup.yaml`:
+The current follow-up package keeps A0 coverage warmup as the anchor and tracks
+five ablations from `configs/experiments/route_core_r125_2b_corrected_package_a_followup.yaml`:
 
 | ID | Purpose | Current status |
 |---|---|---|
@@ -99,9 +99,14 @@ four ablations from `configs/experiments/route_core_r125_2b_corrected_package_a_
 | Apos | remove block-position input/loss under corrected routing | running on GPU1 |
 | Aout | disable hard OUT termination under corrected routing | running on GPU2 |
 | Atop1 | top1-only routing instead of later top-2 weighted fusion | completed; validation loss 3.2347 with full path collapse to repeated block 7, so top1-only is not a viable current direction |
+| Ain | independent learnable IN position instead of reusing block 0 as the initial sphere position | restarted as a 4-GPU run with local batch 8, global batch 32 |
 
 These runs keep only `checkpoint_latest` and upload route-path visualizations to
 W&B through the default `brian-sphere-llm` project.
+
+An additional fine-grained route-pool branch is implemented but not launched:
+`configs/train/finegrained_r125_2b_pool16_ain_coverage_no23.yaml` uses 16
+smaller route-pool blocks, 32 max route steps, and the independent IN position.
 
 The corrected route-core judgment is tracked in
 [reports/corrected_free_sphere_r125_2b_experiment_judgment.md](./reports/corrected_free_sphere_r125_2b_experiment_judgment.md).

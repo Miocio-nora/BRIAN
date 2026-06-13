@@ -46,6 +46,8 @@ def test_brian_route_config_parses_boolean_strings() -> None:
         hard_exit="false",
         global_kv="enabled",
         parallel_passing="off",
+        route_pool_finegrained="true",
+        independent_input_position="enabled",
         position_to_router="yes",
         position_to_blocks="0",
     )
@@ -53,12 +55,22 @@ def test_brian_route_config_parses_boolean_strings() -> None:
     assert cfg.hard_exit is False
     assert cfg.global_kv is True
     assert cfg.parallel_passing is False
+    assert cfg.route_pool_finegrained is True
+    assert cfg.independent_input_position is True
     assert cfg.position_to_router is True
     assert cfg.position_to_blocks is False
 
 
 def test_brian_route_config_rejects_invalid_boolean_fields() -> None:
-    for key in ["hard_exit", "global_kv", "parallel_passing", "position_to_router", "position_to_blocks"]:
+    for key in [
+        "hard_exit",
+        "global_kv",
+        "parallel_passing",
+        "route_pool_finegrained",
+        "independent_input_position",
+        "position_to_router",
+        "position_to_blocks",
+    ]:
         with pytest.raises(ValueError, match=key):
             _config(**{key: "maybe"})
         with pytest.raises(ValueError, match=key):
@@ -100,6 +112,50 @@ def test_position_router_only_ablation_keeps_state_but_masks_blocks() -> None:
     position = torch.randn(2, 8)
     assert torch.count_nonzero(model._router_position(position)) > 0
     assert torch.count_nonzero(model._block_position(position)) == 0
+
+
+def test_finegrained_route_pool_allows_more_smaller_route_blocks() -> None:
+    with pytest.raises(ValueError, match="pre \\+ route_pool \\+ post"):
+        BrianRouteCore(_config(route_pool_blocks=4))
+
+    small = BrianRouteCore(
+        _config(
+            model_name="brian_finegrained_small_unit",
+            route_pool_blocks=4,
+            max_route_steps=8,
+            route_pool_finegrained=True,
+            route_block_ffn_multiplier=1.0,
+        )
+    )
+    full = BrianRouteCore(
+        _config(
+            route_pool_blocks=4,
+            max_route_steps=8,
+            route_pool_finegrained=True,
+            route_block_ffn_multiplier=4.0,
+        )
+    )
+
+    assert len(small.route_blocks) == 4
+    assert small.model_stats()["route_pool_finegrained"] == "True"
+    assert small.model_stats()["route_block_ffn_multiplier"] == "1.0"
+    assert small.model_stats()["parameter_count"] < full.model_stats()["parameter_count"]
+
+
+def test_finegrained_route_pool_rejects_zero_route_ffn_multiplier() -> None:
+    with pytest.raises(ValueError, match="route_block_ffn_multiplier"):
+        _config(route_pool_finegrained=True, route_block_ffn_multiplier=0.0)
+
+
+def test_independent_input_position_model_stats_and_forward() -> None:
+    model = BrianRouteCore(_config(independent_input_position=True))
+    input_ids = torch.randint(0, 64, (2, 8))
+    output = model(input_ids, targets=input_ids, route_mode="fixed")
+
+    assert output["logits"].shape == (2, 8, 64)
+    assert model.position_table.input_position is not None
+    assert model.position_table.input_position.requires_grad
+    assert model.model_stats()["independent_input_position"] == "True"
 
 
 def test_direct_position_addition_uses_hidden_dim_position_state() -> None:

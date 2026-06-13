@@ -23,6 +23,27 @@ def test_position_none_mode_returns_zero_state() -> None:
     assert table.location_distance(pos, probs).item() == 0.0
 
 
+def test_independent_input_position_is_trainable_and_not_an_action() -> None:
+    table = BlockPositionTable(
+        num_internal_blocks=3,
+        position_dim=8,
+        independent_input_position=True,
+    )
+    assert table.input_position is not None
+    assert table.input_position.requires_grad
+    assert table.embeddings.shape == (4, 8)
+
+    with torch.no_grad():
+        table.input_position.copy_(torch.tensor([1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]))
+        table.embeddings[0].copy_(torch.tensor([0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]))
+
+    start = table.initial(batch_size=2, device=torch.device("cpu"))
+    block_zero = table.by_action(torch.tensor([0, 0]))
+    assert start.requires_grad
+    assert not torch.allclose(start, block_zero)
+    assert torch.allclose(start.norm(dim=-1), torch.ones(2), atol=1e-5)
+
+
 def test_position_circular_places_out_near_initial_position() -> None:
     table = BlockPositionTable(num_internal_blocks=3, position_dim=8, mode="circular")
     start = table.by_action(torch.tensor([0]))

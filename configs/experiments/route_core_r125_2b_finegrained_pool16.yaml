@@ -1,0 +1,11 @@
+experiment_name: route_core_r125_2b_finegrained_pool16
+description: >
+  Fine-grained route-core branch with more route-pool nodes and smaller route
+  block FFNs. This tests whether denser sphere navigation is a better match
+  than fewer full-sized route blocks.
+baseline_train_config: configs/train/corrected_package_a_r125_2b_a0opt_weak_selected_balance.yaml
+ablations:
+  - id: F16Ain
+    name: pool16_independent_in_coverage_no23
+    train_config: configs/train/finegrained_r125_2b_pool16_ain_coverage_no23.yaml
+    purpose: Use 16 smaller route-pool blocks, max 32 route steps, and independent IN position.

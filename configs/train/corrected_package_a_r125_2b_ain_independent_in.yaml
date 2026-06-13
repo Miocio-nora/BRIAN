@@ -1,0 +1,6 @@
+extends: free_sphere_r125_2b_a0_coverage_no23.yaml
+run_name: corrected_package_a_r125_2b_Ain_independent_in
+model_config: ../model/brian_r125_sphere16_independent_in.yaml
+wandb:
+  group: corrected_package_a_r125_2b
+  tags: [corrected_package_a, r125, 2b, Ain, coverage_warmup, independent_in]

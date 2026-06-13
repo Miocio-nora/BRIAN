@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -52,6 +52,8 @@ class BrianRouteConfig:
     block_position_dim: int
     max_route_steps: int
     model_name: str = "brian_route_core"
+    route_pool_finegrained: bool = False
+    route_block_ffn_multiplier: float | None = None
     top_k: int = 1
     later_top_k: int = 2
     hard_exit: bool = False
@@ -68,6 +70,7 @@ class BrianRouteConfig:
     parallel_exit_policy: str = "branch"
     block_position_mode: str = "open_arc"
     block_position_injection: str = "adapter"
+    independent_input_position: bool = False
     position_to_router: bool = True
     position_to_blocks: bool = True
     location_bias_weight: float = 0.0
@@ -91,6 +94,12 @@ class BrianRouteConfig:
             block_position_dim=_int_value(data["block_position_dim"], "block_position_dim", minimum=1),
             max_route_steps=_int_value(data["max_route_steps"], "max_route_steps", minimum=1),
             model_name=str(data.get("model_name", "brian_route_core")),
+            route_pool_finegrained=_bool_value(data.get("route_pool_finegrained", False), "route_pool_finegrained"),
+            route_block_ffn_multiplier=_optional_float_value(
+                data.get("route_block_ffn_multiplier"),
+                "route_block_ffn_multiplier",
+                minimum=0.01,
+            ),
             top_k=_int_value(data.get("top_k", 1), "top_k", minimum=1),
             later_top_k=_int_value(data.get("later_top_k", 2), "later_top_k", minimum=1),
             hard_exit=_bool_value(data.get("hard_exit", False), "hard_exit"),
@@ -120,6 +129,10 @@ class BrianRouteConfig:
             parallel_exit_policy=str(data.get("parallel_exit_policy", "branch")),
             block_position_mode=str(data.get("block_position_mode", "open_arc")),
             block_position_injection=str(data.get("block_position_injection", "adapter")),
+            independent_input_position=_bool_value(
+                data.get("independent_input_position", False),
+                "independent_input_position",
+            ),
             position_to_router=_bool_value(data.get("position_to_router", True), "position_to_router"),
             position_to_blocks=_bool_value(data.get("position_to_blocks", True), "position_to_blocks"),
             location_bias_weight=_float_value(data.get("location_bias_weight", 0.0), "location_bias_weight", minimum=0.0),
@@ -132,14 +145,20 @@ class BrianRouteCore(ModuleBase):
         super().__init__()
         self.config = config
         self.activation_checkpointing = False
-        if config.pre_blocks + config.route_pool_blocks + config.post_blocks != config.base.layers:
+        if config.route_pool_finegrained:
+            if config.pre_blocks + config.post_blocks > config.base.layers:
+                raise ValueError("pre + post must be <= base layer count for fine-grained route pools")
+        elif config.pre_blocks + config.route_pool_blocks + config.post_blocks != config.base.layers:
             raise ValueError("pre + route_pool + post must equal base layer count")
         backbone = config.base.backbone()
+        route_backbone = backbone
+        if config.route_block_ffn_multiplier is not None:
+            route_backbone = replace(backbone, ffn_multiplier=config.route_block_ffn_multiplier)
         self.token_embedding = nn.Embedding(config.base.vocab_size, config.base.d_model)
         self.pre_blocks = nn.ModuleList([TransformerBlock(backbone) for _ in range(config.pre_blocks)])
         self.route_blocks = nn.ModuleList(
             [
-                RouteBlock(backbone, config.block_position_dim, config.block_position_injection)
+                RouteBlock(route_backbone, config.block_position_dim, config.block_position_injection)
                 for _ in range(config.route_pool_blocks)
             ]
         )
@@ -149,6 +168,7 @@ class BrianRouteCore(ModuleBase):
             config.route_pool_blocks,
             config.block_position_dim,
             mode=config.block_position_mode,
+            independent_input_position=config.independent_input_position,
         )
         self.router = LatentRouter(
             config.base.d_model,
@@ -804,10 +824,13 @@ class BrianRouteCore(ModuleBase):
             "route_pool_blocks": self.config.route_pool_blocks,
             "post_blocks": self.config.post_blocks,
             "block_position_dim": self.config.block_position_dim,
+            "route_pool_finegrained": str(self.config.route_pool_finegrained),
+            "route_block_ffn_multiplier": str(self.config.route_block_ffn_multiplier),
             "top_k": self.config.top_k,
             "later_top_k": self.config.later_top_k,
             "block_position_mode": self.config.block_position_mode,
             "block_position_injection": self.config.block_position_injection,
+            "independent_input_position": str(self.config.independent_input_position),
             "position_to_router": str(self.config.position_to_router),
             "position_to_blocks": str(self.config.position_to_blocks),
             "location_bias_weight": str(self.config.location_bias_weight),
@@ -835,6 +858,18 @@ def _bool_value(value: Any, name: str) -> bool:
         if lowered in {"0", "false", "no", "off", "disabled"}:
             return False
     raise ValueError(f"{name} must be a boolean.")
+
+
+def _optional_float_value(
+    value: Any,
+    name: str,
+    *,
+    minimum: float | None = None,
+    maximum: float | None = None,
+) -> float | None:
+    if value is None:
+        return None
+    return _float_value(value, name, minimum=minimum, maximum=maximum)
 
 
 def _loss_weights_mapping(loss_weights: Mapping[str, Any] | None) -> Mapping[str, Any]:

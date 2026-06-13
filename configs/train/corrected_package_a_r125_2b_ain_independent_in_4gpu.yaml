@@ -1,0 +1,6 @@
+extends: corrected_package_a_r125_2b_ain_independent_in.yaml
+run_name: corrected_package_a_r125_2b_Ain_independent_in_4gpu
+batch_size: 8
+wandb:
+  group: corrected_package_a_r125_2b
+  tags: [corrected_package_a, r125, 2b, Ain, coverage_warmup, independent_in, ddp4]

@@ -1,0 +1,20 @@
+extends: free_sphere_r125_2b_a0_coverage_no23.yaml
+run_name: finegrained_r125_2b_pool16_Ain_coverage_no23
+model_config: ../model/brian_r125_finegrained_pool16_independent_in.yaml
+loss_weights:
+  cost: 0.0002
+  location: 0.02
+  selected_balance: 0.0
+  transition_diversity: 0.0
+  exit_boundary: 0.02
+routing:
+  constraints:
+    min_exit_step: 16
+    exit_ramp_start: 24
+    early_exit_logit_penalty: 8.0
+    exit_ramp_logit_bias: 3.0
+    final_exit_logit_bias: 6.0
+    force_final_exit: true
+wandb:
+  group: finegrained_r125_2b
+  tags: [finegrained, r125, 2b, pool16, Ain, coverage_warmup, no23]
