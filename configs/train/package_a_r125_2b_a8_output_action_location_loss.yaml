@@ -1,0 +1,11 @@
+extends: stage4_output_action.yaml
+run_name: package_a_r125_2b_A8_output_action_location_loss
+data_config: ../data/r125_main_2b.yaml
+batch_size: 32
+max_steps: 30518
+eval_interval: 2500
+save_interval: 2500
+save_best_checkpoint: false
+wandb:
+  group: package_a_r125_2b_bs32
+  tags: [package_a_followup, r125, 2b, bs32, A8, output_action, location_loss]

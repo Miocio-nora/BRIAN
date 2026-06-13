@@ -66,6 +66,23 @@ In short: the local route-core mechanism is trainable and measurable, but R125
 has not yet passed the full go/no-go case for R350 because OUT/hard-exit,
 cost-control, and difficulty-conditioned compute are not proven.
 
+The next minimal executable follow-up is A8:
+
+```bash
+CUDA_VISIBLE_DEVICES=0 PYTHONPATH=src python scripts/train.py \
+  --config configs/train/package_a_r125_2b_a8_output_action_location_loss.yaml
+```
+
+A8 isolates the missing Stage 4 cell: hard `OUT` enabled with location loss
+kept on. Compare it against completed A6 with:
+
+```bash
+PYTHONPATH=src python scripts/eval.py --config configs/eval/hard_exit_compare.yaml \
+  --baseline-run runs/package_a_r125_2b_A6_no_output_action \
+  --runs runs/package_a_r125_2b_A8_output_action_location_loss \
+  --output experiments/generated/route_core_r125_2b_decision_followup/hard_exit_compare.json
+```
+
 See [BRIAN-Sphere-LLM_PROJECT_PLAN.md](./BRIAN-Sphere-LLM_PROJECT_PLAN.md) for the full technical plan.
 See [CODEX_GUIDANCE.md](./CODEX_GUIDANCE.md) for implementation guidance.
 

@@ -37,6 +37,7 @@ PROFILE_ALIASES = {
     "package_d_r1b_pilot": "package_d_r1b_pilot",
     "route_core_r125_5b_followup": "scale_r125_5b_followup",
     "scale_r125_5b_followup": "scale_r125_5b_followup",
+    "route_core_r125_2b_decision_followup": "route_core_r125_2b_decision_followup",
     "route_core_r350_30b_followup": "scale_r350_30b_followup",
     "scale_r350_30b_followup": "scale_r350_30b_followup",
     "route_core_r1b_main_validation": "package_d_r1b_main_validation",
@@ -284,6 +285,31 @@ def _requirements(profile: str, plan: ExperimentPlan, entries: list[dict[str, An
                         "target_tokens": 5_000_000_000,
                         "sequence_length": 2048,
                     },
+                ),
+            ],
+        )
+    if profile == "route_core_r125_2b_decision_followup":
+        return _exact_id_requirements(
+            entries,
+            [
+                _req(
+                    "A8",
+                    "125M Stage 4 output action with location loss on 2B data",
+                    stage="stage4_output_action",
+                    mode="scheduled",
+                    routing_flags={"hard_exit": True, "pseudo_policy": "mixed_skip_recur"},
+                    model_flags={
+                        "model_name": "brian_r125",
+                        "top_k": 1,
+                        "global_kv": False,
+                        "parallel_passing": False,
+                    },
+                    data_flags={
+                        "recipe_name": "r125_main_2b",
+                        "target_tokens": 2_000_000_000,
+                        "sequence_length": 2048,
+                    },
+                    loss_weights={"location": 0.02, "cost": 0.01},
                 ),
             ],
         )

@@ -1,0 +1,8 @@
+experiment_name: route_core_r125_2b_decision_followup
+description: Minimal BRIAN-R125 2B follow-up to isolate Stage 4 OUT/hard-exit with location loss enabled.
+baseline_train_config: configs/train/package_a_r125_2b_a6_no_output_action.yaml
+ablations:
+  - id: A8
+    name: output_action_location_loss
+    train_config: configs/train/package_a_r125_2b_a8_output_action_location_loss.yaml
+    purpose: Stage 4 hard OUT route-core path with location regularization enabled, compared against A6 no-output-action.

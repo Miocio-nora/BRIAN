@@ -124,6 +124,23 @@ def test_r125_5b_followup_coverage_passes(tmp_path: Path) -> None:
     assert report["checks"]["baseline_data_config_consistent"] is True
 
 
+def test_r125_2b_decision_followup_coverage_passes(tmp_path: Path) -> None:
+    output = make_experiment_coverage_report(
+        "configs/experiments/route_core_r125_2b_decision_followup.yaml",
+        output_path=tmp_path / "coverage.json",
+    )
+    report = json.loads(output.read_text(encoding="utf-8"))
+
+    assert report["overall_status"] == "pass"
+    assert report["profile"] == "route_core_r125_2b_decision_followup"
+    assert [row["id"] for row in report["requirements"]] == ["A8"]
+    assert _requirement(report, "A8")["checks"]["routing_flags_match"] is True
+    assert _requirement(report, "A8")["checks"]["model_flags_match"] is True
+    assert _requirement(report, "A8")["checks"]["data_flags_match"] is True
+    assert _requirement(report, "A8")["checks"]["loss_weights_match"] is True
+    assert report["checks"]["baseline_data_config_consistent"] is True
+
+
 def test_r350_30b_followup_coverage_passes(tmp_path: Path) -> None:
     output = make_experiment_coverage_report(
         "configs/experiments/route_core_r350_30b_followup.yaml",
@@ -744,6 +761,10 @@ def test_experiment_coverage_eval_config_resolves() -> None:
     config = load_config("configs/eval/experiment_coverage.yaml")
     assert config["eval_name"] == "experiment_coverage_report"
     assert config["profile"] == "auto"
+    assert (
+        load_config("configs/eval/r125_2b_decision_followup_coverage.yaml")["profile"]
+        == "route_core_r125_2b_decision_followup"
+    )
     assert load_config("configs/eval/r125_5b_followup_coverage.yaml")["profile"] == "route_core_r125_5b_followup"
     assert load_config("configs/eval/r350_30b_followup_coverage.yaml")["profile"] == "route_core_r350_30b_followup"
     assert load_config("configs/eval/r1b_main_validation_coverage.yaml")["profile"] == "route_core_r1b_main_validation"

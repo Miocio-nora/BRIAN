@@ -18,12 +18,13 @@ Recommended next step:
 
 1. Treat A6, the scheduled router without output action, as the current best
    routed candidate.
-2. Run a minimal R125 follow-up instead of a full larger package:
-   - A0 baseline vs A6 on `r125_main_5b`, if the goal is scaling evidence for
-     the useful local route-core path.
-   - One missing Stage 4 output-action run with location loss enabled, if the
-     goal is specifically to prove OUT/hard-exit.
-3. Do not spend on R350 until the selected R125 path is confirmed at 5B or the
+2. Run the prepared A8 follow-up before scaling:
+   - `configs/train/package_a_r125_2b_a8_output_action_location_loss.yaml`
+   - `configs/experiments/route_core_r125_2b_decision_followup.yaml`
+   - Compare against completed A6 with `configs/eval/hard_exit_compare.yaml`.
+3. If A8 does not beat or match A6 under hard-exit comparison, treat OUT as not
+   ready and scale only the A6-style local route-core path.
+4. Do not spend on R350 until the selected R125 path is confirmed at 5B or the
    OUT/hard-exit missing cell is resolved.
 
 ## Main Results
@@ -91,3 +92,27 @@ The formal go/no-go report returns `stop` for R125 to R350. This is the correct
 strict-plan outcome, but the practical interpretation is narrower: the local
 route-core mechanism is promising, while OUT/cost/difficulty evidence is still
 missing.
+
+## Prepared Follow-Up
+
+A8 has been declared to isolate the missing Stage 4 comparison:
+
+```bash
+CUDA_VISIBLE_DEVICES=0 PYTHONPATH=src python scripts/train.py \
+  --config configs/train/package_a_r125_2b_a8_output_action_location_loss.yaml
+```
+
+Post-run comparison:
+
+```bash
+PYTHONPATH=src python scripts/eval.py --config configs/eval/hard_exit_compare.yaml \
+  --baseline-run runs/package_a_r125_2b_A6_no_output_action \
+  --runs runs/package_a_r125_2b_A8_output_action_location_loss \
+  --output experiments/generated/route_core_r125_2b_decision_followup/hard_exit_compare.json
+```
+
+Coverage config:
+
+```text
+configs/eval/r125_2b_decision_followup_coverage.yaml
+```

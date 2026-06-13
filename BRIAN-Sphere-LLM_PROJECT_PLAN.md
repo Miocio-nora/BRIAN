@@ -1680,6 +1680,18 @@ still stop: OUT/hard-exit, cost-control, and difficulty-conditioned compute are
 not proven by Package A. The recommended next step is a minimal R125 follow-up,
 not R350, Global KV, or parallel passing.
 
+The first follow-up unit is now declared as A8:
+
+```text
+configs/train/package_a_r125_2b_a8_output_action_location_loss.yaml
+configs/experiments/route_core_r125_2b_decision_followup.yaml
+```
+
+A8 keeps the 2B data recipe and Package A batch schedule, enables Stage 4
+hard `OUT`, and keeps location loss enabled. Its comparison reference is A6
+(`package_a_r125_2b_A6_no_output_action`) so the next decision can isolate
+whether hard output action helps when location supervision is not removed.
+
 ---
 
 ## 26. One-Sentence Project Definition
