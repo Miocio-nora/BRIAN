@@ -548,6 +548,65 @@ def _write_html(report: dict[str, Any], output_path: Path, *, top_paths: int) ->
 def _aggregate_figure(nodes: list[dict[str, Any]], aggregate: dict[str, Any], *, top_paths: int):
     import plotly.graph_objects as go
 
+    title = f"{aggregate['name']} route paths ({aggregate.get('total_path_count', 0)} samples, exact={aggregate.get('exact')})"
+    traces = _aggregate_traces(nodes, aggregate, top_paths=top_paths, include_input=True)
+    updatemenus = None
+    input_node = _input_node_index(nodes)
+    scene_with_input = _scene_layout(nodes, include_input=True)
+    scene_without_input = _scene_layout(nodes, include_input=False)
+    if input_node is not None:
+        traces_without_input = _aggregate_traces(
+            nodes,
+            _aggregate_without_input_for_display(aggregate, input_node=input_node, top_paths=top_paths),
+            top_paths=top_paths,
+            include_input=False,
+        )
+        for trace in traces_without_input:
+            trace.visible = False
+        show_input_visibility = [True] * len(traces) + [False] * len(traces_without_input)
+        hide_input_visibility = [False] * len(traces) + [True] * len(traces_without_input)
+        traces.extend(traces_without_input)
+        updatemenus = [
+            {
+                "type": "buttons",
+                "direction": "right",
+                "active": 0,
+                "x": 0.0,
+                "y": 1.12,
+                "xanchor": "left",
+                "yanchor": "top",
+                "buttons": [
+                    {
+                        "label": "Show IN",
+                        "method": "update",
+                        "args": [{"visible": show_input_visibility}, {"scene": scene_with_input}],
+                    },
+                    {
+                        "label": "Hide IN",
+                        "method": "update",
+                        "args": [{"visible": hide_input_visibility}, {"scene": scene_without_input}],
+                    },
+                ],
+            }
+        ]
+    fig = go.Figure(data=traces)
+    fig.update_layout(
+        title=title,
+        scene=scene_with_input,
+        updatemenus=updatemenus,
+        margin={"l": 0, "r": 0, "t": 60, "b": 0},
+        showlegend=False,
+    )
+    return fig
+
+
+def _aggregate_traces(
+    nodes: list[dict[str, Any]],
+    aggregate: dict[str, Any],
+    *,
+    top_paths: int,
+    include_input: bool,
+) -> list[Any]:
     edge_rows = list(aggregate.get("edge_counts") or [])
     path_rows = list(aggregate.get("path_counts") or [])[:top_paths]
     node_counts = _counts_by_action(aggregate.get("node_counts"))
@@ -558,21 +617,54 @@ def _aggregate_figure(nodes: list[dict[str, Any]], aggregate: dict[str, Any], *,
     max_path_count = max([int(row.get("count", 0)) for row in path_rows] or [1])
     for row in path_rows:
         traces.append(_path_trace(nodes, row, max_path_count=max_path_count))
-    traces.append(_node_trace(nodes, node_counts))
-    title = f"{aggregate['name']} route paths ({aggregate.get('total_path_count', 0)} samples, exact={aggregate.get('exact')})"
-    fig = go.Figure(data=traces)
-    fig.update_layout(
-        title=title,
-        scene={"xaxis_title": "PC1", "yaxis_title": "PC2", "zaxis_title": "PC3", "aspectmode": "data"},
-        margin={"l": 0, "r": 0, "t": 60, "b": 0},
-        showlegend=False,
-    )
-    return fig
+    traces.append(_node_trace(nodes, node_counts, include_input=include_input))
+    return traces
+
+
+def _aggregate_without_input_for_display(
+    aggregate: dict[str, Any],
+    *,
+    input_node: int,
+    top_paths: int,
+) -> dict[str, Any]:
+    stripped_path_counts: Counter[tuple[int, ...]] = Counter()
+    for row in aggregate.get("path_counts") or []:
+        if not isinstance(row, dict):
+            continue
+        actions = _actions_from_value(row.get("actions"))
+        count = _safe_int(row.get("count"), default=0)
+        path = tuple(action for action in actions if action != input_node)
+        if path and count > 0:
+            stripped_path_counts[path] += count
+    path_rows = [
+        {"actions": list(path), "count": int(count)}
+        for path, count in sorted(stripped_path_counts.items(), key=lambda item: (-item[1], item[0]))[:top_paths]
+    ]
+    display_aggregate = dict(aggregate)
+    display_aggregate["path_counts"] = path_rows
+    display_aggregate["path_counts_returned"] = len(path_rows)
+    display_aggregate["path_counts_truncated"] = len(path_rows) < len(stripped_path_counts)
+    display_aggregate["edge_counts"] = [
+        row
+        for row in aggregate.get("edge_counts") or []
+        if isinstance(row, dict)
+        and _safe_int(row.get("source"), default=-1) != input_node
+        and _safe_int(row.get("target"), default=-1) != input_node
+    ]
+    display_aggregate["node_counts"] = [
+        row
+        for row in aggregate.get("node_counts") or []
+        if isinstance(row, dict) and _safe_int(row.get("action"), default=-1) != input_node
+    ]
+    return display_aggregate
 
 
 def _timeline_figure(nodes: list[dict[str, Any]], frames: list[dict[str, Any]]):
     import plotly.graph_objects as go
 
+    input_node = _input_node_index(nodes)
+    scene_with_input = _scene_layout(nodes, include_input=True)
+    scene_without_input = _scene_layout(nodes, include_input=False)
     edge_keys = sorted(
         {
             (int(edge["source"]), int(edge["target"]))
@@ -586,7 +678,11 @@ def _timeline_figure(nodes: list[dict[str, Any]], frames: list[dict[str, Any]]):
     )
     first_edges = _edge_rows_by_key(first.get("edge_counts", []))
     data = [_edge_trace_for_key(nodes, key, first_edges.get(key, 0), max_edge_count=max_edge_count) for key in edge_keys]
-    data.append(_node_trace(nodes, _counts_by_action(first.get("node_counts"))))
+    if input_node is None:
+        data.append(_node_trace(nodes, _counts_by_action(first.get("node_counts"))))
+    else:
+        data.append(_node_trace(nodes, _counts_by_action(first.get("node_counts")), include_input=False))
+        data.append(_node_trace(nodes, _counts_by_action(first.get("node_counts")), only_input=True))
     plotly_frames = []
     for frame in frames:
         edge_counts = _edge_rows_by_key(frame.get("edge_counts", []))
@@ -600,22 +696,51 @@ def _timeline_figure(nodes: list[dict[str, Any]], frames: list[dict[str, Any]]):
                 name=str(frame.get("step")),
             )
         )
+    play_menu = {
+        "type": "buttons",
+        "buttons": [
+            {
+                "label": "Play",
+                "method": "animate",
+                "args": [None, {"frame": {"duration": 250, "redraw": True}, "fromcurrent": True}],
+            }
+        ],
+    }
+    updatemenus = [play_menu]
+    if input_node is not None:
+        show_input_visibility = [True] * len(data)
+        hide_input_visibility = [
+            not _edge_key_touches_input(key, input_node=input_node)
+            for key in edge_keys
+        ] + [True, False]
+        updatemenus.append(
+            {
+                "type": "buttons",
+                "direction": "right",
+                "active": 0,
+                "x": 0.0,
+                "y": 1.12,
+                "xanchor": "left",
+                "yanchor": "top",
+                "buttons": [
+                    {
+                        "label": "Show IN",
+                        "method": "update",
+                        "args": [{"visible": show_input_visibility}, {"scene": scene_with_input}],
+                    },
+                    {
+                        "label": "Hide IN",
+                        "method": "update",
+                        "args": [{"visible": hide_input_visibility}, {"scene": scene_without_input}],
+                    },
+                ],
+            }
+        )
     fig = go.Figure(data=data, frames=plotly_frames)
     fig.update_layout(
         title="train_log cumulative route path timeline",
-        scene={"xaxis_title": "PC1", "yaxis_title": "PC2", "zaxis_title": "PC3", "aspectmode": "data"},
-        updatemenus=[
-            {
-                "type": "buttons",
-                "buttons": [
-                    {
-                        "label": "Play",
-                        "method": "animate",
-                        "args": [None, {"frame": {"duration": 250, "redraw": True}, "fromcurrent": True}],
-                    }
-                ],
-            }
-        ],
+        scene=scene_with_input,
+        updatemenus=updatemenus,
         sliders=[
             {
                 "steps": [
@@ -632,6 +757,32 @@ def _timeline_figure(nodes: list[dict[str, Any]], frames: list[dict[str, Any]]):
         showlegend=False,
     )
     return fig
+
+
+def _edge_key_touches_input(key: tuple[int, int], *, input_node: int) -> bool:
+    return int(key[0]) == input_node or int(key[1]) == input_node
+
+
+def _scene_layout(nodes: list[dict[str, Any]], *, include_input: bool) -> dict[str, Any]:
+    selected_nodes = [node for node in nodes if include_input or node.get("kind") != "input"]
+    if not selected_nodes:
+        selected_nodes = nodes
+    return {
+        "xaxis": {"title": "PC1", "range": _axis_range([float(node["x"]) for node in selected_nodes])},
+        "yaxis": {"title": "PC2", "range": _axis_range([float(node["y"]) for node in selected_nodes])},
+        "zaxis": {"title": "PC3", "range": _axis_range([float(node["z"]) for node in selected_nodes])},
+        "aspectmode": "data",
+    }
+
+
+def _axis_range(values: list[float]) -> list[float]:
+    if not values:
+        return [-1.0, 1.0]
+    lower = min(values)
+    upper = max(values)
+    span = upper - lower
+    padding = max(0.08 * span, 0.02)
+    return [lower - padding, upper + padding]
 
 
 def _edge_trace(nodes: list[dict[str, Any]], row: dict[str, Any], *, max_edge_count: int):
@@ -690,23 +841,41 @@ def _path_trace(nodes: list[dict[str, Any]], row: dict[str, Any], *, max_path_co
     )
 
 
-def _node_trace(nodes: list[dict[str, Any]], node_counts: dict[int, int]):
+def _node_trace(
+    nodes: list[dict[str, Any]],
+    node_counts: dict[int, int],
+    *,
+    include_input: bool = True,
+    only_input: bool = False,
+):
     import plotly.graph_objects as go
 
-    max_count = max(node_counts.values() or [1])
-    sizes = [8.0 + 18.0 * math.sqrt(node_counts.get(int(node["action"]), 0) / max(1, max_count)) for node in nodes]
+    selected_nodes = []
+    for node in nodes:
+        is_input = node.get("kind") == "input"
+        if only_input and is_input:
+            selected_nodes.append(node)
+        elif not only_input and (include_input or not is_input):
+            selected_nodes.append(node)
+    if not selected_nodes:
+        return go.Scatter3d(x=[None], y=[None], z=[None], mode="markers")
+    max_count = max([node_counts.get(int(node["action"]), 0) for node in selected_nodes] or [1])
+    sizes = [
+        8.0 + 18.0 * math.sqrt(node_counts.get(int(node["action"]), 0) / max(1, max_count))
+        for node in selected_nodes
+    ]
     colors = [
         "#457b9d" if node.get("kind") == "input" else "#d1495b" if node.get("kind") == "out" else "#2a9d8f"
-        for node in nodes
+        for node in selected_nodes
     ]
-    hover = [f"{node['label']}<br>visits={node_counts.get(int(node['action']), 0)}" for node in nodes]
+    hover = [f"{node['label']}<br>visits={node_counts.get(int(node['action']), 0)}" for node in selected_nodes]
     return go.Scatter3d(
-        x=[node["x"] for node in nodes],
-        y=[node["y"] for node in nodes],
-        z=[node["z"] for node in nodes],
+        x=[node["x"] for node in selected_nodes],
+        y=[node["y"] for node in selected_nodes],
+        z=[node["z"] for node in selected_nodes],
         mode="markers+text",
         marker={"size": sizes, "color": colors, "line": {"width": 1, "color": "#222"}},
-        text=[node["label"] for node in nodes],
+        text=[node["label"] for node in selected_nodes],
         textposition="top center",
         hoverinfo="text",
         hovertext=hover,

@@ -7,6 +7,7 @@ import pytest
 
 from brian_sphere_llm.eval.route_path_visualization import (
     _aggregate_from_counts,
+    _aggregate_without_input_for_display,
     _path_counts_from_train_row,
     _project_nodes,
     _write_html,
@@ -95,6 +96,24 @@ def test_aggregate_from_counts_reports_paths_edges_and_nodes() -> None:
     assert {"action": 2, "count": 4} in aggregate["node_counts"]
 
 
+def test_aggregate_without_input_for_display_strips_input_node() -> None:
+    aggregate = _aggregate_from_counts(
+        name="unit",
+        path_counts=Counter({(3, 0, 1, 2): 3, (3, 1, 2): 1}),
+        exact=True,
+        metadata={"sample_count": 4},
+    )
+
+    stripped = _aggregate_without_input_for_display(aggregate, input_node=3, top_paths=8)
+
+    assert stripped["path_counts"] == [
+        {"actions": [0, 1, 2], "count": 3},
+        {"actions": [1, 2], "count": 1},
+    ]
+    assert all(row["source"] != 3 and row["target"] != 3 for row in stripped["edge_counts"])
+    assert all(row["action"] != 3 for row in stripped["node_counts"])
+
+
 def test_write_html_creates_plotly_document(tmp_path: Path) -> None:
     pytest.importorskip("plotly")
     nodes = [
@@ -160,3 +179,6 @@ def test_make_route_path_visualization_from_train_log(tmp_path: Path) -> None:
     assert report["overall_status"] == "pass"
     assert report["nodes"][-1]["label"] == "IN"
     assert report["aggregates"][0]["path_counts"][0]["actions"] == [3, 0, 1, 2]
+    html = output_path.read_text(encoding="utf-8")
+    assert "Show IN" in html
+    assert "Hide IN" in html
