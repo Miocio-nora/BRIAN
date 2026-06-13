@@ -36,6 +36,31 @@ def test_summarize_routes_reports_load_entropy_and_path_diversity() -> None:
     assert summary["route_path_diversity"] == pytest.approx(2 / 3)
 
 
+def test_summarize_routes_can_report_exact_path_and_transition_counts() -> None:
+    route_info = {
+        "route_probs": [
+            torch.tensor([[0.9, 0.05, 0.05], [0.9, 0.05, 0.05], [0.05, 0.9, 0.05]]),
+            torch.tensor([[0.05, 0.9, 0.05], [0.05, 0.05, 0.9], [0.05, 0.05, 0.9]]),
+            torch.tensor([[0.05, 0.05, 0.9], [0.05, 0.05, 0.9], [0.05, 0.05, 0.9]]),
+        ],
+        "selected_actions": [
+            torch.tensor([0, 0, 1]),
+            torch.tensor([1, 2, 2]),
+            torch.tensor([2, 2, 2]),
+        ],
+    }
+
+    summary = summarize_routes(route_info, num_internal_blocks=2, include_path_counts=True)
+
+    assert summary["route_path_counts"] == [
+        {"actions": [0, 1, 2], "count": 1},
+        {"actions": [0, 2], "count": 1},
+        {"actions": [1, 2], "count": 1},
+    ]
+    assert {"source": 0, "target": 2, "count": 1} in summary["route_transition_counts"]
+    assert {"source": 1, "target": 2, "count": 2} in summary["route_transition_counts"]
+
+
 def test_summarize_routes_reports_path_examples_and_position_trajectories() -> None:
     route_info = {
         "route_probs": [

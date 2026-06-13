@@ -28,7 +28,12 @@ def block_load_entropy_from_counts(counts: dict[int, int], num_internal_blocks: 
     return value, normalized
 
 
-def summarize_routes(route_info: dict[str, Any], num_internal_blocks: int) -> dict[str, Any]:
+def summarize_routes(
+    route_info: dict[str, Any],
+    num_internal_blocks: int,
+    *,
+    include_path_counts: bool = False,
+) -> dict[str, Any]:
     if torch is None:
         raise ModuleNotFoundError("PyTorch is required for routing metrics.")
     probs = route_info.get("route_probs")
@@ -59,6 +64,10 @@ def summarize_routes(route_info: dict[str, Any], num_internal_blocks: int) -> di
         summary["route_path_count"] = len(set(paths))
         summary["route_path_diversity"] = len(set(paths)) / max(1, len(paths))
         summary["route_path_examples"] = _path_examples(stacked, max_examples=8)
+        if include_path_counts:
+            path_counts = _path_counts(stacked, out_action=num_internal_blocks)
+            summary["route_path_counts"] = path_counts
+            summary["route_transition_counts"] = _transition_counts(path_counts)
         advances = 0
         skips = 0
         recurs = 0
@@ -151,3 +160,39 @@ def _path_examples(stacked_actions: "torch.Tensor", *, max_examples: int) -> lis
             }
         )
     return examples
+
+
+def _path_counts(stacked_actions: "torch.Tensor", *, out_action: int) -> list[dict[str, Any]]:
+    counts: Counter[tuple[int, ...]] = Counter()
+    for sample_index in range(stacked_actions.size(1)):
+        path = _truncate_at_out(
+            [int(value) for value in stacked_actions[:, sample_index].tolist()],
+            out_action=out_action,
+        )
+        counts[tuple(path)] += 1
+    return [
+        {"actions": list(path), "count": int(count)}
+        for path, count in sorted(counts.items(), key=lambda item: (-item[1], item[0]))
+    ]
+
+
+def _transition_counts(path_counts: list[dict[str, Any]]) -> list[dict[str, int]]:
+    counts: Counter[tuple[int, int]] = Counter()
+    for item in path_counts:
+        actions = [int(value) for value in item.get("actions", [])]
+        count = int(item.get("count", 0))
+        for source, target in zip(actions[:-1], actions[1:]):
+            counts[(source, target)] += count
+    return [
+        {"source": int(source), "target": int(target), "count": int(count)}
+        for (source, target), count in sorted(counts.items(), key=lambda item: (-item[1], item[0]))
+    ]
+
+
+def _truncate_at_out(actions: list[int], *, out_action: int) -> list[int]:
+    truncated: list[int] = []
+    for action in actions:
+        truncated.append(action)
+        if action == out_action:
+            break
+    return truncated

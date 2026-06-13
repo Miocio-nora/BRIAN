@@ -29,11 +29,14 @@ def train_mode_for_stage(stage: str) -> str:
     if stage in {
         "stage3_scheduled_free_routing",
         "stage4_scheduled_free_routing",
+        "stage4_coverage_free_sphere",
         "stage4_output_action",
         "stage5_output_action",
         "stage5_global_kv",
     }:
         return "scheduled"
+    if stage == "stage4_pure_free_sphere":
+        return "free"
     if stage in {"stage6_parallel_passing", "stage7_parallel_passing"}:
         return "parallel"
     raise ValueError(f"Unsupported executable stage: {stage}")

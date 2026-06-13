@@ -10,6 +10,7 @@ from brian_sphere_llm.eval.out_by_difficulty import make_out_by_difficulty_repor
 from brian_sphere_llm.eval.parallel_compare import make_parallel_comparison_report
 from brian_sphere_llm.eval.parallel_passing_report import make_parallel_passing_report
 from brian_sphere_llm.eval.reasoning import make_reasoning_report
+from brian_sphere_llm.eval.route_path_visualization import make_route_path_visualization
 from brian_sphere_llm.eval.stage_gate_report import make_stage_gate_report
 
 __all__ = [
@@ -25,6 +26,7 @@ __all__ = [
     "make_parallel_comparison_report",
     "make_parallel_passing_report",
     "make_reasoning_report",
+    "make_route_path_visualization",
     "make_stage_gate_report",
     "summarize_difficulty_samples",
 ]

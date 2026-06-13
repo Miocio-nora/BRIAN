@@ -9,4 +9,5 @@ torchaudio==2.11.0+cu128
 transformers>=4.44
 datasets>=2.20
 wandb>=0.17
+plotly>=5.22
 pytest>=8.0

@@ -32,6 +32,23 @@ def test_top2_weighted_fusion_is_reported() -> None:
     assert "weighted_fusion_ratio" in output["routing_summary"]
 
 
+def test_free_route_does_not_record_pseudo_targets() -> None:
+    cfg = BrianRouteConfig(
+        base=BaselineConfig(vocab_size=64, context_length=8, layers=4, d_model=32, n_heads=4),
+        pre_blocks=1,
+        route_pool_blocks=2,
+        post_blocks=1,
+        block_position_dim=8,
+        max_route_steps=2,
+    )
+    model = BrianRouteCore(cfg)
+    input_ids = torch.randint(0, 64, (2, 8))
+    output = model(input_ids, targets=input_ids, route_mode="free")
+
+    assert output["route_info"]["route_targets"] == []
+    assert "route_imitation_accuracy" not in output["routing_summary"]
+
+
 def test_later_top_k_enables_weighted_fusion_after_first_step() -> None:
     cfg = BrianRouteConfig(
         base=BaselineConfig(vocab_size=64, context_length=8, layers=4, d_model=32, n_heads=4),
@@ -159,3 +176,37 @@ def test_hard_exit_ignores_out_when_out_is_only_in_topk() -> None:
     for topk_actions in output["route_info"]["topk_actions"]:
         assert torch.all(topk_actions[:, 0] == 0)
         assert torch.all(topk_actions[:, 1] == cfg.route_pool_blocks)
+
+
+def test_route_constraints_suppress_early_out_and_force_final_exit() -> None:
+    cfg = BrianRouteConfig(
+        base=BaselineConfig(vocab_size=64, context_length=8, layers=4, d_model=32, n_heads=4),
+        pre_blocks=1,
+        route_pool_blocks=2,
+        post_blocks=1,
+        block_position_dim=8,
+        max_route_steps=4,
+        hard_exit=True,
+    )
+    model = BrianRouteCore(cfg)
+    _set_router_bias(model, {cfg.route_pool_blocks: 10.0, 0: 0.0, 1: 0.0})
+    input_ids = torch.randint(0, 64, (2, 8))
+
+    output = model(
+        input_ids,
+        targets=input_ids,
+        route_mode="free",
+        hard_exit=True,
+        routing_constraints={
+            "min_exit_step": 5,
+            "early_exit_logit_penalty": 20.0,
+            "force_final_exit": True,
+        },
+    )
+
+    selected = output["route_info"]["selected_actions"]
+    assert len(selected) == cfg.max_route_steps
+    for actions in selected[:-1]:
+        assert torch.all(actions != cfg.route_pool_blocks)
+    assert torch.all(selected[-1] == cfg.route_pool_blocks)
+    assert output["routing_summary"]["first_exit_step_histogram"] == {"4": 2}

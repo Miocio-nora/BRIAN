@@ -11,6 +11,7 @@ from typing import Any
 
 from brian_sphere_llm.data.dataloader import build_dataloader
 from brian_sphere_llm.data.manifest import sha256_text
+from brian_sphere_llm.eval.route_path_visualization import make_route_path_visualization_from_train_log
 from brian_sphere_llm.eval.routing_report import make_routing_report
 from brian_sphere_llm.train.checkpoint import (
     load_checkpoint,
@@ -210,6 +211,7 @@ def train_from_config(config_path: str | Path) -> Path:
     train_log = JsonlLogger(run_dir / "train_log.jsonl") if is_main_process else None
     eval_log = JsonlLogger(run_dir / "eval_log.jsonl") if is_main_process else None
     write_routing_report = _bool_config(config, "write_routing_report_on_checkpoint", default=True)
+    route_path_visualization = _route_path_visualization_config(config, default_interval=save_interval)
     ddp_no_sync_microbatches = _ddp_no_sync_microbatch_count(
         model,
         distributed=distributed,
@@ -312,6 +314,15 @@ def train_from_config(config_path: str | Path) -> Path:
         if train_log is not None:
             train_log.write(row)
         _wandb_log(wandb_run, "train", row)
+        if is_main_process:
+            _maybe_log_route_path_visualization(
+                wandb_run,
+                run_dir=run_dir,
+                model=dist_utils.unwrap_model(model),
+                step=step,
+                max_steps=max_steps,
+                config=route_path_visualization,
+            )
 
         if step % eval_interval == 0 or step == max_steps:
             eval_row = evaluate(model, val_loader, config=config, device=device, route_mode=stage_mode, global_step=step)
@@ -381,11 +392,18 @@ def _forward_for_stage(model: Any, batch: "torch.Tensor", *, config: dict[str, A
         route_mode=route_mode,
         pseudo_policy=str(routing_cfg.get("pseudo_policy", "sequential")),
         loss_weights=loss_weights,
+        routing_constraints=_mapping_config(dict(routing_cfg), "constraints"),
         hard_exit=_bool_mapping_value(
             routing_cfg,
             "hard_exit",
             default=str(config.get("stage")) == "stage4_output_action",
             name="routing.hard_exit",
+        ),
+        log_path_counts=_bool_mapping_value(
+            routing_cfg,
+            "log_path_counts",
+            default=False,
+            name="routing.log_path_counts",
         ),
         router_probability=router_probability,
         global_step=global_step,
@@ -486,6 +504,118 @@ def _wandb_log(wandb_run: Any | None, prefix: str, row: dict[str, Any]) -> None:
         wandb_run.log(payload, step=step)
         return
     wandb_run.log(payload)
+
+
+def _route_path_visualization_config(config: dict[str, Any], *, default_interval: int) -> dict[str, Any]:
+    cfg = dict(_mapping_config(config, "route_path_visualization"))
+    enabled = _bool_value(cfg.get("enabled", False), "route_path_visualization.enabled")
+    interval = _int_config(
+        {"interval": cfg.get("interval", default_interval)},
+        "interval",
+        minimum=1,
+    )
+    top_paths = _int_config({"top_paths": cfg.get("top_paths", 64)}, "top_paths", minimum=1)
+    timeline_max_frames = _int_config(
+        {"timeline_max_frames": cfg.get("timeline_max_frames", 100)},
+        "timeline_max_frames",
+        minimum=1,
+    )
+    upload_to_wandb = _bool_value(
+        cfg.get("upload_to_wandb", True),
+        "route_path_visualization.upload_to_wandb",
+    )
+    output_dir = str(cfg.get("output_dir", "route_path_visualizations"))
+    if not output_dir:
+        raise ValueError("route_path_visualization.output_dir must be a non-empty string.")
+    wandb_key = str(cfg.get("wandb_key", "route_paths"))
+    if not wandb_key:
+        raise ValueError("route_path_visualization.wandb_key must be a non-empty string.")
+    return {
+        "enabled": enabled,
+        "interval": interval,
+        "top_paths": top_paths,
+        "timeline_max_frames": timeline_max_frames,
+        "upload_to_wandb": upload_to_wandb,
+        "output_dir": output_dir,
+        "wandb_key": wandb_key,
+    }
+
+
+def _maybe_log_route_path_visualization(
+    wandb_run: Any | None,
+    *,
+    run_dir: Path,
+    model: Any,
+    step: int,
+    max_steps: int,
+    config: Mapping[str, Any],
+) -> Path | None:
+    if not config.get("enabled"):
+        return None
+    interval = int(config["interval"])
+    if step % interval != 0 and step != max_steps:
+        return None
+    output_dir = run_dir / str(config["output_dir"])
+    output_path = output_dir / f"route_paths_step_{step:08d}.html"
+    try:
+        html_path = make_route_path_visualization_from_train_log(
+            run_dir,
+            model,
+            output_path=output_path,
+            step=step,
+            top_paths=int(config["top_paths"]),
+            timeline_max_frames=int(config["timeline_max_frames"]),
+        )
+    except Exception as exc:  # pragma: no cover - defensive; visualization must not kill training.
+        error = {
+            "step": step,
+            "error_type": type(exc).__name__,
+            "error": str(exc),
+        }
+        JsonlLogger(run_dir / "route_path_visualization_errors.jsonl").write(error)
+        _wandb_log_visualization_error(wandb_run, error)
+        return None
+    if config.get("upload_to_wandb"):
+        _wandb_log_html(
+            wandb_run,
+            key=str(config["wandb_key"]),
+            html_path=html_path,
+            step=step,
+        )
+    return html_path
+
+
+def _wandb_log_html(wandb_run: Any | None, *, key: str, html_path: Path, step: int) -> None:
+    if wandb_run is None:
+        return
+    import wandb
+
+    html_text = html_path.read_text(encoding="utf-8")
+    sidecar_path = html_path.with_suffix(".json")
+    payload: dict[str, Any] = {
+        f"visualization/{key}": wandb.Html(html_text),
+        f"visualization/{key}_html_path": str(html_path),
+        f"visualization/{key}_json_path": str(sidecar_path),
+    }
+    wandb_run.log(payload, step=step)
+    if hasattr(wandb_run, "save"):
+        wandb_run.save(str(html_path))
+        if sidecar_path.exists():
+            wandb_run.save(str(sidecar_path))
+
+
+def _wandb_log_visualization_error(wandb_run: Any | None, error: dict[str, Any]) -> None:
+    if wandb_run is None:
+        return
+    step = error.get("step")
+    payload = {
+        "visualization/route_paths_error_type": error.get("error_type"),
+        "visualization/route_paths_error": error.get("error"),
+    }
+    if isinstance(step, int) and not isinstance(step, bool):
+        wandb_run.log(payload, step=step)
+    else:
+        wandb_run.log(payload)
 
 
 def _wandb_loggable(value: Any) -> bool:

@@ -1,0 +1,22 @@
+experiment_name: route_core_r125_2b_corrected_package_a_followup
+description: >
+  Corrected Package A follow-up around coverage_no23: weak selected-balance,
+  no-position, no-hard-exit, and top1-only ablations.
+baseline_train_config: configs/train/free_sphere_r125_2b_a0_coverage_no23.yaml
+ablations:
+  - id: A0opt
+    name: weak_selected_balance
+    train_config: configs/train/corrected_package_a_r125_2b_a0opt_weak_selected_balance.yaml
+    purpose: Reduce A0 path concentration with one weak selected-block balance setting.
+  - id: Apos
+    name: no_position
+    train_config: configs/train/corrected_package_a_r125_2b_apos_no_position.yaml
+    purpose: Re-test block-position importance under corrected coverage routing.
+  - id: Aout
+    name: no_hard_exit
+    train_config: configs/train/corrected_package_a_r125_2b_aout_no_hard_exit.yaml
+    purpose: Isolate hard terminal OUT behavior under corrected coverage routing.
+  - id: Atop1
+    name: top1_only
+    train_config: configs/train/corrected_package_a_r125_2b_atop1_top1_only.yaml
+    purpose: Test whether later top-2 weighted fusion is necessary for A0 quality.

@@ -24,19 +24,20 @@ Implemented v0.1 pieces:
 - Stage 0 baseline, Stage 1 fixed route, Stage 2 router imitation, and Stage 3 scheduled routing entrypoints;
 - top-2 weighted route fusion for free/scheduled routing;
 - hard `OUT` terminal behavior for Stage 4;
+- corrected free-sphere routing configs with `max_route_steps: 16`, weak cost
+  regularization, balanced-coverage warmup, pure-free ablations, and explicit
+  selected-balance / transition-diversity / exit-boundary losses;
+- route-path visualization reports with optional W&B upload during training;
 - minimal canonical Global KV path with sink + sliding window retention for Stage 5;
 - experimental Stage 6 parallel passing with beam scoring, pruning, shared base Global KV, and per-branch delta memory;
 - JSONL train/eval logs with throughput, latency, CUDA memory diagnostics, model stats, data manifest references, checkpoint save/resume, and routing report generation;
 - B200-compatible conda environment using PyTorch CUDA 12.8 wheels.
 
-The immediate priority is **BRIAN-R125 route-core validation**:
-
-1. Train a fixed decoder-only Transformer baseline.
-2. Implement a fixed route wrapper around the middle blocks.
-3. Train router imitation on sequential and skip/recurrent pseudo routes.
-4. Enable scheduled free routing.
-5. Validate the block-position state.
-6. Validate `OUT` as a terminal routing action.
+The current priority is **corrected BRIAN-R125 free-sphere route-core
+validation**. The original hand-written skip/recur target paths are no longer
+treated as a valid objective; current experiments use coverage warmup or pure
+free routing and judge the router by language-model quality, route coverage,
+path diversity, block usage, and visualized routing behavior.
 
 Formal Package A on `r125_main_2b` completed on 2026-06-13 with `batch_size: 32`
 and one single-GPU job per GPU across GPUs 0-3. All A0-A8 runs reached
@@ -69,8 +70,9 @@ cost-control, and difficulty-conditioned compute are not proven.
 
 A8 isolated the missing Stage 4 cell: hard `OUT` enabled with location loss
 kept on. It improved over A7 but remained worse than A6 by 0.0235 validation
-loss, so the current scale-up candidate remains the A6-style local route-core
-path without hard OUT. Recompute the A6-vs-A8 comparison with:
+loss under the original Package A rule set. That rule set is now considered
+superseded for routing-quality decisions because its skip/recur targets were
+hand-generated. Recompute the historical A6-vs-A8 comparison with:
 
 ```bash
 PYTHONPATH=src python scripts/eval.py --config configs/eval/hard_exit_compare.yaml \
@@ -78,6 +80,31 @@ PYTHONPATH=src python scripts/eval.py --config configs/eval/hard_exit_compare.ya
   --runs runs/package_a_r125_2b_A8_output_action_location_loss \
   --output experiments/generated/route_core_r125_2b_decision_followup/hard_exit_compare.json
 ```
+
+Corrected free-sphere R125 2B experiments completed on 2026-06-13:
+
+| ID | Route setup | Final validation loss | Routing note |
+|---|---|---:|---|
+| A0 | coverage warmup, no 2/3 losses | 3.0284 | best LM quality so far; all blocks used, but path family remains concentrated |
+| A1 | coverage warmup + selected-balance + transition-diversity | 3.0459 | much higher path diversity and block balance, slightly worse LM quality |
+| B0 | pure free, no 2/3 losses | 3.1557 | weaker LM quality with route concentration |
+| B1 | pure free + selected-balance + transition-diversity | 3.1143 | improves over B0 but remains behind coverage warmup |
+
+The current follow-up package keeps A0 coverage warmup as the anchor and runs
+four ablations from `configs/experiments/route_core_r125_2b_corrected_package_a_followup.yaml`:
+
+| ID | Purpose | Current status |
+|---|---|---|
+| A0opt | weak selected-balance to reduce A0 path concentration | running on GPU0 |
+| Apos | remove block-position input/loss under corrected routing | running on GPU1 |
+| Aout | disable hard OUT termination under corrected routing | running on GPU2 |
+| Atop1 | top1-only routing instead of later top-2 weighted fusion | completed; validation loss 3.2347 with full path collapse to repeated block 7, so top1-only is not a viable current direction |
+
+These runs keep only `checkpoint_latest` and upload route-path visualizations to
+W&B through the default `brian-sphere-llm` project.
+
+The corrected route-core judgment is tracked in
+[reports/corrected_free_sphere_r125_2b_experiment_judgment.md](./reports/corrected_free_sphere_r125_2b_experiment_judgment.md).
 
 See [BRIAN-Sphere-LLM_PROJECT_PLAN.md](./BRIAN-Sphere-LLM_PROJECT_PLAN.md) for the full technical plan.
 See [CODEX_GUIDANCE.md](./CODEX_GUIDANCE.md) for implementation guidance.

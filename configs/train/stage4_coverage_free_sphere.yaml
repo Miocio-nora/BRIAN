@@ -1,0 +1,47 @@
+extends: stage1_fixed_route.yaml
+stage: stage4_coverage_free_sphere
+model_config: ../model/brian_r125_sphere16.yaml
+loss_weights:
+  route: 1.0
+  balance: 0.0
+  cost: 0.0002
+  location: 0.02
+  selected_balance: 0.0
+  transition_diversity: 0.0
+  exit_boundary: 0.02
+routing:
+  mode: scheduled
+  pseudo_policy: balanced_coverage
+  hard_exit: true
+  log_path_counts: true
+  constraints:
+    min_exit_step: 8
+    exit_ramp_start: 12
+    early_exit_logit_penalty: 8.0
+    exit_ramp_logit_bias: 3.0
+    final_exit_logit_bias: 6.0
+    force_final_exit: true
+  schedule:
+    - max_step: 200
+      router_probability: 0.10
+      lambda_route: 1.0
+    - max_step: 500
+      router_probability: 0.40
+      lambda_route: 0.4
+    - max_step: 900
+      router_probability: 0.70
+      lambda_route: 0.1
+    - max_step: 1200
+      router_probability: 0.90
+      lambda_route: 0.02
+    - max_step: 1500
+      router_probability: 1.00
+      lambda_route: 0.0
+route_path_visualization:
+  enabled: true
+  interval: 2500
+  upload_to_wandb: true
+  output_dir: route_path_visualizations
+  wandb_key: route_paths
+  top_paths: 64
+  timeline_max_frames: 100

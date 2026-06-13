@@ -1,0 +1,6 @@
+extends: free_sphere_r125_2b_a0_coverage_no23.yaml
+run_name: corrected_package_a_r125_2b_Atop1_top1_only
+model_config: ../model/brian_r125_sphere16_top1.yaml
+wandb:
+  group: corrected_package_a_r125_2b
+  tags: [corrected_package_a, r125, 2b, Atop1, coverage_warmup, top1_only]

@@ -5,6 +5,11 @@ Date: 2026-06-13
 Scope: completed `r125_main_2b` Package A runs A0-A8. This judgment uses the
 experimental design and observed results, not merely the presence of artifacts.
 
+Update: the original hand-written mixed skip/recur target path objective is now
+considered superseded for routing-quality decisions. The corrected free-sphere
+R125 2B results are tracked separately in
+[corrected_free_sphere_r125_2b_experiment_judgment.md](./corrected_free_sphere_r125_2b_experiment_judgment.md).
+
 ## Decision
 
 Do not scale this result directly to R350, Global KV, or parallel passing yet.

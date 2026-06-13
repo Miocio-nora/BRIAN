@@ -1,0 +1,4 @@
+extends: brian_r125_sphere16.yaml
+model_name: brian_r125_sphere16_top1
+top_k: 1
+later_top_k: 1

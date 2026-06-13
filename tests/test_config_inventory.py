@@ -373,6 +373,8 @@ def test_scheduled_train_configs_keep_curriculum_schedule() -> None:
 
 def test_output_action_and_later_train_configs_keep_hard_exit_enabled() -> None:
     hard_exit_stages = {
+        "stage4_coverage_free_sphere",
+        "stage4_pure_free_sphere",
         "stage4_output_action",
         "stage5_output_action",
         "stage5_global_kv",
@@ -380,6 +382,9 @@ def test_output_action_and_later_train_configs_keep_hard_exit_enabled() -> None:
         "stage7_parallel_passing",
     }
     no_hard_exit_stages = {"stage4_scheduled_free_routing"}
+    hard_exit_ablations = {
+        CONFIG_ROOT / "train" / "corrected_package_a_r125_2b_aout_no_hard_exit.yaml",
+    }
     checked_hard_exit: list[Path] = []
     checked_no_hard_exit: list[Path] = []
 
@@ -388,6 +393,10 @@ def test_output_action_and_later_train_configs_keep_hard_exit_enabled() -> None:
         stage = config.get("stage")
         routing = config.get("routing", {})
         assert isinstance(routing, dict), path
+        if path in hard_exit_ablations:
+            checked_no_hard_exit.append(path)
+            assert routing.get("hard_exit", False) is not True, path
+            continue
         if stage in hard_exit_stages:
             checked_hard_exit.append(path)
             assert routing.get("hard_exit") is True, path
@@ -430,6 +439,62 @@ def test_experiment_manifests_reference_train_configs() -> None:
                 _load_config(train_config_path, errors)
 
     assert errors == []
+
+
+def test_free_sphere_2x2_configs_match_ablation_matrix() -> None:
+    expected = {
+        "free_sphere_r125_2b_a0_coverage_no23.yaml": {
+            "stage": "stage4_coverage_free_sphere",
+            "mode": "scheduled",
+            "pseudo_policy": "balanced_coverage",
+            "selected_balance": 0.0,
+            "transition_diversity": 0.0,
+        },
+        "free_sphere_r125_2b_a1_coverage_23loss.yaml": {
+            "stage": "stage4_coverage_free_sphere",
+            "mode": "scheduled",
+            "pseudo_policy": "balanced_coverage",
+            "selected_balance": 0.02,
+            "transition_diversity": 0.005,
+        },
+        "free_sphere_r125_2b_b0_pure_no23.yaml": {
+            "stage": "stage4_pure_free_sphere",
+            "mode": "free",
+            "pseudo_policy": None,
+            "selected_balance": 0.0,
+            "transition_diversity": 0.0,
+        },
+        "free_sphere_r125_2b_b1_pure_23loss.yaml": {
+            "stage": "stage4_pure_free_sphere",
+            "mode": "free",
+            "pseudo_policy": None,
+            "selected_balance": 0.02,
+            "transition_diversity": 0.005,
+        },
+    }
+
+    for filename, values in expected.items():
+        train_config = load_config(CONFIG_ROOT / "train" / filename)
+        model_config = load_config((CONFIG_ROOT / "train" / filename).parent / train_config["model_config"])
+        routing = train_config["routing"]
+        loss_weights = train_config["loss_weights"]
+        route_path_visualization = train_config["route_path_visualization"]
+        assert train_config["stage"] == values["stage"]
+        assert routing["mode"] == values["mode"]
+        assert routing.get("pseudo_policy") == values["pseudo_policy"]
+        assert routing["hard_exit"] is True
+        assert routing["log_path_counts"] is True
+        assert routing["constraints"]["min_exit_step"] == 8
+        assert routing["constraints"]["exit_ramp_start"] == 12
+        assert routing["constraints"]["force_final_exit"] is True
+        assert route_path_visualization["enabled"] is True
+        assert route_path_visualization["upload_to_wandb"] is True
+        assert route_path_visualization["interval"] == 2500
+        assert model_config["route_pool_blocks"] == 8
+        assert model_config["max_route_steps"] == 16
+        assert loss_weights["cost"] == 0.0002
+        assert loss_weights["selected_balance"] == values["selected_balance"]
+        assert loss_weights["transition_diversity"] == values["transition_diversity"]
 
 
 def test_experiment_manifests_keep_shared_data_config_for_validation() -> None:
@@ -883,6 +948,8 @@ def _validate_train_config(config: dict[str, Any], path: Path, errors: list[str]
             errors.append(f"{path}: {key} must be a boolean")
     if "loss_weights" in config:
         _validate_loss_weights_config(config.get("loss_weights"), path, errors)
+    if "route_path_visualization" in config:
+        _validate_route_path_visualization_config(config.get("route_path_visualization"), path, errors)
     routing = config.get("routing", {})
     if routing:
         if not isinstance(routing, dict):
@@ -897,12 +964,46 @@ def _validate_loss_weights_config(loss_weights: Any, path: Path, errors: list[st
     if not isinstance(loss_weights, dict):
         errors.append(f"{path}: loss_weights must be a mapping")
         return
-    allowed = {"route", "balance", "cost", "location"}
+    allowed = {
+        "route",
+        "balance",
+        "cost",
+        "location",
+        "selected_balance",
+        "transition_diversity",
+        "exit_boundary",
+    }
     for key, value in loss_weights.items():
         if key not in allowed:
             errors.append(f"{path}: unknown loss weight {key!r}")
             continue
         _float_config_value(value, f"loss_weights.{key}", path, errors, minimum=0.0)
+
+
+def _validate_route_path_visualization_config(value: Any, path: Path, errors: list[str]) -> None:
+    if not isinstance(value, dict):
+        errors.append(f"{path}: route_path_visualization must be a mapping")
+        return
+    allowed = {
+        "enabled",
+        "interval",
+        "upload_to_wandb",
+        "output_dir",
+        "wandb_key",
+        "top_paths",
+        "timeline_max_frames",
+    }
+    for key, item in value.items():
+        if key not in allowed:
+            errors.append(f"{path}: unknown route_path_visualization key {key!r}")
+            continue
+        if key in {"enabled", "upload_to_wandb"}:
+            if not isinstance(item, bool):
+                errors.append(f"{path}: route_path_visualization.{key} must be a boolean")
+        elif key in {"interval", "top_paths", "timeline_max_frames"}:
+            _int_config_value(item, f"route_path_visualization.{key}", path, errors, minimum=1)
+        elif not isinstance(item, str) or not item:
+            errors.append(f"{path}: route_path_visualization.{key} must be a non-empty string")
 
 
 def _validate_routing_config(
@@ -913,14 +1014,18 @@ def _validate_routing_config(
     stage_mode: str | None,
 ) -> None:
     mode = routing.get("mode")
-    if mode is not None and mode not in {"fixed", "pseudo", "scheduled", "parallel"}:
-        errors.append(f"{path}: routing.mode must be fixed, pseudo, scheduled, or parallel")
+    if mode is not None and mode not in {"fixed", "pseudo", "scheduled", "free", "parallel"}:
+        errors.append(f"{path}: routing.mode must be fixed, pseudo, scheduled, free, or parallel")
     if stage_mode == "baseline":
         errors.append(f"{path}: baseline train configs must not declare routing")
     elif stage_mode is not None and mode != stage_mode:
         errors.append(f"{path}: routing.mode must match executable stage mode {stage_mode}")
     if "hard_exit" in routing and not isinstance(routing.get("hard_exit"), bool):
         errors.append(f"{path}: routing.hard_exit must be a boolean")
+    if "log_path_counts" in routing and not isinstance(routing.get("log_path_counts"), bool):
+        errors.append(f"{path}: routing.log_path_counts must be a boolean")
+    if "constraints" in routing and routing.get("constraints") is not None:
+        _validate_routing_constraints_config(routing.get("constraints"), path, errors)
     _validate_pseudo_policy_config(routing, path, errors)
     if mode == "scheduled":
         _validate_scheduled_routing_config(routing, path, errors)
@@ -931,10 +1036,14 @@ def _validate_routing_config(
 def _validate_pseudo_policy_config(routing: dict[str, Any], path: Path, errors: list[str]) -> None:
     mode = routing.get("mode")
     policy = routing.get("pseudo_policy")
-    allowed = {"sequential", "mixed_skip_recur"}
+    allowed = {"sequential", "mixed_skip_recur", "balanced_coverage"}
     if mode == "parallel":
         if policy is not None:
             errors.append(f"{path}: routing.pseudo_policy must be omitted for parallel routing")
+        return
+    if mode == "free":
+        if policy is not None:
+            errors.append(f"{path}: routing.pseudo_policy must be omitted for free routing")
         return
     if mode in {"fixed", "pseudo", "scheduled"} and policy is None:
         errors.append(f"{path}: routing.pseudo_policy must be declared for {mode} routing")
@@ -943,6 +1052,26 @@ def _validate_pseudo_policy_config(routing: dict[str, Any], path: Path, errors: 
         errors.append(f"{path}: routing.pseudo_policy must be one of {sorted(allowed)}")
     if mode == "fixed" and policy != "sequential":
         errors.append(f"{path}: fixed routing must use sequential pseudo_policy")
+
+
+def _validate_routing_constraints_config(constraints: Any, path: Path, errors: list[str]) -> None:
+    if not isinstance(constraints, dict):
+        errors.append(f"{path}: routing.constraints must be a mapping")
+        return
+    int_keys = {"min_exit_step", "exit_ramp_start"}
+    float_keys = {"early_exit_logit_penalty", "exit_ramp_logit_bias", "final_exit_logit_bias"}
+    bool_keys = {"force_final_exit"}
+    allowed = int_keys | float_keys | bool_keys
+    for key, value in constraints.items():
+        if key not in allowed:
+            errors.append(f"{path}: unknown routing constraint {key!r}")
+            continue
+        if key in int_keys:
+            _int_config_value(value, f"routing.constraints.{key}", path, errors, minimum=1)
+        elif key in float_keys:
+            _float_config_value(value, f"routing.constraints.{key}", path, errors, minimum=0.0)
+        elif not isinstance(value, bool):
+            errors.append(f"{path}: routing.constraints.{key} must be a boolean")
 
 
 def _validate_scheduled_routing_config(routing: dict[str, Any], path: Path, errors: list[str]) -> None:

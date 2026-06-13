@@ -1,0 +1,22 @@
+experiment_name: route_core_r125_2b_free_sphere_2x2
+description: >
+  Four-way free-sphere routing comparison: coverage warmup vs pure free,
+  each with and without selected-balance and transition-diversity losses.
+baseline_train_config: configs/train/package_a_r125_2b_a0_baseline.yaml
+ablations:
+  - id: A0
+    name: coverage_no23
+    train_config: configs/train/free_sphere_r125_2b_a0_coverage_no23.yaml
+    purpose: Coverage warmup plus late exit boundary without selected-balance or transition-diversity losses.
+  - id: A1
+    name: coverage_23loss
+    train_config: configs/train/free_sphere_r125_2b_a1_coverage_23loss.yaml
+    purpose: Coverage warmup plus selected-balance and transition-diversity losses.
+  - id: B0
+    name: pure_no23
+    train_config: configs/train/free_sphere_r125_2b_b0_pure_no23.yaml
+    purpose: Pure free routing plus late exit boundary without selected-balance or transition-diversity losses.
+  - id: B1
+    name: pure_23loss
+    train_config: configs/train/free_sphere_r125_2b_b1_pure_23loss.yaml
+    purpose: Pure free routing plus selected-balance and transition-diversity losses.

@@ -20,6 +20,8 @@ reports/generated/
 reports/*.json
 !reports/.gitkeep
 experiments/generated/
+logs/
+wandb/
 
 # Checkpoints and model artifacts
 checkpoint*/

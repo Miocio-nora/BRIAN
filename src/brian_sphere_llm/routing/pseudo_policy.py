@@ -66,6 +66,18 @@ def mixed_skip_recur_actions(
     return actions
 
 
+def balanced_coverage_actions(
+    num_internal_blocks: int,
+    max_route_steps: int,
+    batch_size: int,
+    device: "torch.device",
+) -> list["torch.Tensor"]:
+    if torch is None:
+        raise ModuleNotFoundError("PyTorch is required for pseudo policies.")
+    batch_offsets = torch.arange(batch_size, device=device, dtype=torch.long) % num_internal_blocks
+    return [(batch_offsets + step) % num_internal_blocks for step in range(max_route_steps)]
+
+
 def actions_for_policy(
     policy: str,
     *,
@@ -79,4 +91,6 @@ def actions_for_policy(
         return sequential_actions(num_internal_blocks, batch_size, device)
     if policy == "mixed_skip_recur":
         return mixed_skip_recur_actions(num_internal_blocks, max_route_steps, batch_size, device, difficulty)
+    if policy == "balanced_coverage":
+        return balanced_coverage_actions(num_internal_blocks, max_route_steps, batch_size, device)
     raise ValueError(f"Unknown pseudo policy: {policy}")

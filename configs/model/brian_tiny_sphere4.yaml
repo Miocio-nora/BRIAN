@@ -1,0 +1,6 @@
+extends: brian_tiny.yaml
+model_name: brian_tiny_sphere4
+max_route_steps: 4
+top_k: 1
+later_top_k: 2
+hard_exit: true

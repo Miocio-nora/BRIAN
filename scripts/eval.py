@@ -28,6 +28,7 @@ from brian_sphere_llm.eval.position_ablation import make_position_ablation_repor
 from brian_sphere_llm.eval.pseudo_route_curriculum import make_pseudo_route_curriculum_report
 from brian_sphere_llm.eval.reasoning import make_reasoning_report
 from brian_sphere_llm.eval.risk_audit import make_risk_audit_report
+from brian_sphere_llm.eval.route_path_visualization import make_route_path_visualization
 from brian_sphere_llm.eval.routing_report import make_routing_report
 from brian_sphere_llm.eval.scheduled_routing import make_scheduled_routing_report
 from brian_sphere_llm.eval.stage_gate_report import make_stage_gate_report
@@ -383,6 +384,22 @@ def main() -> None:
             output_path=args.output or config.get("output_path"),
             profile=str(config.get("profile", "auto")),
             include_baseline=_bool_config(config, "include_baseline", default=False),
+        )
+    elif eval_name == "route_path_visualization":
+        if not args.run:
+            raise SystemExit("route_path_visualization requires --run")
+        report = make_route_path_visualization(
+            args.run,
+            output_path=args.output or config.get("output_path"),
+            source=str(config.get("source", "checkpoint")),
+            checkpoint=str(args.checkpoint or config.get("checkpoint", "checkpoint_latest")),
+            split=args.split or str(config.get("split", "val")),
+            batch_size=_optional_int_arg_or_config(args.batch_size, config, "batch_size"),
+            max_batches=_int_arg_or_config(args.max_batches, config, "max_batches", default=8),
+            device_name=str(config.get("device", "auto")),
+            projection=str(config.get("projection", "pca")),
+            top_paths=_int_config(config, "top_paths", default=64),
+            timeline_max_frames=_int_config(config, "timeline_max_frames", default=100),
         )
     else:
         if not args.run:

@@ -7,7 +7,7 @@ import yaml
 torch = pytest.importorskip("torch")
 
 from brian_sphere_llm.eval.pseudo_route_curriculum import _overall_status, make_pseudo_route_curriculum_report
-from brian_sphere_llm.routing.pseudo_policy import mixed_skip_recur_actions
+from brian_sphere_llm.routing.pseudo_policy import balanced_coverage_actions, mixed_skip_recur_actions
 from brian_sphere_llm.utils.config import load_config
 
 
@@ -25,6 +25,20 @@ def test_mixed_skip_recur_policy_conditions_actions_by_difficulty() -> None:
     assert paths[0] == [0, 2, 5, 5]
     assert paths[1] == [0, 1, 2, 5]
     assert paths[2] == [0, 0, 1, 5]
+
+
+def test_balanced_coverage_policy_covers_all_internal_blocks() -> None:
+    actions = balanced_coverage_actions(
+        num_internal_blocks=4,
+        max_route_steps=8,
+        batch_size=4,
+        device=torch.device("cpu"),
+    )
+    paths = torch.stack(actions).T.tolist()
+
+    assert paths[0] == [0, 1, 2, 3, 0, 1, 2, 3]
+    assert paths[1] == [1, 2, 3, 0, 1, 2, 3, 0]
+    assert sorted(set(torch.stack(actions).flatten().tolist())) == [0, 1, 2, 3]
 
 
 def test_pseudo_route_curriculum_report_uses_baseline_difficulty_bins(tmp_path: Path) -> None:

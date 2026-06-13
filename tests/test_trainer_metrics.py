@@ -10,6 +10,7 @@ torch = pytest.importorskip("torch")
 from brian_sphere_llm.data.pack import write_index, write_token_bin
 from brian_sphere_llm.data.manifest import sha256_text
 from brian_sphere_llm.model.baseline import BaselineConfig, BaselineLM
+from brian_sphere_llm.train.stage_runner import train_mode_for_stage
 from brian_sphere_llm.train.trainer import (
     _bool_config,
     _ddp_no_sync_microbatch_count,
@@ -27,6 +28,7 @@ from brian_sphere_llm.train.trainer import (
     _model_stats,
     _next_train_batch,
     _restore_dataloader_position,
+    _route_path_visualization_config,
     _schedule_values,
     _set_sampler_epoch,
     _wrap_distributed_model,
@@ -212,6 +214,53 @@ def test_forward_for_stage_parses_string_false_hard_exit() -> None:
     )
 
     assert model.hard_exit is False
+
+
+def test_forward_for_stage_passes_routing_constraints() -> None:
+    class CaptureModel:
+        routing_constraints = None
+
+        def __call__(self, *args, **kwargs):
+            self.routing_constraints = kwargs["routing_constraints"]
+            return {"loss": torch.tensor(0.0)}
+
+    model = CaptureModel()
+    batch = torch.randint(0, 8, (1, 4))
+
+    _forward_for_stage(
+        model,
+        batch,
+        config={
+            "stage": "stage4_pure_free_sphere",
+            "routing": {
+                "mode": "free",
+                "hard_exit": True,
+                "constraints": {"min_exit_step": 3, "force_final_exit": True},
+            },
+        },
+        route_mode="free",
+        global_step=1,
+    )
+
+    assert model.routing_constraints == {"min_exit_step": 3, "force_final_exit": True}
+
+
+def test_new_free_sphere_stage_modes_resolve() -> None:
+    assert train_mode_for_stage("stage4_coverage_free_sphere") == "scheduled"
+    assert train_mode_for_stage("stage4_pure_free_sphere") == "free"
+
+
+def test_route_path_visualization_config_uses_save_interval_default() -> None:
+    config = _route_path_visualization_config(
+        {"route_path_visualization": {"enabled": True, "top_paths": 12}},
+        default_interval=2500,
+    )
+
+    assert config["enabled"] is True
+    assert config["interval"] == 2500
+    assert config["top_paths"] == 12
+    assert config["upload_to_wandb"] is True
+    assert config["output_dir"] == "route_path_visualizations"
 
 
 def test_distributed_cuda_device_uses_local_rank(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -679,6 +728,8 @@ def test_train_from_config_logs_routed_behavior(tmp_path: Path) -> None:
     assert isinstance(train_row["topk_block_histogram"], dict)
     assert isinstance(train_row["exit_step_distribution"], list)
     assert train_row["route_path_examples"]
+    assert train_row["route_path_counts"]
+    assert train_row["route_transition_counts"]
     report = json.loads((run_dir / "routing_report.json").read_text(encoding="utf-8"))
     assert report["summary"]["route_entropy"] >= 0.0
     assert report["latest_route_path_examples"]
@@ -853,7 +904,7 @@ def _write_tiny_routed_train_fixture(tmp_path: Path) -> Path:
             "save_interval": 1,
             "learning_rate": 0.001,
             "resume": False,
-            "routing": {"pseudo_policy": "sequential"},
+            "routing": {"pseudo_policy": "sequential", "log_path_counts": True},
             "loss_weights": {"route": 1.0, "balance": 0.01, "cost": 0.01, "location": 0.01},
         },
         train_config,

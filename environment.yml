@@ -18,3 +18,4 @@ dependencies:
       - transformers>=4.44
       - datasets>=2.20
       - wandb>=0.17
+      - plotly>=5.22

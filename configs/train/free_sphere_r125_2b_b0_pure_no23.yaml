@@ -1,0 +1,11 @@
+extends: stage4_pure_free_sphere.yaml
+run_name: free_sphere_r125_2b_B0_pure_no23
+data_config: ../data/r125_main_2b.yaml
+batch_size: 32
+max_steps: 30518
+eval_interval: 2500
+save_interval: 2500
+save_best_checkpoint: false
+wandb:
+  group: free_sphere_r125_2b_2x2
+  tags: [free_sphere, r125, 2b, B0, pure_free, no23]

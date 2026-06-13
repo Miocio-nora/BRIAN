@@ -1,0 +1,8 @@
+extends: free_sphere_r125_2b_a0_coverage_no23.yaml
+run_name: free_sphere_r125_2b_A1_coverage_23loss
+loss_weights:
+  selected_balance: 0.02
+  transition_diversity: 0.005
+wandb:
+  group: free_sphere_r125_2b_2x2
+  tags: [free_sphere, r125, 2b, A1, coverage_warmup, loss23]

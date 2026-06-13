@@ -1,0 +1,8 @@
+eval_name: route_path_visualization
+source: both
+checkpoint: checkpoint_latest
+split: val
+max_batches: 8
+projection: pca
+top_paths: 64
+timeline_max_frames: 100

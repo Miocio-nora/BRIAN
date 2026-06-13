@@ -1,0 +1,6 @@
+extends: brian_r125.yaml
+model_name: brian_r125_sphere16
+max_route_steps: 16
+top_k: 1
+later_top_k: 2
+hard_exit: true

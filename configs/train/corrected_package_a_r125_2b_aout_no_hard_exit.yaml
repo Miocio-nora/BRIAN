@@ -1,0 +1,7 @@
+extends: free_sphere_r125_2b_a0_coverage_no23.yaml
+run_name: corrected_package_a_r125_2b_Aout_no_hard_exit
+routing:
+  hard_exit: false
+wandb:
+  group: corrected_package_a_r125_2b
+  tags: [corrected_package_a, r125, 2b, Aout, coverage_warmup, no_hard_exit]

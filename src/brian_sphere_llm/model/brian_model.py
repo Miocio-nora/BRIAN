@@ -7,8 +7,11 @@ from typing import Any
 
 from brian_sphere_llm.losses.balance_loss import block_balance_loss
 from brian_sphere_llm.losses.cost_loss import route_cost_loss
+from brian_sphere_llm.losses.exit_boundary_loss import exit_boundary_loss
 from brian_sphere_llm.losses.location_loss import location_loss
 from brian_sphere_llm.losses.route_loss import route_imitation_loss
+from brian_sphere_llm.losses.selected_balance_loss import selected_block_balance_loss
+from brian_sphere_llm.losses.transition_diversity_loss import transition_diversity_loss
 from brian_sphere_llm.memory import CanonicalGlobalCache, GlobalReadAdapter, GlobalWriteAdapter
 from brian_sphere_llm.model.baseline import BaselineConfig, _float_value, _int_value
 from brian_sphere_llm.model.exit_block import ExitBlock
@@ -197,11 +200,14 @@ class BrianRouteCore(ModuleBase):
         route_mode: str = "free",
         pseudo_policy: str = "sequential",
         loss_weights: Mapping[str, Any] | None = None,
+        routing_constraints: Mapping[str, Any] | None = None,
         hard_exit: bool | None = None,
+        log_path_counts: bool = False,
         router_probability: float | None = None,
         global_step: int = 0,
     ) -> dict[str, Any]:
         loss_weights = _loss_weights_mapping(loss_weights)
+        routing_constraints = _routing_constraints_mapping(routing_constraints)
         hard_exit = self.config.hard_exit if hard_exit is None else hard_exit
         batch_size = input_ids.size(0)
         hidden = self.token_embedding(input_ids)
@@ -265,10 +271,12 @@ class BrianRouteCore(ModuleBase):
                     torch.tensor(float(global_state.slots), device=input_ids.device, dtype=hidden.dtype)
                 )
             logits = self._apply_location_bias(self.router(hidden, self._router_position(position)), position)
+            logits = self._apply_route_constraints(logits, step, max_steps, routing_constraints)
             probs = F.softmax(logits, dim=-1)
             effective_top_k = self._top_k_for_step(step)
             top_actions, top_weights = self._topk_actions(probs, effective_top_k)
-            if step < len(route_targets):
+            has_route_target = route_mode in {"fixed", "pseudo", "scheduled"} and step < len(route_targets)
+            if has_route_target:
                 target_action = route_targets[step]
             else:
                 target_action = torch.full((batch_size,), self.out_action, dtype=torch.long, device=input_ids.device)
@@ -290,6 +298,8 @@ class BrianRouteCore(ModuleBase):
             else:
                 raise ValueError(f"Unknown route_mode: {route_mode}")
 
+            if self._force_final_exit(step, max_steps, routing_constraints):
+                selected = torch.full_like(selected, self.out_action)
             selected = torch.where(exited, torch.full_like(selected, self.out_action), selected)
             use_weighted_fusion = use_weighted_fusion & ~exited & (selected != self.out_action)
             exit_now = selected == self.out_action
@@ -309,7 +319,8 @@ class BrianRouteCore(ModuleBase):
             route_info["topk_weights"].append(top_weights)
             route_info["used_weighted_fusion"].append(use_weighted_fusion)
             route_info["exit_flags"].append(exit_now)
-            route_info["route_targets"].append(target_action)
+            if has_route_target:
+                route_info["route_targets"].append(target_action)
             route_info["position_norms"].append(position.norm(dim=-1).mean())
             route_info["location_distance"].append(self.position_table.location_distance(position, probs))
             if hard_exit and torch.all(exited):
@@ -338,7 +349,11 @@ class BrianRouteCore(ModuleBase):
         output: dict[str, Any] = {
             "logits": logits,
             "route_info": route_info,
-            "routing_summary": summarize_routes(route_info, self.config.route_pool_blocks),
+            "routing_summary": summarize_routes(
+                route_info,
+                self.config.route_pool_blocks,
+                include_path_counts=log_path_counts,
+            ),
         }
         if targets is not None:
             lm = build_causal_lm_loss(logits, targets)
@@ -346,16 +361,37 @@ class BrianRouteCore(ModuleBase):
             balance = block_balance_loss(route_info["route_probs"], self.config.route_pool_blocks).to(lm.device)
             cost = route_cost_loss(route_info["route_probs"], self.config.route_pool_blocks).to(lm.device)
             loc = location_loss(route_info["location_distance"]).to(lm.device)
+            selected_balance = selected_block_balance_loss(
+                route_info["route_probs"],
+                route_info["selected_actions"],
+                self.config.route_pool_blocks,
+            ).to(lm.device)
+            transition_diversity = transition_diversity_loss(
+                route_info["route_probs"],
+                route_info["selected_actions"],
+                self.config.route_pool_blocks,
+            ).to(lm.device)
+            exit_boundary = exit_boundary_loss(
+                route_info["route_probs"],
+                self.config.route_pool_blocks,
+                {**routing_constraints, "max_route_steps": max_steps},
+            ).to(lm.device)
             route_weight = _loss_weight(loss_weights, "route")
             balance_weight = _loss_weight(loss_weights, "balance")
             cost_weight = _loss_weight(loss_weights, "cost")
             location_weight = _loss_weight(loss_weights, "location")
+            selected_balance_weight = _loss_weight(loss_weights, "selected_balance")
+            transition_diversity_weight = _loss_weight(loss_weights, "transition_diversity")
+            exit_boundary_weight = _loss_weight(loss_weights, "exit_boundary")
             total = (
                 lm
                 + route_weight * route
                 + balance_weight * balance
                 + cost_weight * cost
                 + location_weight * loc
+                + selected_balance_weight * selected_balance
+                + transition_diversity_weight * transition_diversity
+                + exit_boundary_weight * exit_boundary
             )
             output["loss"] = total
             output["loss_components"] = {
@@ -364,6 +400,9 @@ class BrianRouteCore(ModuleBase):
                 "balance_loss": balance.detach(),
                 "cost_loss": cost.detach(),
                 "location_loss": loc.detach(),
+                "selected_balance_loss": selected_balance.detach(),
+                "transition_diversity_loss": transition_diversity.detach(),
+                "exit_boundary_loss": exit_boundary.detach(),
             }
         return output
 
@@ -668,6 +707,39 @@ class BrianRouteCore(ModuleBase):
             logits.dtype
         )
 
+    def _apply_route_constraints(
+        self,
+        logits: torch.Tensor,
+        step: int,
+        max_steps: int,
+        constraints: Mapping[str, Any],
+    ) -> torch.Tensor:
+        if not constraints:
+            return logits
+        step_number = step + 1
+        adjusted = logits
+        min_exit_step = _constraint_int(constraints, "min_exit_step", default=1, minimum=1)
+        early_penalty = _constraint_float(constraints, "early_exit_logit_penalty", default=0.0, minimum=0.0)
+        if early_penalty > 0.0 and step_number < min_exit_step:
+            adjusted = adjusted.clone()
+            adjusted[:, self.out_action] = adjusted[:, self.out_action] - early_penalty
+
+        ramp_start = _constraint_int(constraints, "exit_ramp_start", default=max_steps, minimum=1)
+        ramp_bias = _constraint_float(constraints, "exit_ramp_logit_bias", default=0.0, minimum=0.0)
+        if ramp_bias > 0.0 and step_number >= ramp_start:
+            progress = (step_number - ramp_start + 1) / max(1, max_steps - ramp_start + 1)
+            adjusted = adjusted.clone()
+            adjusted[:, self.out_action] = adjusted[:, self.out_action] + ramp_bias * progress
+
+        final_bias = _constraint_float(constraints, "final_exit_logit_bias", default=0.0, minimum=0.0)
+        if final_bias > 0.0 and step_number >= max_steps:
+            adjusted = adjusted.clone()
+            adjusted[:, self.out_action] = adjusted[:, self.out_action] + final_bias
+        return adjusted
+
+    def _force_final_exit(self, step: int, max_steps: int, constraints: Mapping[str, Any]) -> bool:
+        return _constraint_bool(constraints, "force_final_exit", default=False) and step + 1 >= max_steps
+
     def _global_write(self, hidden: torch.Tensor, actions: torch.Tensor | None = None) -> torch.Tensor:
         assert self.global_write is not None
         if not isinstance(self.global_write, nn.ModuleList):
@@ -773,8 +845,47 @@ def _loss_weights_mapping(loss_weights: Mapping[str, Any] | None) -> Mapping[str
     return loss_weights
 
 
+def _routing_constraints_mapping(routing_constraints: Mapping[str, Any] | None) -> Mapping[str, Any]:
+    if routing_constraints is None:
+        return {}
+    if not isinstance(routing_constraints, Mapping):
+        raise ValueError("routing_constraints must be a mapping.")
+    return routing_constraints
+
+
 def _loss_weight(loss_weights: Mapping[str, Any], key: str) -> float:
     return _float_value(loss_weights.get(key, 0.0), f"loss_weights.{key}", minimum=0.0)
+
+
+def _constraint_int(
+    constraints: Mapping[str, Any],
+    key: str,
+    *,
+    default: int,
+    minimum: int,
+) -> int:
+    value = constraints.get(key, default)
+    if isinstance(value, bool):
+        raise ValueError(f"routing.constraints.{key} must be an integer, not a boolean.")
+    if not isinstance(value, int):
+        raise ValueError(f"routing.constraints.{key} must be an integer.")
+    if value < minimum:
+        raise ValueError(f"routing.constraints.{key} must be >= {minimum}.")
+    return value
+
+
+def _constraint_float(
+    constraints: Mapping[str, Any],
+    key: str,
+    *,
+    default: float,
+    minimum: float,
+) -> float:
+    return _float_value(constraints.get(key, default), f"routing.constraints.{key}", minimum=minimum)
+
+
+def _constraint_bool(constraints: Mapping[str, Any], key: str, *, default: bool) -> bool:
+    return _bool_value(constraints.get(key, default), f"routing.constraints.{key}")
 
 
 def _content_difficulty_ids(input_ids: torch.Tensor) -> torch.Tensor:
