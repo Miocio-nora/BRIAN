@@ -1,0 +1,7 @@
+extends: finegrained_r125_2b_pool16_ain_coverage_no23.yaml
+run_name: finegrained_r125_2b_pool16_Ain_coverage_no23_b16acc2
+batch_size: 16
+gradient_accumulation_steps: 2
+wandb:
+  group: finegrained_r125_2b
+  tags: [finegrained, r125, 2b, pool16, Ain, coverage_warmup, no23, b16acc2, oom_retry]
