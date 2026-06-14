@@ -87,6 +87,14 @@ class BlockPositionTable(ModuleBase):
         distances = torch.cdist(position.unsqueeze(1), self.embeddings.unsqueeze(0)).squeeze(1).pow(2)
         return (probs * distances).sum(dim=-1).mean()
 
+    def input_anchor_loss(self) -> torch.Tensor:
+        if self.mode == "none" or self.input_position is None:
+            return torch.zeros((), dtype=self.embeddings.dtype, device=self.embeddings.device)
+        input_position = F.normalize(self.input_position, dim=-1)
+        internal_positions = F.normalize(self.embeddings[: self.num_internal_blocks], dim=-1)
+        centroid = internal_positions.mean(dim=0).detach()
+        return (input_position - centroid).pow(2).sum()
+
     def action_distances(self, position: torch.Tensor) -> torch.Tensor:
         if self.mode == "none":
             return torch.zeros(

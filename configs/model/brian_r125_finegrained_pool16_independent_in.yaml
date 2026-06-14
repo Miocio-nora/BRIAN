@@ -3,7 +3,7 @@ model_name: brian_r125_finegrained_pool16_independent_in
 route_pool_blocks: 16
 max_route_steps: 32
 route_pool_finegrained: true
-route_block_ffn_multiplier: 1.0
+route_block_ffn_multiplier: 1.25
 independent_input_position: true
 top_k: 1
 later_top_k: 2

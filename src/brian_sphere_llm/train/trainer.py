@@ -393,6 +393,7 @@ def _forward_for_stage(model: Any, batch: "torch.Tensor", *, config: dict[str, A
         pseudo_policy=str(routing_cfg.get("pseudo_policy", "sequential")),
         loss_weights=loss_weights,
         routing_constraints=_mapping_config(dict(routing_cfg), "constraints"),
+        routing_options=routing_cfg,
         hard_exit=_bool_mapping_value(
             routing_cfg,
             "hard_exit",

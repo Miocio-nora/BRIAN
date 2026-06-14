@@ -112,6 +112,12 @@ def summarize_routes(
         distances = torch.stack(route_info["location_distance"])
         summary["location_distance_trajectory"] = [float(value) for value in distances.detach().cpu().flatten().tolist()]
         summary["location_distance_mean"] = float(distances.mean().detach().cpu())
+    noise_std = route_info.get("route_logit_noise_std")
+    if noise_std is not None:
+        if isinstance(noise_std, (int, float)):
+            summary["route_logit_noise_std"] = float(noise_std)
+        elif isinstance(noise_std, torch.Tensor) and noise_std.numel() == 1:
+            summary["route_logit_noise_std"] = float(noise_std.detach().cpu())
     if "global_attention_mass" in route_info and route_info["global_attention_mass"]:
         mass = torch.stack(route_info["global_attention_mass"])
         summary["global_attention_mass"] = float(mass.mean().detach().cpu())

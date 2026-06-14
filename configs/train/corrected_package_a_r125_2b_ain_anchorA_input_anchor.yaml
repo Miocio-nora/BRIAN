@@ -1,0 +1,7 @@
+extends: corrected_package_a_r125_2b_ain_independent_in.yaml
+run_name: corrected_package_a_r125_2b_AinAnchorA_input_anchor
+loss_weights:
+  input_anchor: 0.003
+wandb:
+  group: corrected_package_a_r125_2b
+  tags: [corrected_package_a, r125, 2b, Ain, coverage_warmup, independent_in, input_anchor]

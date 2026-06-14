@@ -158,6 +158,31 @@ def test_independent_input_position_model_stats_and_forward() -> None:
     assert model.model_stats()["independent_input_position"] == "True"
 
 
+def test_independent_input_anchor_loss_is_reported() -> None:
+    model = BrianRouteCore(_config(independent_input_position=True))
+    input_ids = torch.randint(0, 64, (2, 8))
+
+    output = model(input_ids, targets=input_ids, route_mode="fixed", loss_weights={"input_anchor": 0.003})
+
+    assert output["loss_components"]["input_anchor_loss"].item() >= 0.0
+
+
+def test_route_logit_noise_schedule_is_training_only() -> None:
+    model = BrianRouteCore(_config())
+    options = {"logit_noise_std": 0.03, "logit_noise_decay_steps": 8000, "logit_noise_min_std": 0.005}
+
+    model.train()
+    assert model._route_logit_noise_std(0, options) == pytest.approx(0.03)
+    assert model._route_logit_noise_std(8000, options) == pytest.approx(0.005)
+
+    input_ids = torch.randint(0, 64, (2, 8))
+    output = model(input_ids, targets=input_ids, route_mode="fixed", routing_options=options)
+    assert output["routing_summary"]["route_logit_noise_std"] == pytest.approx(0.03)
+
+    model.eval()
+    assert model._route_logit_noise_std(0, options) == 0.0
+
+
 def test_direct_position_addition_uses_hidden_dim_position_state() -> None:
     model = BrianRouteCore(_config(block_position_dim=32, block_position_injection="direct_add"))
     input_ids = torch.randint(0, 64, (2, 8))

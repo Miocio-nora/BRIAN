@@ -221,6 +221,7 @@ class BrianRouteCore(ModuleBase):
         pseudo_policy: str = "sequential",
         loss_weights: Mapping[str, Any] | None = None,
         routing_constraints: Mapping[str, Any] | None = None,
+        routing_options: Mapping[str, Any] | None = None,
         hard_exit: bool | None = None,
         log_path_counts: bool = False,
         router_probability: float | None = None,
@@ -228,6 +229,7 @@ class BrianRouteCore(ModuleBase):
     ) -> dict[str, Any]:
         loss_weights = _loss_weights_mapping(loss_weights)
         routing_constraints = _routing_constraints_mapping(routing_constraints)
+        routing_options = _routing_options_mapping(routing_options)
         hard_exit = self.config.hard_exit if hard_exit is None else hard_exit
         batch_size = input_ids.size(0)
         hidden = self.token_embedding(input_ids)
@@ -254,6 +256,11 @@ class BrianRouteCore(ModuleBase):
             "parallel_delta_cache_slots": [],
             "hard_exit_enabled": bool(hard_exit),
             "max_route_steps": self.config.max_route_steps,
+            "route_logit_noise_std": torch.tensor(
+                self._route_logit_noise_std(global_step, routing_options),
+                dtype=hidden.dtype,
+                device=input_ids.device,
+            ),
         }
         route_targets = self._targets_for_mode(route_mode, pseudo_policy, input_ids)
         max_steps = len(route_targets) if route_mode in {"fixed", "pseudo"} else self.config.max_route_steps
@@ -291,6 +298,7 @@ class BrianRouteCore(ModuleBase):
                     torch.tensor(float(global_state.slots), device=input_ids.device, dtype=hidden.dtype)
                 )
             logits = self._apply_location_bias(self.router(hidden, self._router_position(position)), position)
+            logits = self._apply_route_logit_noise(logits, global_step, routing_options)
             logits = self._apply_route_constraints(logits, step, max_steps, routing_constraints)
             probs = F.softmax(logits, dim=-1)
             effective_top_k = self._top_k_for_step(step)
@@ -396,6 +404,7 @@ class BrianRouteCore(ModuleBase):
                 self.config.route_pool_blocks,
                 {**routing_constraints, "max_route_steps": max_steps},
             ).to(lm.device)
+            input_anchor = self.position_table.input_anchor_loss().to(lm.device)
             route_weight = _loss_weight(loss_weights, "route")
             balance_weight = _loss_weight(loss_weights, "balance")
             cost_weight = _loss_weight(loss_weights, "cost")
@@ -403,6 +412,7 @@ class BrianRouteCore(ModuleBase):
             selected_balance_weight = _loss_weight(loss_weights, "selected_balance")
             transition_diversity_weight = _loss_weight(loss_weights, "transition_diversity")
             exit_boundary_weight = _loss_weight(loss_weights, "exit_boundary")
+            input_anchor_weight = _loss_weight(loss_weights, "input_anchor")
             total = (
                 lm
                 + route_weight * route
@@ -412,6 +422,7 @@ class BrianRouteCore(ModuleBase):
                 + selected_balance_weight * selected_balance
                 + transition_diversity_weight * transition_diversity
                 + exit_boundary_weight * exit_boundary
+                + input_anchor_weight * input_anchor
             )
             output["loss"] = total
             output["loss_components"] = {
@@ -423,6 +434,7 @@ class BrianRouteCore(ModuleBase):
                 "selected_balance_loss": selected_balance.detach(),
                 "transition_diversity_loss": transition_diversity.detach(),
                 "exit_boundary_loss": exit_boundary.detach(),
+                "input_anchor_loss": input_anchor.detach(),
             }
         return output
 
@@ -727,6 +739,32 @@ class BrianRouteCore(ModuleBase):
             logits.dtype
         )
 
+    def _route_logit_noise_std(self, global_step: int, options: Mapping[str, Any]) -> float:
+        if not self.training:
+            return 0.0
+        start = _routing_float(options, "logit_noise_std", default=0.0, minimum=0.0)
+        if start <= 0.0:
+            return 0.0
+        minimum = _routing_float(options, "logit_noise_min_std", default=0.0, minimum=0.0)
+        if minimum > start:
+            raise ValueError("routing.logit_noise_min_std must be <= routing.logit_noise_std.")
+        decay_steps = _routing_int(options, "logit_noise_decay_steps", default=0, minimum=0)
+        if decay_steps <= 0:
+            return start
+        progress = min(1.0, max(0.0, float(global_step) / float(decay_steps)))
+        return start + (minimum - start) * progress
+
+    def _apply_route_logit_noise(
+        self,
+        logits: torch.Tensor,
+        global_step: int,
+        options: Mapping[str, Any],
+    ) -> torch.Tensor:
+        std = self._route_logit_noise_std(global_step, options)
+        if std <= 0.0:
+            return logits
+        return logits + torch.randn_like(logits) * std
+
     def _apply_route_constraints(
         self,
         logits: torch.Tensor,
@@ -888,8 +926,43 @@ def _routing_constraints_mapping(routing_constraints: Mapping[str, Any] | None) 
     return routing_constraints
 
 
+def _routing_options_mapping(routing_options: Mapping[str, Any] | None) -> Mapping[str, Any]:
+    if routing_options is None:
+        return {}
+    if not isinstance(routing_options, Mapping):
+        raise ValueError("routing_options must be a mapping.")
+    return routing_options
+
+
 def _loss_weight(loss_weights: Mapping[str, Any], key: str) -> float:
     return _float_value(loss_weights.get(key, 0.0), f"loss_weights.{key}", minimum=0.0)
+
+
+def _routing_float(
+    options: Mapping[str, Any],
+    key: str,
+    *,
+    default: float,
+    minimum: float,
+) -> float:
+    return _float_value(options.get(key, default), f"routing.{key}", minimum=minimum)
+
+
+def _routing_int(
+    options: Mapping[str, Any],
+    key: str,
+    *,
+    default: int,
+    minimum: int,
+) -> int:
+    value = options.get(key, default)
+    if isinstance(value, bool):
+        raise ValueError(f"routing.{key} must be an integer, not a boolean.")
+    if not isinstance(value, int):
+        raise ValueError(f"routing.{key} must be an integer.")
+    if value < minimum:
+        raise ValueError(f"routing.{key} must be >= {minimum}.")
+    return value
 
 
 def _constraint_int(
