@@ -1,0 +1,31 @@
+{
+  "by_task": {
+    "arc_easy": {
+      "accuracy": 1.0,
+      "sample_count": 1
+    },
+    "hellaswag": {
+      "accuracy": 0.0,
+      "sample_count": 1
+    },
+    "piqa": {
+      "accuracy": 1.0,
+      "sample_count": 1
+    }
+  },
+  "checkpoint": "checkpoint_latest",
+  "length_normalized": true,
+  "overall": {
+    "accuracy": 0.6666666666666666,
+    "sample_count": 3
+  },
+  "run_dir": "runs/package_a_r125_2b_A1_fixed_route",
+  "sample_count_per_task": 1,
+  "samples_path": "reports/package_a_benchmarks/public_fixed_route_smoke_all_samples.jsonl",
+  "seed": 1,
+  "tasks": [
+    "piqa",
+    "hellaswag",
+    "arc_easy"
+  ]
+}

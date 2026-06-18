@@ -1,0 +1,4 @@
+extends: reasoning_eval.yaml
+sample_count: 600
+seed: 1
+checkpoint: checkpoint_latest

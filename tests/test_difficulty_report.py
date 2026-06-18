@@ -97,6 +97,45 @@ def test_difficulty_eval_forward_parses_string_false_hard_exit() -> None:
     assert model.hard_exit is False
 
 
+def test_difficulty_eval_forward_passes_routing_constraints_and_options() -> None:
+    class CaptureModel:
+        kwargs = None
+
+        def __call__(self, *args, **kwargs):
+            self.kwargs = kwargs
+            return {"logits": torch.zeros(1, 4, 8)}
+
+    model = CaptureModel()
+    batch = torch.randint(0, 8, (1, 4))
+    routing = {
+        "hard_exit": True,
+        "pseudo_policy": "balanced_coverage",
+        "constraints": {"min_exit_step": 8, "force_final_exit": True},
+        "logit_noise_std": 0.03,
+        "schedule": [
+            {"max_step": 10, "router_probability": 0.4, "lambda_route": 0.2},
+            {"max_step": 20, "router_probability": 1.0, "lambda_route": 0.0},
+        ],
+    }
+
+    _forward_routed_for_eval(
+        model,
+        batch,
+        config={
+            "stage": "stage4_coverage_free_sphere",
+            "loss_weights": {"route": 1.0},
+            "routing": routing,
+        },
+        route_mode="scheduled",
+        global_step=20,
+    )
+
+    assert model.kwargs["routing_constraints"] == {"min_exit_step": 8, "force_final_exit": True}
+    assert model.kwargs["routing_options"] == routing
+    assert model.kwargs["router_probability"] == 1.0
+    assert model.kwargs["loss_weights"]["route"] == 0.0
+
+
 def test_difficulty_eval_forward_rejects_non_mapping_routing_config() -> None:
     with pytest.raises(ValueError, match="routing"):
         _mapping_config({"routing": True}, "routing")

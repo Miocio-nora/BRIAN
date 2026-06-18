@@ -970,8 +970,10 @@ def _validate_loss_weights_config(loss_weights: Any, path: Path, errors: list[st
         "cost",
         "location",
         "selected_balance",
+        "coverage_floor",
         "transition_diversity",
         "exit_boundary",
+        "input_anchor",
     }
     for key, value in loss_weights.items():
         if key not in allowed:
@@ -1036,7 +1038,7 @@ def _validate_routing_config(
 def _validate_pseudo_policy_config(routing: dict[str, Any], path: Path, errors: list[str]) -> None:
     mode = routing.get("mode")
     policy = routing.get("pseudo_policy")
-    allowed = {"sequential", "mixed_skip_recur", "balanced_coverage"}
+    allowed = {"sequential", "mixed_skip_recur", "balanced_coverage", "random_internal"}
     if mode == "parallel":
         if policy is not None:
             errors.append(f"{path}: routing.pseudo_policy must be omitted for parallel routing")
@@ -1059,7 +1061,12 @@ def _validate_routing_constraints_config(constraints: Any, path: Path, errors: l
         errors.append(f"{path}: routing.constraints must be a mapping")
         return
     int_keys = {"min_exit_step", "exit_ramp_start"}
-    float_keys = {"early_exit_logit_penalty", "exit_ramp_logit_bias", "final_exit_logit_bias"}
+    float_keys = {
+        "early_exit_logit_penalty",
+        "exit_ramp_logit_bias",
+        "final_exit_logit_bias",
+        "coverage_floor_min",
+    }
     bool_keys = {"force_final_exit"}
     allowed = int_keys | float_keys | bool_keys
     for key, value in constraints.items():
@@ -1125,11 +1132,13 @@ def _validate_scheduled_routing_config(routing: dict[str, Any], path: Path, erro
         errors.append(f"{path}: routing.schedule router_probability values must be nondecreasing")
     if any(next_value > value for value, next_value in zip(lambda_routes, lambda_routes[1:])):
         errors.append(f"{path}: routing.schedule lambda_route values must be nonincreasing")
-    if len(router_probabilities) < 2 or router_probabilities[-1] <= router_probabilities[0]:
+    router_probability_increases = len(router_probabilities) >= 2 and router_probabilities[-1] > router_probabilities[0]
+    if not router_probability_increases and not all(math.isclose(value, 1.0) for value in router_probabilities):
         errors.append(f"{path}: routing.schedule router_probability must increase")
     if not math.isclose(router_probabilities[-1], 1.0, rel_tol=0.0, abs_tol=1e-9):
         errors.append(f"{path}: routing.schedule final router_probability must be 1.0")
-    if len(lambda_routes) < 2 or lambda_routes[-1] >= lambda_routes[0]:
+    lambda_route_decays = len(lambda_routes) >= 2 and lambda_routes[-1] < lambda_routes[0]
+    if not lambda_route_decays and not all(math.isclose(value, 0.0) for value in lambda_routes):
         errors.append(f"{path}: routing.schedule lambda_route must decay")
     if lambda_routes[-1] > 0.05:
         errors.append(f"{path}: routing.schedule final lambda_route must be <= 0.05")

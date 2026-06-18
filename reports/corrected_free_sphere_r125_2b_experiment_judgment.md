@@ -1,6 +1,6 @@
 # Corrected Free-Sphere R125 2B Experiment Judgment
 
-Date: 2026-06-13
+Date: 2026-06-14
 
 Scope: corrected R125 2B free-sphere route-core experiments after rejecting the
 original hand-written mixed skip/recur target path objective.
@@ -11,11 +11,13 @@ The corrected route-core direction is now the main R125 evidence path. The
 original Package A skip/recur target-path results remain useful as engineering
 checks, but they should not drive scale-up decisions.
 
-Current best completed run: `free_sphere_r125_2b_A0_coverage_no23`.
+Current best validation-loss run: `corrected_package_a_r125_2b_AinAnchorA_input_anchor`.
 
-This run gives the best language-model quality so far, but still has route-path
-concentration. The current follow-up package is therefore testing whether the
-A0 behavior can be made less concentrated without losing its LM advantage.
+Current best synthetic-reasoning single stabilizer: weak `selected_balance` on
+the A0 coverage-warmup route. Current best combined benchmark candidate:
+`Ain + input_anchor + selected_balance + router_logit_noise`. It has worse
+validation loss, but stronger s600 benchmark evidence, so it must not be
+rejected by PPL alone.
 
 ## Completed 2x2 Results
 
@@ -44,34 +46,41 @@ validation loss 3.2347, block-load entropy 0.0, path diversity 0.03125, and a
 single repeated-block-7 route family. Top1-only is therefore not a viable
 current route-core direction.
 
-## Active Follow-Up Package
+## Completed Follow-Up Package
 
 These runs are defined by
 `configs/experiments/route_core_r125_2b_corrected_package_a_followup.yaml`.
 
-| ID | Setup | Status | Current/Final observation |
-|---|---|---|---|
-| A0opt | A0 + weak selected-balance | running | in-progress; latest eval step 15000, validation loss 3.2723 |
-| Apos | A0 without block-position input/loss | running | in-progress; latest eval step 17500, validation loss 3.2516 |
-| Aout | A0 without hard OUT termination | running | in-progress; latest eval step 17500, validation loss 3.2093 |
-| Atop1 | A0 with top1-only routing | complete | final validation loss 3.2347; route collapse to repeated block 7 |
-| Ain | A0 with an independent learnable IN position | restarted | 4-GPU run with local batch 8, global batch 32; IN node is included in route-path visualizations |
-
-The in-progress values above are snapshots only. Do not compare them as final
-outcomes until active follow-ups reach `step=30518`.
+| ID | Setup | Final observation |
+|---|---|---|
+| A0opt | A0 + weak selected-balance | validation loss 3.0290; improves synthetic reasoning strongly over A0; public MCQ does not confirm a global win |
+| Apos | A0 without block-position input/loss | validation loss 3.0636; worse than A0, so keep block-position |
+| Aout | A0 without hard OUT termination | validation loss 3.0552; not selected as default |
+| Atop1 | A0 with top1-only routing | validation loss 3.2347; route collapse to one repeated path |
+| Noise | A0 + train-time router logit noise | validation loss 3.0282; improves A0 diversity and reasoning exact match without hurting loss |
+| AinAnchorA | independent IN + input anchor | validation loss 3.0156; strong LM result, but benchmark does not prove it is safely positive |
+| AinSelective | independent IN + weak selected-balance | validation loss 3.0163; strong LM result, but synthetic reasoning fails in this benchmark scene |
+| A0SelectedNoise | A0 + weak selected-balance + router-logit noise | validation loss 3.0322; public MCQ is acceptable, but reasoning s600 collapses, so this exact combo is not a default |
+| AinAnchorSelectedNoise | independent IN + input anchor + weak selected-balance + router-logit noise | validation loss 3.0688; best teacher-forced reasoning, best public average, high route diversity; high-priority scale candidate |
 
 ## Practical Next Step
 
-Finish the three running follow-ups, then update this report with final losses,
-path-diversity metrics, block histograms, and route-path visualizations. If
-A0opt reduces concentration without hurting LM loss too much, it becomes the
-next R125 5B candidate. If Aout keeps improving, hard OUT should remain under
-question rather than being treated as settled.
+Stop Package A follow-up for this benchmark scene. Move to the next benchmark
+scene with `selected_balance`, router-logit `noise`, and top-2 weighted routing
+kept as active ingredients. Treat independent IN alone as unresolved, but carry
+the full `Ain + anchor + selected + noise` combination as a serious scale
+candidate.
 
-The fine-grained branch is implemented as a separate follow-up:
+The fine-grained branch was implemented as a separate follow-up:
 `configs/train/finegrained_r125_2b_pool16_ain_coverage_no23.yaml`. It uses 16
 route-pool nodes, smaller route-block FFNs, 32 max route steps, and independent
-IN. It is intended to test denser sphere navigation after the current Ain run.
+IN. The initial batch-32 run OOMed; the batch-16/accum-2 retry showed obvious
+path collapse and was stopped. Larger route pools should be retried only with
+selective-balance-style constraints.
+
+The benchmark pass is tracked in `reports/package_a_benchmarks/summary.md`.
+It uses `reasoning_eval`, `out_by_difficulty`, `lm_eval`, and
+`difficulty_step_eval` on `checkpoint_latest`.
 
 ## Evidence
 
@@ -87,6 +96,11 @@ Train configs:
 - `configs/train/corrected_package_a_r125_2b_atop1_top1_only.yaml`
 - `configs/train/corrected_package_a_r125_2b_ain_independent_in.yaml`
 - `configs/train/corrected_package_a_r125_2b_ain_independent_in_4gpu.yaml`
+- `configs/train/corrected_package_a_r125_2b_ain_anchorA_input_anchor.yaml`
+- `configs/train/corrected_package_a_r125_2b_ain_selective_balance.yaml`
+- `configs/train/corrected_package_a_r125_2b_anoise_logit_noise.yaml`
+- `configs/train/corrected_package_a_r125_2b_a0_selected_noise.yaml`
+- `configs/train/corrected_package_a_r125_2b_ain_anchor_selective_noise.yaml`
 - `configs/train/finegrained_r125_2b_pool16_ain_coverage_no23.yaml`
 
 Experiment manifests:
@@ -104,3 +118,8 @@ Run directories:
 - `runs/corrected_package_a_r125_2b_Apos_no_position`
 - `runs/corrected_package_a_r125_2b_Aout_no_hard_exit`
 - `runs/corrected_package_a_r125_2b_Atop1_top1_only`
+- `runs/corrected_package_a_r125_2b_Anoise_logit_noise`
+- `runs/corrected_package_a_r125_2b_AinAnchorA_input_anchor`
+- `runs/corrected_package_a_r125_2b_Ain_selective_balance`
+- `runs/corrected_package_a_r125_2b_A0_selected_noise`
+- `runs/corrected_package_a_r125_2b_Ain_anchor_selective_noise`

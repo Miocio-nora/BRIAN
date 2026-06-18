@@ -1,0 +1,25 @@
+extends: corrected_package_a_r125_5b_a0_selected_no_location_bias.yaml
+stage: stage4_pure_free_sphere
+run_name: corrected_package_a_r125_5b_A0_selected_router_sampling_no_location_bias
+loss_weights:
+  route: 0.0
+routing:
+  mode: free
+  pseudo_policy: null
+  schedule: null
+  router_selection: sample
+  router_sampling_temperature: 1.0
+post_train_benchmarks:
+  enabled: true
+  output_dir: reports/package_a_benchmarks
+  label: s_router_sampling_a0_selected_no_location_bias
+  checkpoint: checkpoint_latest
+  reasoning:
+    enabled: true
+    config: configs/eval/reasoning_eval_s600.yaml
+  public:
+    enabled: true
+    config: configs/eval/public_benchmark_s600.yaml
+wandb:
+  group: corrected_package_a_r125_5b_free_routing
+  tags: [corrected_package_a, r125, 5b, A0, weak_selected_balance, no_location_bias, router_sampling]

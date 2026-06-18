@@ -1,0 +1,31 @@
+{
+  "by_task": {
+    "arc_easy": {
+      "accuracy": 0.36,
+      "sample_count": 200
+    },
+    "hellaswag": {
+      "accuracy": 0.29,
+      "sample_count": 200
+    },
+    "piqa": {
+      "accuracy": 0.545,
+      "sample_count": 200
+    }
+  },
+  "checkpoint": "checkpoint_latest",
+  "length_normalized": true,
+  "overall": {
+    "accuracy": 0.3983333333333333,
+    "sample_count": 600
+  },
+  "run_dir": "runs/corrected_package_a_r125_5b_Ain_anchor_selective_noise",
+  "sample_count_per_task": 200,
+  "samples_path": "/nvmesv/dredvpn009/projects/brian/reports/package_a_benchmarks/public_s1_ain_anchor_selected_noise_s200_samples.jsonl",
+  "seed": 1,
+  "tasks": [
+    "piqa",
+    "hellaswag",
+    "arc_easy"
+  ]
+}

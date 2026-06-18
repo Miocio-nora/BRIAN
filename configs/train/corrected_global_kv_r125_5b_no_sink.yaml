@@ -1,0 +1,18 @@
+extends: corrected_global_kv_r125_5b.yaml
+run_name: corrected_global_kv_r125_5b_no_sink
+model_config: ../model/brian_r125_sphere16_no_location_bias_global_kv_no_sink.yaml
+post_train_benchmarks:
+  label: s_global_kv_corrected_no_sink
+wandb:
+  tags:
+  - corrected_package_a
+  - global_kv
+  - r125
+  - 5b
+  - no_sink
+  - selected_balance_002
+  - coverage_floor
+  - strong_length
+  - no_location_bias
+  - random_explore
+  - no_route_imitation

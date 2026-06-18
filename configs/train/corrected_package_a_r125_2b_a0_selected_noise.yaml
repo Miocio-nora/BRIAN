@@ -1,0 +1,23 @@
+extends: free_sphere_r125_2b_a0_coverage_no23.yaml
+run_name: corrected_package_a_r125_2b_A0_selected_noise
+loss_weights:
+  selected_balance: 0.003
+  transition_diversity: 0.0
+routing:
+  logit_noise_std: 0.03
+  logit_noise_decay_steps: 8000
+  logit_noise_min_std: 0.005
+post_train_benchmarks:
+  enabled: true
+  output_dir: reports/package_a_benchmarks
+  label: a0_selected_noise
+  checkpoint: checkpoint_latest
+  reasoning:
+    enabled: true
+    config: configs/eval/reasoning_eval_s600.yaml
+  public:
+    enabled: true
+    config: configs/eval/public_benchmark_s600.yaml
+wandb:
+  group: corrected_package_a_r125_2b_combo
+  tags: [corrected_package_a, r125, 2b, A0, coverage_warmup, weak_selected_balance, logit_noise]

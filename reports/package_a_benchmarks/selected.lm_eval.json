@@ -1,0 +1,74 @@
+{
+  "all_metrics": {
+    "active_block_evals_per_token": 0.8863086958065202,
+    "advance_ratio": 0.39757027300378833,
+    "average_route_steps": 13.864375122878302,
+    "balance_loss": 0.0007798595943436975,
+    "block_load_entropy": 1.8543687524602723,
+    "block_load_entropy_normalized": 0.8917628652675522,
+    "cost_loss": 12.729732168588752,
+    "cuda_max_memory_allocated_mb": 38368.97900390625,
+    "cuda_memory_allocated_mb": 14183.68505859375,
+    "forced_max_step_exit_count": 0.0,
+    "forced_max_step_exit_fraction": 0.0,
+    "inference_latency_ms_per_token": 0.012785254511982203,
+    "inference_time_seconds": 6.703155517578125,
+    "inference_tokens_per_second": 78215.10311451452,
+    "location_distance_mean": 0.022915747463344478,
+    "location_loss": 0.022915747463344478,
+    "max_route_steps": 16.0,
+    "p_output_mean": 0.08148270787059538,
+    "perplexity": 20.677528869676436,
+    "position_norm_mean": 1.0,
+    "recur_ratio": 0.1957323657896375,
+    "route_entropy": 1.6854483009925698,
+    "route_imitation_accuracy": 0.1369546502385489,
+    "route_path_count": 10.302739366930991,
+    "route_path_diversity": 0.3219606052165935,
+    "skip_ratio": 0.4066973612065946,
+    "tokens_per_second": 116947.0,
+    "train_latency_ms_per_token": 0.008550839993404225,
+    "train_step_time_seconds": 0.5603878498077393,
+    "validation_loss": 3.0290475487709045,
+    "weighted_fusion_ratio": 0.7994033705985861
+  },
+  "checks": {
+    "benchmark_score_present": true,
+    "downstream_reports_present": true,
+    "downstream_task_accuracy_present": true,
+    "eval_log_present": true,
+    "perplexity_present": true,
+    "requested_metrics_present": true,
+    "validation_loss_present": true
+  },
+  "downstream": {
+    "benchmark_score": 0.3333333333333333,
+    "downstream_report_count": 1,
+    "downstream_task_accuracy_mean": 0.3333333333333333,
+    "teacher_forced_token_accuracy_mean": 0.8150900835275837
+  },
+  "downstream_reports": [
+    {
+      "benchmark_score": 0.3333333333333333,
+      "exact_match_accuracy": 0.3333333333333333,
+      "path": "reports/package_a_benchmarks/selected.reasoning_s60.json",
+      "run_dir": "runs/corrected_package_a_r125_2b_A0opt_weak_selected_balance",
+      "sample_count": 60.0,
+      "teacher_forced_token_accuracy": 0.8150900835275837
+    }
+  ],
+  "metrics": {
+    "active_block_evals_per_token": 0.8863086958065202,
+    "perplexity": 20.677528869676436,
+    "tokens_per_second": 116947.0,
+    "validation_loss": 3.0290475487709045
+  },
+  "overall_status": "pass",
+  "requested_metrics": [
+    "validation_loss",
+    "perplexity",
+    "tokens_per_second",
+    "active_block_evals_per_token"
+  ],
+  "run_dir": "runs/corrected_package_a_r125_2b_A0opt_weak_selected_balance"
+}

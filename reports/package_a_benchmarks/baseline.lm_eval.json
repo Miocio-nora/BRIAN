@@ -1,0 +1,53 @@
+{
+  "all_metrics": {
+    "cuda_max_memory_allocated_mb": 38320.23291015625,
+    "cuda_memory_allocated_mb": 14135.04443359375,
+    "inference_latency_ms_per_token": 0.005947119916527299,
+    "inference_time_seconds": 3.1180036067962646,
+    "inference_tokens_per_second": 168148.61883328727,
+    "perplexity": 24.194492152442397,
+    "tokens_per_second": 292489.0,
+    "train_latency_ms_per_token": 0.0034189288271591067,
+    "train_step_time_seconds": 0.22406291961669922,
+    "validation_loss": 3.186125010251999
+  },
+  "checks": {
+    "benchmark_score_present": true,
+    "downstream_reports_present": true,
+    "downstream_task_accuracy_present": true,
+    "eval_log_present": true,
+    "perplexity_present": true,
+    "requested_metrics_present": false,
+    "validation_loss_present": true
+  },
+  "downstream": {
+    "benchmark_score": 0.55,
+    "downstream_report_count": 1,
+    "downstream_task_accuracy_mean": 0.55,
+    "teacher_forced_token_accuracy_mean": 0.8662580128205125
+  },
+  "downstream_reports": [
+    {
+      "benchmark_score": 0.55,
+      "exact_match_accuracy": 0.55,
+      "path": "reports/package_a_benchmarks/baseline.reasoning_s60.json",
+      "run_dir": "runs/package_a_r125_2b_A0_baseline",
+      "sample_count": 60.0,
+      "teacher_forced_token_accuracy": 0.8662580128205125
+    }
+  ],
+  "metrics": {
+    "active_block_evals_per_token": null,
+    "perplexity": 24.194492152442397,
+    "tokens_per_second": 292489.0,
+    "validation_loss": 3.186125010251999
+  },
+  "overall_status": "fail",
+  "requested_metrics": [
+    "validation_loss",
+    "perplexity",
+    "tokens_per_second",
+    "active_block_evals_per_token"
+  ],
+  "run_dir": "runs/package_a_r125_2b_A0_baseline"
+}

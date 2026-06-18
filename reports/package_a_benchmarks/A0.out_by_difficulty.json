@@ -1,0 +1,57 @@
+{
+  "by_difficulty": {
+    "easy": {
+      "mean_active_block_evals_per_token": 0.9276373626373629,
+      "mean_p_output": 0.07530504260212183,
+      "mean_route_steps": 13.85,
+      "sample_count": 20
+    },
+    "hard": {
+      "mean_active_block_evals_per_token": 0.9258241758241759,
+      "mean_p_output": 0.06140703745186329,
+      "mean_route_steps": 13.5,
+      "sample_count": 20
+    },
+    "medium": {
+      "mean_active_block_evals_per_token": 0.9260989010989013,
+      "mean_p_output": 0.06309782713651657,
+      "mean_route_steps": 13.55,
+      "sample_count": 20
+    }
+  },
+  "checks": {
+    "active_compute_non_decreasing_with_difficulty": false,
+    "easy_and_hard_present": true,
+    "easy_output_probability_at_least_hard": true,
+    "hard_exit_reasoning": true,
+    "reasoning_report_passed": true,
+    "reasoning_report_present": true,
+    "route_steps_non_decreasing_with_difficulty": false,
+    "stage4_output_action_reasoning": false
+  },
+  "deltas": {
+    "easy_minus_hard_p_output": 0.01389800515025854,
+    "hard_minus_easy_active_block_evals_per_token": -0.0018131868131869844,
+    "hard_minus_easy_route_steps": -0.34999999999999964
+  },
+  "difficulty_order": [
+    "easy",
+    "medium",
+    "hard"
+  ],
+  "inputs": {
+    "reasoning_checkpoint": "checkpoint_latest",
+    "reasoning_hard_exit": true,
+    "reasoning_report": "reports/package_a_benchmarks/A0.reasoning_s60.json",
+    "reasoning_route_mode": "scheduled",
+    "reasoning_run_dir": "runs/free_sphere_r125_2b_A0_coverage_no23",
+    "reasoning_stage": "stage4_coverage_free_sphere",
+    "samples_path": "reports/package_a_benchmarks/A0.reasoning_s60_samples.jsonl"
+  },
+  "overall_status": "fail",
+  "sample_count": 60,
+  "thresholds": {
+    "min_output_probability_delta": 0.0,
+    "min_step_delta": 0.0
+  }
+}

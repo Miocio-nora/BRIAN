@@ -1,0 +1,34 @@
+extends: corrected_package_a_r125_5b_a0_selected_no_location_bias.yaml
+run_name: corrected_package_a_r125_5b_A0_selected_random_explore_no_location_bias
+routing:
+  pseudo_policy: random_internal
+  schedule:
+    - max_step: 200
+      router_probability: 0.0
+      lambda_route: 0.0
+    - max_step: 500
+      router_probability: 0.25
+      lambda_route: 0.0
+    - max_step: 900
+      router_probability: 0.50
+      lambda_route: 0.0
+    - max_step: 1200
+      router_probability: 0.75
+      lambda_route: 0.0
+    - max_step: 1500
+      router_probability: 1.0
+      lambda_route: 0.0
+post_train_benchmarks:
+  enabled: true
+  output_dir: reports/package_a_benchmarks
+  label: s_random_explore_a0_selected_no_location_bias
+  checkpoint: checkpoint_latest
+  reasoning:
+    enabled: true
+    config: configs/eval/reasoning_eval_s600.yaml
+  public:
+    enabled: true
+    config: configs/eval/public_benchmark_s600.yaml
+wandb:
+  group: corrected_package_a_r125_5b_free_routing
+  tags: [corrected_package_a, r125, 5b, A0, weak_selected_balance, no_location_bias, random_explore, no_route_imitation]

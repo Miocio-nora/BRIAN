@@ -1,0 +1,31 @@
+{
+  "by_task": {
+    "arc_easy": {
+      "accuracy": 0.3,
+      "sample_count": 200
+    },
+    "hellaswag": {
+      "accuracy": 0.28,
+      "sample_count": 200
+    },
+    "piqa": {
+      "accuracy": 0.48,
+      "sample_count": 200
+    }
+  },
+  "checkpoint": "checkpoint_latest",
+  "length_normalized": true,
+  "overall": {
+    "accuracy": 0.35333333333333333,
+    "sample_count": 600
+  },
+  "run_dir": "runs/corrected_package_a_r125_2b_A0opt_weak_selected_balance",
+  "sample_count_per_task": 200,
+  "samples_path": "reports/package_a_benchmarks/public_selected_s200_samples.jsonl",
+  "seed": 1,
+  "tasks": [
+    "piqa",
+    "hellaswag",
+    "arc_easy"
+  ]
+}

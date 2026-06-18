@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from brian_sphere_llm.losses.balance_loss import block_balance_loss
+from brian_sphere_llm.losses.coverage_floor_loss import block_coverage_floor_loss
 from brian_sphere_llm.losses.cost_loss import route_cost_loss
 from brian_sphere_llm.losses.exit_boundary_loss import exit_boundary_loss
 from brian_sphere_llm.losses.location_loss import location_loss
@@ -313,10 +314,16 @@ class BrianRouteCore(ModuleBase):
             if route_mode in {"fixed", "pseudo"}:
                 selected = target_action
             elif route_mode == "scheduled":
-                selected, use_router = self._scheduled_select(logits, target_action, global_step, router_probability)
+                selected, use_router = self._scheduled_select(
+                    logits,
+                    target_action,
+                    global_step,
+                    router_probability,
+                    routing_options,
+                )
                 use_weighted_fusion = use_router & (effective_top_k > 1)
             elif route_mode == "free":
-                selected = torch.argmax(logits, dim=-1)
+                selected = self._router_action(logits, routing_options)
                 use_weighted_fusion = torch.full(
                     (batch_size,),
                     effective_top_k > 1,
@@ -394,6 +401,12 @@ class BrianRouteCore(ModuleBase):
                 route_info["selected_actions"],
                 self.config.route_pool_blocks,
             ).to(lm.device)
+            coverage_floor = block_coverage_floor_loss(
+                route_info["route_probs"],
+                route_info["selected_actions"],
+                self.config.route_pool_blocks,
+                floor=_coverage_floor_min(routing_constraints),
+            ).to(lm.device)
             transition_diversity = transition_diversity_loss(
                 route_info["route_probs"],
                 route_info["selected_actions"],
@@ -410,6 +423,7 @@ class BrianRouteCore(ModuleBase):
             cost_weight = _loss_weight(loss_weights, "cost")
             location_weight = _loss_weight(loss_weights, "location")
             selected_balance_weight = _loss_weight(loss_weights, "selected_balance")
+            coverage_floor_weight = _loss_weight(loss_weights, "coverage_floor")
             transition_diversity_weight = _loss_weight(loss_weights, "transition_diversity")
             exit_boundary_weight = _loss_weight(loss_weights, "exit_boundary")
             input_anchor_weight = _loss_weight(loss_weights, "input_anchor")
@@ -420,6 +434,7 @@ class BrianRouteCore(ModuleBase):
                 + cost_weight * cost
                 + location_weight * loc
                 + selected_balance_weight * selected_balance
+                + coverage_floor_weight * coverage_floor
                 + transition_diversity_weight * transition_diversity
                 + exit_boundary_weight * exit_boundary
                 + input_anchor_weight * input_anchor
@@ -432,6 +447,7 @@ class BrianRouteCore(ModuleBase):
                 "cost_loss": cost.detach(),
                 "location_loss": loc.detach(),
                 "selected_balance_loss": selected_balance.detach(),
+                "coverage_floor_loss": coverage_floor.detach(),
                 "transition_diversity_loss": transition_diversity.detach(),
                 "exit_boundary_loss": exit_boundary.detach(),
                 "input_anchor_loss": input_anchor.detach(),
@@ -636,13 +652,27 @@ class BrianRouteCore(ModuleBase):
         target: torch.Tensor,
         global_step: int,
         router_probability: float | None,
+        routing_options: Mapping[str, Any],
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        router_choice = torch.argmax(logits, dim=-1)
+        router_choice = self._router_action(logits, routing_options)
         probability = router_probability
         if probability is None:
             probability = min(1.0, max(0.0, global_step / max(1, self.config.max_route_steps * 100)))
         use_router = torch.rand_like(target.float()) < probability
         return torch.where(use_router, router_choice, target), use_router
+
+    def _router_action(self, logits: torch.Tensor, routing_options: Mapping[str, Any]) -> torch.Tensor:
+        selection = str(routing_options.get("router_selection", "argmax"))
+        if selection == "argmax":
+            return torch.argmax(logits, dim=-1)
+        if selection != "sample":
+            raise ValueError("routing.router_selection must be 'argmax' or 'sample'.")
+        sample_eval = _routing_bool(routing_options, "router_sampling_eval", default=False)
+        if not self.training and not sample_eval:
+            return torch.argmax(logits, dim=-1)
+        temperature = _routing_float(routing_options, "router_sampling_temperature", default=1.0, minimum=1e-6)
+        probs = F.softmax(logits.float() / temperature, dim=-1)
+        return torch.multinomial(probs, num_samples=1).squeeze(1)
 
     def _apply_selected_blocks(self, hidden: torch.Tensor, position: torch.Tensor, selected: torch.Tensor) -> torch.Tensor:
         next_hidden = hidden.clone()
@@ -938,6 +968,15 @@ def _loss_weight(loss_weights: Mapping[str, Any], key: str) -> float:
     return _float_value(loss_weights.get(key, 0.0), f"loss_weights.{key}", minimum=0.0)
 
 
+def _coverage_floor_min(routing_constraints: Mapping[str, Any]) -> float:
+    return _float_value(
+        routing_constraints.get("coverage_floor_min", 0.0),
+        "routing.constraints.coverage_floor_min",
+        minimum=0.0,
+        maximum=1.0,
+    )
+
+
 def _routing_float(
     options: Mapping[str, Any],
     key: str,
@@ -963,6 +1002,10 @@ def _routing_int(
     if value < minimum:
         raise ValueError(f"routing.{key} must be >= {minimum}.")
     return value
+
+
+def _routing_bool(options: Mapping[str, Any], key: str, *, default: bool) -> bool:
+    return _bool_value(options.get(key, default), f"routing.{key}")
 
 
 def _constraint_int(

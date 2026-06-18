@@ -1,0 +1,18 @@
+extends: corrected_global_kv_r125_5b.yaml
+run_name: corrected_global_kv_r125_5b_window64
+model_config: ../model/brian_r125_sphere16_no_location_bias_global_kv_window64.yaml
+post_train_benchmarks:
+  label: s_global_kv_corrected_window64
+wandb:
+  tags:
+  - corrected_package_a
+  - global_kv
+  - r125
+  - 5b
+  - window64
+  - selected_balance_002
+  - coverage_floor
+  - strong_length
+  - no_location_bias
+  - random_explore
+  - no_route_imitation

@@ -1,0 +1,74 @@
+{
+  "all_metrics": {
+    "active_block_evals_per_token": 0.9125293471344295,
+    "advance_ratio": 0.3442328198091095,
+    "average_route_steps": 13.323350154007471,
+    "balance_loss": 0.0008299430600764315,
+    "block_load_entropy": 1.8249909775903508,
+    "block_load_entropy_normalized": 0.8776351419339661,
+    "cost_loss": 12.536586965065545,
+    "cuda_max_memory_allocated_mb": 38372.076171875,
+    "cuda_memory_allocated_mb": 14186.78857421875,
+    "forced_max_step_exit_count": 0.0,
+    "forced_max_step_exit_fraction": 0.0,
+    "inference_latency_ms_per_token": 0.012724399311991874,
+    "inference_time_seconds": 6.671249866485596,
+    "inference_tokens_per_second": 78589.17151849899,
+    "location_distance_mean": 0.02089115238386081,
+    "location_loss": 0.02089115238386081,
+    "max_route_steps": 16.0,
+    "p_output_mean": 0.05858656042410855,
+    "perplexity": 20.664994068186715,
+    "position_norm_mean": 1.0,
+    "recur_ratio": 0.13883558619470557,
+    "route_entropy": 1.790286636108304,
+    "route_imitation_accuracy": 0.1402553954744032,
+    "route_path_count": 11.390130414837145,
+    "route_path_diversity": 0.3559415754636608,
+    "skip_ratio": 0.5169315939961732,
+    "tokens_per_second": 121513.0,
+    "train_latency_ms_per_token": 0.008229515515267849,
+    "train_step_time_seconds": 0.5393295288085938,
+    "validation_loss": 3.028441160917282,
+    "weighted_fusion_ratio": 0.8226519944928125
+  },
+  "checks": {
+    "benchmark_score_present": true,
+    "downstream_reports_present": true,
+    "downstream_task_accuracy_present": true,
+    "eval_log_present": true,
+    "perplexity_present": true,
+    "requested_metrics_present": true,
+    "validation_loss_present": true
+  },
+  "downstream": {
+    "benchmark_score": 0.08333333333333333,
+    "downstream_report_count": 1,
+    "downstream_task_accuracy_mean": 0.08333333333333333,
+    "teacher_forced_token_accuracy_mean": 0.7245566239316239
+  },
+  "downstream_reports": [
+    {
+      "benchmark_score": 0.08333333333333333,
+      "exact_match_accuracy": 0.08333333333333333,
+      "path": "reports/package_a_benchmarks/A0.reasoning_s60.json",
+      "run_dir": "runs/free_sphere_r125_2b_A0_coverage_no23",
+      "sample_count": 60.0,
+      "teacher_forced_token_accuracy": 0.7245566239316239
+    }
+  ],
+  "metrics": {
+    "active_block_evals_per_token": 0.9125293471344295,
+    "perplexity": 20.664994068186715,
+    "tokens_per_second": 121513.0,
+    "validation_loss": 3.028441160917282
+  },
+  "overall_status": "pass",
+  "requested_metrics": [
+    "validation_loss",
+    "perplexity",
+    "tokens_per_second",
+    "active_block_evals_per_token"
+  ],
+  "run_dir": "runs/free_sphere_r125_2b_A0_coverage_no23"
+}

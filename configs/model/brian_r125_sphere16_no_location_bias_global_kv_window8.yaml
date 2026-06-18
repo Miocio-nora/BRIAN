@@ -1,0 +1,3 @@
+extends: brian_r125_sphere16_no_location_bias_global_kv.yaml
+model_name: brian_r125_sphere16_no_location_bias_global_kv_window8
+global_window_slots: 8

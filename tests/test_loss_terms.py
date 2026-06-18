@@ -3,6 +3,7 @@ import pytest
 torch = pytest.importorskip("torch")
 
 from brian_sphere_llm.losses.balance_loss import block_balance_loss
+from brian_sphere_llm.losses.coverage_floor_loss import block_coverage_floor_loss
 from brian_sphere_llm.losses.cost_loss import route_cost_loss
 from brian_sphere_llm.losses.exit_boundary_loss import exit_boundary_loss
 from brian_sphere_llm.losses.location_loss import location_loss
@@ -21,6 +22,7 @@ def test_loss_terms_are_scalar() -> None:
     assert block_balance_loss(probs, num_internal_blocks=3).ndim == 0
     assert route_cost_loss(probs, num_internal_blocks=3).ndim == 0
     assert location_loss([torch.tensor(1.0)]).ndim == 0
+    assert block_coverage_floor_loss(probs, [torch.tensor([1, 2])], num_internal_blocks=3, floor=0.05).ndim == 0
     assert selected_block_balance_loss(probs, [torch.tensor([1, 2])], num_internal_blocks=3).ndim == 0
     assert transition_diversity_loss(probs + probs, [torch.tensor([1, 2]), torch.tensor([2, 1])], 3).ndim == 0
     assert exit_boundary_loss(probs, num_internal_blocks=3, constraints={"max_route_steps": 1}).ndim == 0
@@ -49,6 +51,19 @@ def test_selected_balance_loss_penalizes_collapsed_selected_blocks() -> None:
         probs,
         collapsed,
         num_internal_blocks=2,
+    )
+
+
+def test_coverage_floor_loss_penalizes_dead_blocks() -> None:
+    probs = [torch.full((4, 3), 1.0 / 3.0)]
+    covered = [torch.tensor([0, 1, 0, 1])]
+    dead = [torch.tensor([0, 0, 0, 0])]
+
+    assert block_coverage_floor_loss(probs, covered, num_internal_blocks=2, floor=0.25) < block_coverage_floor_loss(
+        probs,
+        dead,
+        num_internal_blocks=2,
+        floor=0.25,
     )
 
 

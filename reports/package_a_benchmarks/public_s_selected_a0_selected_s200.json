@@ -1,0 +1,31 @@
+{
+  "by_task": {
+    "arc_easy": {
+      "accuracy": 0.355,
+      "sample_count": 200
+    },
+    "hellaswag": {
+      "accuracy": 0.305,
+      "sample_count": 200
+    },
+    "piqa": {
+      "accuracy": 0.52,
+      "sample_count": 200
+    }
+  },
+  "checkpoint": "checkpoint_latest",
+  "length_normalized": true,
+  "overall": {
+    "accuracy": 0.3933333333333333,
+    "sample_count": 600
+  },
+  "run_dir": "runs/corrected_package_a_r125_5b_A0_selected",
+  "sample_count_per_task": 200,
+  "samples_path": "/nvmesv/dredvpn009/projects/brian/reports/package_a_benchmarks/public_s_selected_a0_selected_s200_samples.jsonl",
+  "seed": 1,
+  "tasks": [
+    "piqa",
+    "hellaswag",
+    "arc_easy"
+  ]
+}

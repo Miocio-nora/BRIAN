@@ -1,0 +1,26 @@
+extends: corrected_package_a_r125_5b_a0_selected_random_explore_no_location_bias_covfloor.yaml
+run_name: corrected_package_a_r125_5b_A0_selected_random_explore_no_location_bias_covfloor_stronglen
+routing:
+  constraints:
+    min_exit_step: 4
+    exit_ramp_start: 12
+    early_exit_logit_penalty: 8.0
+    exit_ramp_logit_bias: 3.0
+    final_exit_logit_bias: 6.0
+    force_final_exit: true
+    coverage_floor_min: 0.04
+post_train_benchmarks:
+  label: s_random_explore_a0_selected_no_location_bias_covfloor_stronglen
+wandb:
+  tags:
+  - corrected_package_a
+  - r125
+  - 5b
+  - A0
+  - selected_balance_002
+  - coverage_floor
+  - strong_length
+  - no_location_bias
+  - random_explore
+  - no_route_imitation
+  - ablation

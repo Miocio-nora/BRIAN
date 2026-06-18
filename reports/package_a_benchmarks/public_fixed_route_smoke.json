@@ -1,0 +1,21 @@
+{
+  "by_task": {
+    "piqa": {
+      "accuracy": 0.4,
+      "sample_count": 5
+    }
+  },
+  "checkpoint": "checkpoint_latest",
+  "length_normalized": true,
+  "overall": {
+    "accuracy": 0.4,
+    "sample_count": 5
+  },
+  "run_dir": "runs/package_a_r125_2b_A1_fixed_route",
+  "sample_count_per_task": 5,
+  "samples_path": "reports/package_a_benchmarks/public_fixed_route_smoke_samples.jsonl",
+  "seed": 1,
+  "tasks": [
+    "piqa"
+  ]
+}

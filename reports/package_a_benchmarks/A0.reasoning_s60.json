@@ -1,0 +1,107 @@
+{
+  "by_difficulty": {
+    "easy": {
+      "answer_tokens_mean": 5.65,
+      "exact_match_accuracy": 0.0,
+      "generated_tokens_mean": 5.65,
+      "sample_count": 20,
+      "teacher_forced_token_accuracy": 0.6354166666666667,
+      "visible_cot_tokens_mean": 5.3
+    },
+    "hard": {
+      "answer_tokens_mean": 19.65,
+      "exact_match_accuracy": 0.2,
+      "generated_tokens_mean": 19.65,
+      "sample_count": 20,
+      "teacher_forced_token_accuracy": 0.7801282051282052,
+      "visible_cot_tokens_mean": 13.25
+    },
+    "medium": {
+      "answer_tokens_mean": 10.3,
+      "exact_match_accuracy": 0.05,
+      "generated_tokens_mean": 10.3,
+      "sample_count": 20,
+      "teacher_forced_token_accuracy": 0.7581249999999999,
+      "visible_cot_tokens_mean": 9.3
+    }
+  },
+  "by_task_family": {
+    "arithmetic": {
+      "answer_tokens_mean": 2.933333333333333,
+      "exact_match_accuracy": 0.0,
+      "generated_tokens_mean": 2.933333333333333,
+      "sample_count": 15,
+      "teacher_forced_token_accuracy": 0.4333333333333333,
+      "visible_cot_tokens_mean": 2.933333333333333
+    },
+    "copy": {
+      "answer_tokens_mean": 18.666666666666668,
+      "exact_match_accuracy": 0.26666666666666666,
+      "generated_tokens_mean": 18.666666666666668,
+      "sample_count": 15,
+      "teacher_forced_token_accuracy": 0.88125,
+      "visible_cot_tokens_mean": 9.933333333333334
+    },
+    "reverse": {
+      "answer_tokens_mean": 18.666666666666668,
+      "exact_match_accuracy": 0.06666666666666667,
+      "generated_tokens_mean": 18.666666666666668,
+      "sample_count": 15,
+      "teacher_forced_token_accuracy": 0.8395833333333333,
+      "visible_cot_tokens_mean": 17.066666666666666
+    },
+    "rewrite": {
+      "answer_tokens_mean": 7.2,
+      "exact_match_accuracy": 0.0,
+      "generated_tokens_mean": 7.2,
+      "sample_count": 15,
+      "teacher_forced_token_accuracy": 0.7440598290598291,
+      "visible_cot_tokens_mean": 7.2
+    }
+  },
+  "checkpoint": "checkpoint_latest",
+  "checks": {
+    "exact_match_accuracy_present": true,
+    "samples_present": true,
+    "teacher_forced_token_accuracy_present": true,
+    "visible_cot_tokens_present": true
+  },
+  "context_length": 2048,
+  "hard_exit": true,
+  "overall": {
+    "answer_tokens_mean": 11.866666666666667,
+    "exact_match_accuracy": 0.08333333333333333,
+    "generated_tokens_mean": 11.866666666666667,
+    "sample_count": 60,
+    "teacher_forced_token_accuracy": 0.7245566239316239,
+    "visible_cot_tokens_mean": 9.283333333333333
+  },
+  "overall_status": "pass",
+  "route_mode": "scheduled",
+  "routing": {
+    "active_block_evals_per_token": 0.926520146520146,
+    "advance_ratio": 0.34029461279461276,
+    "average_route_steps": 13.633333333333333,
+    "block_load_entropy": 1.6093072950839997,
+    "block_load_entropy_normalized": 0.7739132158347864,
+    "forced_max_step_exit_count": 0.0,
+    "forced_max_step_exit_fraction": 0.0,
+    "location_distance_mean": 0.00026610329708394903,
+    "max_route_steps": 16.0,
+    "p_output_mean": 0.0666033023968339,
+    "position_norm_mean": 1.0,
+    "recur_ratio": 0.3211237373737373,
+    "route_entropy": 1.8821826616923014,
+    "route_imitation_accuracy": 0.13569597713649273,
+    "route_logit_noise_std": 0.0,
+    "route_path_count": 1.0,
+    "route_path_diversity": 1.0,
+    "skip_ratio": 0.3385816498316498,
+    "weighted_fusion_ratio": 0.8530403365691502
+  },
+  "run_dir": "runs/free_sphere_r125_2b_A0_coverage_no23",
+  "sample_count": 60,
+  "samples_path": "reports/package_a_benchmarks/A0.reasoning_s60_samples.jsonl",
+  "seed": 1,
+  "stage": "stage4_coverage_free_sphere"
+}

@@ -1,0 +1,20 @@
+extends: corrected_package_a_r125_2b_ain_anchor_selective_noise.yaml
+run_name: corrected_package_a_r125_5b_Ain_anchor_selective_noise
+data_config: ../data/r125_main_5b.yaml
+max_steps: 76294
+eval_interval: 5000
+save_interval: 5000
+post_train_benchmarks:
+  enabled: true
+  output_dir: reports/package_a_benchmarks
+  label: s1_ain_anchor_selected_noise
+  checkpoint: checkpoint_latest
+  reasoning:
+    enabled: true
+    config: configs/eval/reasoning_eval_s600.yaml
+  public:
+    enabled: true
+    config: configs/eval/public_benchmark_s600.yaml
+wandb:
+  group: corrected_package_a_r125_5b_combo
+  tags: [corrected_package_a, r125, 5b, Ain, coverage_warmup, independent_in, input_anchor, weak_selected_balance, logit_noise]

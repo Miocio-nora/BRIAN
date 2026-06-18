@@ -1,0 +1,43 @@
+experiment_name: route_core_global_kv_corrected_r125_5b
+description: >
+  Corrected BRIAN-R125 5B Global KV validation attached to the current best
+  free-routing core: random_internal warmup, no location bias, selected
+  balance 0.02, coverage floor, and strong length constraints.
+baseline_train_config: configs/train/corrected_package_a_r125_5b_a0_selected_random_explore_no_location_bias_covfloor_stronglen.yaml
+ablations:
+  - id: C0
+    name: local_kv_only_corrected_route
+    train_config: configs/train/corrected_package_a_r125_5b_a0_selected_random_explore_no_location_bias_covfloor_stronglen.yaml
+    purpose: Local-only corrected route-core reference from the current best Package A setting.
+  - id: C1
+    name: global_kv_uncompressed
+    train_config: configs/train/corrected_global_kv_r125_5b_uncompressed.yaml
+    purpose: Local plus Global KV with code dimension equal to hidden size.
+  - id: C2
+    name: global_kv_compressed
+    train_config: configs/train/corrected_global_kv_r125_5b.yaml
+    purpose: Canonical compressed Global KV attached to the corrected route core.
+  - id: C3
+    name: global_kv_no_sink
+    train_config: configs/train/corrected_global_kv_r125_5b_no_sink.yaml
+    purpose: Test sink retention by removing permanent global sink slots.
+  - id: C4
+    name: global_kv_window8
+    train_config: configs/train/corrected_global_kv_r125_5b_window8.yaml
+    purpose: Smaller cache-window point for memory-quality comparison.
+  - id: C5
+    name: global_kv_window64
+    train_config: configs/train/corrected_global_kv_r125_5b_window64.yaml
+    purpose: Larger cache-window point for memory-quality comparison.
+  - id: C6
+    name: global_kv_per_block_adapter
+    train_config: configs/train/corrected_global_kv_r125_5b_per_block.yaml
+    purpose: Test route-block-specific Global KV read/write adapters.
+  - id: C7
+    name: global_kv_per_head_delta_adapter
+    train_config: configs/train/corrected_global_kv_r125_5b_per_head_delta.yaml
+    purpose: Test shared Global KV adapters plus per-head low-rank deltas.
+  - id: C8
+    name: global_kv_per_block_head_delta_adapter
+    train_config: configs/train/corrected_global_kv_r125_5b_head_delta.yaml
+    purpose: Test per-block adapters plus per-head low-rank Global KV deltas.

@@ -49,6 +49,38 @@ def test_free_route_does_not_record_pseudo_targets() -> None:
     assert "route_imitation_accuracy" not in output["routing_summary"]
 
 
+def test_router_sampling_is_training_only_by_default() -> None:
+    cfg = BrianRouteConfig(
+        base=BaselineConfig(vocab_size=64, context_length=8, layers=4, d_model=32, n_heads=4),
+        pre_blocks=1,
+        route_pool_blocks=2,
+        post_blocks=1,
+        block_position_dim=8,
+        max_route_steps=1,
+    )
+    model = BrianRouteCore(cfg)
+    _set_router_bias(model, {0: 0.0, 1: 0.0, cfg.route_pool_blocks: 0.0})
+    input_ids = torch.randint(0, 64, (64, 8))
+
+    torch.manual_seed(3)
+    model.train()
+    sampled = model(
+        input_ids,
+        route_mode="free",
+        routing_options={"router_selection": "sample", "router_sampling_temperature": 1.0},
+    )
+    sampled_actions = sampled["route_info"]["selected_actions"][0]
+    assert torch.any(sampled_actions != 0)
+
+    model.eval()
+    greedy = model(
+        input_ids,
+        route_mode="free",
+        routing_options={"router_selection": "sample", "router_sampling_temperature": 1.0},
+    )
+    assert torch.all(greedy["route_info"]["selected_actions"][0] == 0)
+
+
 def test_later_top_k_enables_weighted_fusion_after_first_step() -> None:
     cfg = BrianRouteConfig(
         base=BaselineConfig(vocab_size=64, context_length=8, layers=4, d_model=32, n_heads=4),

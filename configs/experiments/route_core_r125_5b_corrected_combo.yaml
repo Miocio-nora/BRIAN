@@ -1,0 +1,25 @@
+experiment_name: route_core_r125_5b_corrected_combo
+description: >
+  Prepared larger-scale R125 5B corrected-route follow-up with a matched plain
+  Transformer baseline. Do not run until the 2B combo validation and regular
+  benchmark suite are reviewed.
+baseline_train_config: configs/train/corrected_package_a_r125_5b_baseline.yaml
+ablations:
+  - id: Sbase
+    name: r125_5b_plain_baseline
+    train_config: configs/train/corrected_package_a_r125_5b_baseline.yaml
+    purpose: Token-budget-matched plain Transformer baseline for the corrected 5B combo package.
+  - id: S0
+    name: r125_5b_a0_selected_noise
+    train_config: configs/train/corrected_package_a_r125_5b_a0_selected_noise.yaml
+    purpose: Stress test of the A0 selected-balance plus noise route; not the current default after 2B s600.
+  - id: S_selected
+    name: r125_5b_a0_selected
+    train_config: configs/train/corrected_package_a_r125_5b_a0_selected.yaml
+    purpose: >
+      Larger-token validation of the strongest A0 single-stabilizer route:
+      weak selected-balance only.
+  - id: S1
+    name: r125_5b_ain_anchor_selective_noise
+    train_config: configs/train/corrected_package_a_r125_5b_ain_anchor_selective_noise.yaml
+    purpose: Larger-token validation of independent IN with anchor, selected-balance, and noise.

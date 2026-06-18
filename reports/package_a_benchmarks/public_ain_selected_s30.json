@@ -1,0 +1,31 @@
+{
+  "by_task": {
+    "arc_easy": {
+      "accuracy": 0.3333333333333333,
+      "sample_count": 30
+    },
+    "hellaswag": {
+      "accuracy": 0.16666666666666666,
+      "sample_count": 30
+    },
+    "piqa": {
+      "accuracy": 0.6,
+      "sample_count": 30
+    }
+  },
+  "checkpoint": "checkpoint_latest",
+  "length_normalized": true,
+  "overall": {
+    "accuracy": 0.36666666666666664,
+    "sample_count": 90
+  },
+  "run_dir": "runs/corrected_package_a_r125_2b_Ain_selective_balance",
+  "sample_count_per_task": 30,
+  "samples_path": "reports/package_a_benchmarks/public_ain_selected_s30_samples.jsonl",
+  "seed": 1,
+  "tasks": [
+    "piqa",
+    "hellaswag",
+    "arc_easy"
+  ]
+}

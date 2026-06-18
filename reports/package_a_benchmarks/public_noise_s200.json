@@ -1,0 +1,31 @@
+{
+  "by_task": {
+    "arc_easy": {
+      "accuracy": 0.33,
+      "sample_count": 200
+    },
+    "hellaswag": {
+      "accuracy": 0.26,
+      "sample_count": 200
+    },
+    "piqa": {
+      "accuracy": 0.565,
+      "sample_count": 200
+    }
+  },
+  "checkpoint": "checkpoint_latest",
+  "length_normalized": true,
+  "overall": {
+    "accuracy": 0.385,
+    "sample_count": 600
+  },
+  "run_dir": "runs/corrected_package_a_r125_2b_Anoise_logit_noise",
+  "sample_count_per_task": 200,
+  "samples_path": "reports/package_a_benchmarks/public_noise_s200_samples.jsonl",
+  "seed": 1,
+  "tasks": [
+    "piqa",
+    "hellaswag",
+    "arc_easy"
+  ]
+}

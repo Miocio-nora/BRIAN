@@ -1,0 +1,19 @@
+extends: corrected_package_a_r125_5b_a0_selected_random_explore_no_location_bias_covfloor_lenloose.yaml
+run_name: corrected_package_a_r125_5b_A0_selected_random_explore_no_location_bias_covfloor_lenloose_ddp23
+batch_size: 16
+post_train_benchmarks:
+  label: s_random_explore_a0_selected_no_location_bias_covfloor_lenloose_ddp23
+wandb:
+  tags:
+  - corrected_package_a
+  - r125
+  - 5b
+  - A0
+  - selected_balance_002
+  - coverage_floor
+  - length_loose
+  - no_location_bias
+  - random_explore
+  - no_route_imitation
+  - ddp2
+  - gpu23

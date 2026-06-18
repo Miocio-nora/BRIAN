@@ -1,0 +1,10 @@
+eval_name: public_benchmark
+checkpoint: checkpoint_latest
+sample_count: 200
+seed: 1
+device: auto
+length_normalized: true
+tasks:
+  - piqa
+  - hellaswag
+  - arc_easy

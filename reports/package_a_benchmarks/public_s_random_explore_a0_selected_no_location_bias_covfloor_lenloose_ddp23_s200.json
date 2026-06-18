@@ -1,0 +1,31 @@
+{
+  "by_task": {
+    "arc_easy": {
+      "accuracy": 0.305,
+      "sample_count": 200
+    },
+    "hellaswag": {
+      "accuracy": 0.255,
+      "sample_count": 200
+    },
+    "piqa": {
+      "accuracy": 0.545,
+      "sample_count": 200
+    }
+  },
+  "checkpoint": "checkpoint_latest",
+  "length_normalized": true,
+  "overall": {
+    "accuracy": 0.36833333333333335,
+    "sample_count": 600
+  },
+  "run_dir": "runs/corrected_package_a_r125_5b_A0_selected_random_explore_no_location_bias_covfloor_lenloose_ddp23",
+  "sample_count_per_task": 200,
+  "samples_path": "/nvmesv/dredvpn009/projects/brian/reports/package_a_benchmarks/public_s_random_explore_a0_selected_no_location_bias_covfloor_lenloose_ddp23_s200_samples.jsonl",
+  "seed": 1,
+  "tasks": [
+    "piqa",
+    "hellaswag",
+    "arc_easy"
+  ]
+}

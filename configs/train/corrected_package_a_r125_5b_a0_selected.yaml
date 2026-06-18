@@ -1,0 +1,20 @@
+extends: corrected_package_a_r125_2b_a0opt_weak_selected_balance.yaml
+run_name: corrected_package_a_r125_5b_A0_selected
+data_config: ../data/r125_main_5b.yaml
+max_steps: 76294
+eval_interval: 5000
+save_interval: 5000
+post_train_benchmarks:
+  enabled: true
+  output_dir: reports/package_a_benchmarks
+  label: s_selected_a0_selected
+  checkpoint: checkpoint_latest
+  reasoning:
+    enabled: true
+    config: configs/eval/reasoning_eval_s600.yaml
+  public:
+    enabled: true
+    config: configs/eval/public_benchmark_s600.yaml
+wandb:
+  group: corrected_package_a_r125_5b_combo
+  tags: [corrected_package_a, r125, 5b, A0, coverage_warmup, weak_selected_balance]

@@ -1,0 +1,20 @@
+extends: corrected_package_a_r125_5b_ain_anchor_selective_noise.yaml
+run_name: corrected_package_a_r125_5b_Ain_anchor_selective_noise_no_location_bias
+model_config: ../model/brian_r125_sphere16_independent_in_no_location_bias.yaml
+routing:
+  constraints:
+    min_exit_step: 4
+post_train_benchmarks:
+  enabled: true
+  output_dir: reports/package_a_benchmarks
+  label: s1_ain_anchor_selected_noise_no_location_bias
+  checkpoint: checkpoint_latest
+  reasoning:
+    enabled: true
+    config: configs/eval/reasoning_eval_s600.yaml
+  public:
+    enabled: true
+    config: configs/eval/public_benchmark_s600.yaml
+wandb:
+  group: corrected_package_a_r125_5b_location_ablation
+  tags: [corrected_package_a, r125, 5b, Ain, input_anchor, weak_selected_balance, logit_noise, no_location_bias]

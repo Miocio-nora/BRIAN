@@ -1,0 +1,3 @@
+extends: brian_r125_sphere16_no_location_bias_global_kv.yaml
+model_name: brian_r125_sphere16_no_location_bias_global_kv_no_sink
+global_sink_slots: 0

@@ -1,0 +1,31 @@
+{
+  "by_task": {
+    "arc_easy": {
+      "accuracy": 0.33,
+      "sample_count": 200
+    },
+    "hellaswag": {
+      "accuracy": 0.28,
+      "sample_count": 200
+    },
+    "piqa": {
+      "accuracy": 0.545,
+      "sample_count": 200
+    }
+  },
+  "checkpoint": "checkpoint_latest",
+  "length_normalized": true,
+  "overall": {
+    "accuracy": 0.385,
+    "sample_count": 600
+  },
+  "run_dir": "runs/free_sphere_r125_2b_A0_coverage_no23",
+  "sample_count_per_task": 200,
+  "samples_path": "reports/package_a_benchmarks/public_A0_s200_samples.jsonl",
+  "seed": 1,
+  "tasks": [
+    "piqa",
+    "hellaswag",
+    "arc_easy"
+  ]
+}

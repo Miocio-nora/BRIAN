@@ -1,0 +1,74 @@
+{
+  "all_metrics": {
+    "active_block_evals_per_token": 0.9112650583965711,
+    "advance_ratio": 0.3239175940572768,
+    "average_route_steps": 13.49977062717085,
+    "balance_loss": 0.0005879178679419256,
+    "block_load_entropy": 1.8545085408520563,
+    "block_load_entropy_normalized": 0.8918300892738801,
+    "cost_loss": 12.602432425755396,
+    "cuda_max_memory_allocated_mb": 38372.83056640625,
+    "cuda_memory_allocated_mb": 14187.54248046875,
+    "forced_max_step_exit_count": 0.0,
+    "forced_max_step_exit_fraction": 0.0,
+    "inference_latency_ms_per_token": 0.012670001979131484,
+    "inference_time_seconds": 6.642729997634888,
+    "inference_tokens_per_second": 78926.58593479943,
+    "location_distance_mean": 0.0219162330629325,
+    "location_loss": 0.0219162330629325,
+    "max_route_steps": 16.0,
+    "p_output_mean": 0.06586871441392637,
+    "perplexity": 20.400827597663177,
+    "position_norm_mean": 1.0,
+    "recur_ratio": 0.20131327951786523,
+    "route_entropy": 1.7291094368453443,
+    "route_imitation_accuracy": 0.14008094040462477,
+    "route_path_count": 6.395111081984402,
+    "route_path_diversity": 0.19984722131201257,
+    "skip_ratio": 0.4747691264248757,
+    "tokens_per_second": 123176.0,
+    "train_latency_ms_per_token": 0.008118418918456882,
+    "train_step_time_seconds": 0.5320487022399902,
+    "validation_loss": 3.0155754685401917,
+    "weighted_fusion_ratio": 0.8223595796113277
+  },
+  "checks": {
+    "benchmark_score_present": true,
+    "downstream_reports_present": true,
+    "downstream_task_accuracy_present": true,
+    "eval_log_present": true,
+    "perplexity_present": true,
+    "requested_metrics_present": true,
+    "validation_loss_present": true
+  },
+  "downstream": {
+    "benchmark_score": 0.16666666666666666,
+    "downstream_report_count": 1,
+    "downstream_task_accuracy_mean": 0.16666666666666666,
+    "teacher_forced_token_accuracy_mean": 0.7184775641025638
+  },
+  "downstream_reports": [
+    {
+      "benchmark_score": 0.16666666666666666,
+      "exact_match_accuracy": 0.16666666666666666,
+      "path": "reports/package_a_benchmarks/ain_anchor.reasoning_s60.json",
+      "run_dir": "runs/corrected_package_a_r125_2b_AinAnchorA_input_anchor",
+      "sample_count": 60.0,
+      "teacher_forced_token_accuracy": 0.7184775641025638
+    }
+  ],
+  "metrics": {
+    "active_block_evals_per_token": 0.9112650583965711,
+    "perplexity": 20.400827597663177,
+    "tokens_per_second": 123176.0,
+    "validation_loss": 3.0155754685401917
+  },
+  "overall_status": "pass",
+  "requested_metrics": [
+    "validation_loss",
+    "perplexity",
+    "tokens_per_second",
+    "active_block_evals_per_token"
+  ],
+  "run_dir": "runs/corrected_package_a_r125_2b_AinAnchorA_input_anchor"
+}

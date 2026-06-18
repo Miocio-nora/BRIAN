@@ -1,0 +1,21 @@
+extends: corrected_package_a_r125_5b_a0_selected_random_explore_no_location_bias.yaml
+run_name: corrected_package_a_r125_5b_A0_selected_random_explore_no_location_bias_covfloor
+loss_weights:
+  selected_balance: 0.02
+  coverage_floor: 0.05
+routing:
+  constraints:
+    coverage_floor_min: 0.04
+post_train_benchmarks:
+  label: s_random_explore_a0_selected_no_location_bias_covfloor
+wandb:
+  tags:
+  - corrected_package_a
+  - r125
+  - 5b
+  - A0
+  - selected_balance_002
+  - coverage_floor
+  - no_location_bias
+  - random_explore
+  - no_route_imitation

@@ -1,0 +1,17 @@
+{
+  "baseline_checkpoint": "runs/package_a_r125_2b_A0_baseline/checkpoint_latest",
+  "baseline_run": "runs/package_a_r125_2b_A0_baseline",
+  "batch_size": 32,
+  "difficulty_step_correlation": 0.23287873383027488,
+  "max_batches": 8,
+  "mean_baseline_cross_entropy": 3.1861249287612736,
+  "mean_loss_delta": -0.16205855598673224,
+  "mean_route_steps": 12.046875,
+  "mean_routed_cross_entropy": 3.0240663727745414,
+  "routed_checkpoint": "runs/corrected_package_a_r125_2b_A0opt_weak_selected_balance/checkpoint_latest",
+  "routed_eval_step": 30518,
+  "routed_run": "runs/corrected_package_a_r125_2b_A0opt_weak_selected_balance",
+  "sample_count": 256,
+  "samples_path": "reports/package_a_benchmarks/selected.difficulty_step_samples.jsonl",
+  "split": "val"
+}

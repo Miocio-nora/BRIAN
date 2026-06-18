@@ -90,23 +90,46 @@ Corrected free-sphere R125 2B experiments completed on 2026-06-13:
 | B0 | pure free, no 2/3 losses | 3.1557 | weaker LM quality with route concentration |
 | B1 | pure free + selected-balance + transition-diversity | 3.1143 | improves over B0 but remains behind coverage warmup |
 
-The current follow-up package keeps A0 coverage warmup as the anchor and tracks
-five ablations from `configs/experiments/route_core_r125_2b_corrected_package_a_followup.yaml`:
+The corrected follow-up package keeps A0 coverage warmup as the anchor and
+tracks targeted routing changes from
+`configs/experiments/route_core_r125_2b_corrected_package_a_followup.yaml`.
+The current Package A follow-up is stopped after validation-loss and benchmark
+checks:
 
-| ID | Purpose | Current status |
+| ID | Purpose | Current conclusion |
 |---|---|---|
-| A0opt | weak selected-balance to reduce A0 path concentration | running on GPU0 |
-| Apos | remove block-position input/loss under corrected routing | running on GPU1 |
-| Aout | disable hard OUT termination under corrected routing | running on GPU2 |
-| Atop1 | top1-only routing instead of later top-2 weighted fusion | completed; validation loss 3.2347 with full path collapse to repeated block 7, so top1-only is not a viable current direction |
-| Ain | independent learnable IN position instead of reusing block 0 as the initial sphere position | restarted as a 4-GPU run with local batch 8, global batch 32 |
+| A0opt | weak selected-balance to reduce A0 path concentration | strongest current small-method signal; loss stays near A0 and synthetic reasoning improves |
+| Apos | remove block-position input/loss under corrected routing | worse than A0; keep position in the route-core path |
+| Aout | disable hard OUT termination under corrected routing | not selected as the next default; OUT/exit behavior still needs targeted evidence |
+| Atop1 | top1-only routing instead of later top-2 weighted fusion | rejected; validation loss 3.2347 with full path collapse |
+| Noise | train-time router-logit noise | positive paired signal; improves A0 path diversity and does not hurt validation loss |
+| Ain | independent learnable IN position | unresolved; improves validation loss with anchoring but benchmark behavior is not safely positive |
 
-These runs keep only `checkpoint_latest` and upload route-path visualizations to
-W&B through the default `brian-sphere-llm` project.
+The benchmark pass is tracked in
+[reports/package_a_benchmarks/summary.md](./reports/package_a_benchmarks/summary.md).
+It uses `reasoning_eval`, `out_by_difficulty`, `lm_eval`, and
+`difficulty_step_eval` with `checkpoint_latest`. The key outcome is that
+validation loss alone is not sufficient: the fixed Transformer baseline remains
+stronger on synthetic reasoning, while selected-balance is the best current
+routed follow-up on the benchmark evidence.
 
-An additional fine-grained route-pool branch is implemented but not launched:
-`configs/train/finegrained_r125_2b_pool16_ain_coverage_no23.yaml` uses 16
-smaller route-pool blocks, 32 max route steps, and the independent IN position.
+The next-step plan is tracked in
+[reports/package_a_benchmarks/next_plan.md](./reports/package_a_benchmarks/next_plan.md).
+The regular benchmark suite is now fixed around
+`configs/eval/reasoning_eval_s600.yaml`,
+`configs/eval/public_benchmark_s600.yaml`,
+`configs/eval/difficulty_step_latest.yaml`, and
+`configs/eval/out_by_difficulty.yaml`. Two 2B combo validations and matching
+5B scale-up configs are prepared but not launched. The S-class 5B package also
+includes a token-budget-matched plain Transformer baseline
+(`configs/train/corrected_package_a_r125_5b_baseline.yaml`) so routed scale-up
+results have a valid reference.
+
+An additional fine-grained route-pool branch was implemented:
+`configs/train/finegrained_r125_2b_pool16_ain_coverage_no23.yaml`. The initial
+16-block run OOMed at batch 32, and the batch-16/accum-2 retry showed obvious
+path collapse before being stopped. Larger route pools should not be pursued
+without selective-balance-style constraints.
 
 The corrected route-core judgment is tracked in
 [reports/corrected_free_sphere_r125_2b_experiment_judgment.md](./reports/corrected_free_sphere_r125_2b_experiment_judgment.md).

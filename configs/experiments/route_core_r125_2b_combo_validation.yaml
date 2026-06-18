@@ -1,0 +1,14 @@
+experiment_name: route_core_r125_2b_combo_validation
+description: >
+  Two-run corrected R125 2B validation package for combining the currently
+  useful routing stabilizers before any scale-up.
+baseline_train_config: configs/train/free_sphere_r125_2b_a0_coverage_no23.yaml
+ablations:
+  - id: C0
+    name: a0_selected_noise
+    train_config: configs/train/corrected_package_a_r125_2b_a0_selected_noise.yaml
+    purpose: Test whether weak selected-balance and train-time router noise stack cleanly on A0.
+  - id: C1
+    name: ain_anchor_selective_noise
+    train_config: configs/train/corrected_package_a_r125_2b_ain_anchor_selective_noise.yaml
+    purpose: Test independent IN only with anchor, selected-balance, and noise together.
