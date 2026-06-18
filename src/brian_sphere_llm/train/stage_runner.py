@@ -33,6 +33,7 @@ def train_mode_for_stage(stage: str) -> str:
         "stage4_output_action",
         "stage5_output_action",
         "stage5_global_kv",
+        "stage5_attention_global_kv",
     }:
         return "scheduled"
     if stage == "stage4_pure_free_sphere":

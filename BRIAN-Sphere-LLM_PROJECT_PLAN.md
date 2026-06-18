@@ -589,6 +589,15 @@ window cache + attention sink
 
 Do not add complex memory tiers or heavy-hitter policies in the first global-KV stage.
 
+Current implementation status:
+
+- `global_kv`: hidden-summary canonical compressed memory, read through adapters.
+- `attention_global_kv`: route-only attention-level K/V memory, read directly by
+  route-pool self-attention.
+
+The attention-level branch is additive and does not replace the hidden-summary
+branch.
+
 ### Stage 6: Parallel passing
 
 Only after route-core and global KV are stable.
@@ -643,6 +652,20 @@ local KV: block/head-private, normal attention pathway
 global KV: shared canonical compressed memory
 ```
 
+There are now two concrete Stage 5 memory objects:
+
+```text
+hidden-summary Global KV:
+  hidden state -> compressed code -> adapter read
+
+attention-level Global KV:
+  route attention K/V -> compressed memory slot -> direct attention prefix
+```
+
+The attention-level path keeps one compressed K/V slot per routed block call,
+not a full token-level cache. It is deliberately route-only in the first version
+because the route-pool is the free-routing continuous-thought region.
+
 ### 10.3 First global cache policy
 
 Use:
@@ -656,6 +679,18 @@ M_global = M_sink ∪ M_window
 
 Do not use complex 3-tier memory in the first version.
 
+For `attention_global_kv`, sink/window retention applies to attention K/V slots:
+
+```text
+keys:   [batch, heads, slots, head_dim]
+values: [batch, heads, slots, head_dim]
+valid:  [batch, slots]
+```
+
+Route-pool attention attends to `concat(global K/V, local K/V)` with valid
+global slots visible to every token and local tokens still causal. A learnable
+negative initial global logit bias controls early over-read.
+
 ### 10.4 First global-KV questions
 
 The global KV stage should answer:
@@ -665,6 +700,8 @@ The global KV stage should answer:
 3. Does it reduce effective KV memory under equal quality?
 4. Does sink retention help stability?
 5. Are per-block or per-head adapters necessary?
+6. Does direct attention-level Global KV outperform hidden-summary Global KV on
+   long-context and routing-memory diagnostics?
 
 ---
 
@@ -1531,6 +1568,7 @@ C5: window size sweep
 C6: per-block adapter
 C7: shared per-head low-rank delta
 C8: per-block + per-head low-rank delta
+C9: route-only attention-level Global KV
 ```
 
 Evaluation:
@@ -1547,6 +1585,10 @@ Goal:
 ```text
 prove canonical global KV has measurable memory or long-context value
 ```
+
+The C9 attention-level branch should be compared against the corrected local
+route-core baseline and the existing hidden-summary compressed Global KV run
+before any larger Global KV scale-up.
 
 Expected cost:
 

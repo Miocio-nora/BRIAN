@@ -378,6 +378,7 @@ def test_output_action_and_later_train_configs_keep_hard_exit_enabled() -> None:
         "stage4_output_action",
         "stage5_output_action",
         "stage5_global_kv",
+        "stage5_attention_global_kv",
         "stage6_parallel_passing",
         "stage7_parallel_passing",
     }

@@ -1,0 +1,12 @@
+extends: corrected_attention_global_kv_r125_5b.yaml
+run_name: smoke_corrected_attention_global_kv_r125_5b
+data_config: ../data/r125_smoke.yaml
+max_steps: 3
+eval_interval: 3
+save_interval: 3
+route_path_visualization:
+  enabled: false
+post_train_benchmarks:
+  enabled: false
+wandb:
+  enabled: false

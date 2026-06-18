@@ -138,6 +138,22 @@ def summarize_routes(
     if "global_cache_slots" in route_info and route_info["global_cache_slots"]:
         slots = torch.stack(route_info["global_cache_slots"])
         summary["global_cache_slots_mean"] = float(slots.mean().detach().cpu())
+    if "attention_global_kv_slots" in route_info and route_info["attention_global_kv_slots"]:
+        slots = torch.stack(route_info["attention_global_kv_slots"])
+        summary["attention_global_kv_slots_mean"] = float(slots.mean().detach().cpu())
+        summary["attention_global_kv_slots_max"] = float(slots.max().detach().cpu())
+    if "attention_global_kv_write_count" in route_info and route_info["attention_global_kv_write_count"]:
+        counts = torch.stack(route_info["attention_global_kv_write_count"])
+        summary["attention_global_kv_write_count_mean"] = float(counts.mean().detach().cpu())
+    for source_key, summary_key in [
+        ("attention_global_kv_logit_bias", "attention_global_kv_logit_bias_mean"),
+        ("attention_global_kv_last_token_mass", "attention_global_kv_last_token_mass"),
+        ("attention_global_kv_sink_last_token_mass", "attention_global_kv_sink_last_token_mass"),
+        ("attention_global_kv_window_last_token_mass", "attention_global_kv_window_last_token_mass"),
+    ]:
+        if source_key in route_info and route_info[source_key]:
+            values = torch.stack(route_info[source_key])
+            summary[summary_key] = float(values.mean().detach().cpu())
     if "parallel_branch_count" in route_info and route_info["parallel_branch_count"]:
         counts = torch.stack(route_info["parallel_branch_count"])
         summary["parallel_branch_count_mean"] = float(counts.mean().detach().cpu())

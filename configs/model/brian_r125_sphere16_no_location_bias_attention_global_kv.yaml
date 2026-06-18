@@ -1,0 +1,10 @@
+extends: brian_r125_sphere16_no_location_bias.yaml
+model_name: brian_r125_sphere16_no_location_bias_attention_global_kv
+attention_global_kv: true
+attention_global_kv_scope: route
+attention_global_sink_slots: 4
+attention_global_window_slots: 32
+attention_global_tokens_per_write: 1
+attention_global_logit_bias_init: -4.0
+global_kv: false
+hard_exit: true

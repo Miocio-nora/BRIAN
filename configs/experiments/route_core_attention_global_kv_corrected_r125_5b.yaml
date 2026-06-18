@@ -1,0 +1,19 @@
+experiment_name: route_core_attention_global_kv_corrected_r125_5b
+description: >
+  Corrected BRIAN-R125 5B attention-level Global KV validation. This branch
+  keeps Global K/V memory only inside route pool blocks and leaves the existing
+  hidden-summary Global KV path as a separate mechanism.
+baseline_train_config: configs/train/corrected_package_a_r125_5b_a0_selected_random_explore_no_location_bias_covfloor_stronglen.yaml
+ablations:
+  - id: C0
+    name: local_kv_only_corrected_route
+    train_config: configs/train/corrected_package_a_r125_5b_a0_selected_random_explore_no_location_bias_covfloor_stronglen.yaml
+    purpose: Local-only corrected route-core reference.
+  - id: H0
+    name: hidden_summary_global_kv
+    train_config: configs/train/corrected_global_kv_r125_5b.yaml
+    purpose: Existing compressed hidden-summary Global KV reference.
+  - id: A0
+    name: attention_level_global_kv
+    train_config: configs/train/corrected_attention_global_kv_r125_5b.yaml
+    purpose: Route-only attention-level Global K/V memory with sink plus sliding-window retention.

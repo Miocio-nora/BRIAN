@@ -13,7 +13,13 @@ from brian_sphere_llm.losses.location_loss import location_loss
 from brian_sphere_llm.losses.route_loss import route_imitation_loss
 from brian_sphere_llm.losses.selected_balance_loss import selected_block_balance_loss
 from brian_sphere_llm.losses.transition_diversity_loss import transition_diversity_loss
-from brian_sphere_llm.memory import CanonicalGlobalCache, GlobalReadAdapter, GlobalWriteAdapter
+from brian_sphere_llm.memory import (
+    AttentionGlobalKVState,
+    CanonicalAttentionGlobalKVCache,
+    CanonicalGlobalCache,
+    GlobalReadAdapter,
+    GlobalWriteAdapter,
+)
 from brian_sphere_llm.model.baseline import BaselineConfig, _float_value, _int_value
 from brian_sphere_llm.model.exit_block import ExitBlock
 from brian_sphere_llm.model.llama_backbone import (
@@ -64,6 +70,12 @@ class BrianRouteConfig:
     global_window_slots: int = 32
     global_adapter_scope: str = "shared"
     global_head_delta_rank: int = 0
+    attention_global_kv: bool = False
+    attention_global_kv_scope: str = "route"
+    attention_global_sink_slots: int = 4
+    attention_global_window_slots: int = 32
+    attention_global_tokens_per_write: int = 1
+    attention_global_logit_bias_init: float = -4.0
     parallel_passing: bool = False
     beam_size: int = 2
     branch_cost: float = 0.01
@@ -118,6 +130,27 @@ class BrianRouteConfig:
                 "global_head_delta_rank",
                 minimum=0,
             ),
+            attention_global_kv=_bool_value(data.get("attention_global_kv", False), "attention_global_kv"),
+            attention_global_kv_scope=str(data.get("attention_global_kv_scope", "route")),
+            attention_global_sink_slots=_int_value(
+                data.get("attention_global_sink_slots", 4),
+                "attention_global_sink_slots",
+                minimum=0,
+            ),
+            attention_global_window_slots=_int_value(
+                data.get("attention_global_window_slots", 32),
+                "attention_global_window_slots",
+                minimum=0,
+            ),
+            attention_global_tokens_per_write=_int_value(
+                data.get("attention_global_tokens_per_write", 1),
+                "attention_global_tokens_per_write",
+                minimum=1,
+            ),
+            attention_global_logit_bias_init=_float_value(
+                data.get("attention_global_logit_bias_init", -4.0),
+                "attention_global_logit_bias_init",
+            ),
             parallel_passing=_bool_value(data.get("parallel_passing", False), "parallel_passing"),
             beam_size=_int_value(data.get("beam_size", 2), "beam_size", minimum=1),
             branch_cost=_float_value(data.get("branch_cost", 0.01), "branch_cost", minimum=0.0),
@@ -151,10 +184,25 @@ class BrianRouteCore(ModuleBase):
                 raise ValueError("pre + post must be <= base layer count for fine-grained route pools")
         elif config.pre_blocks + config.route_pool_blocks + config.post_blocks != config.base.layers:
             raise ValueError("pre + route_pool + post must equal base layer count")
+        if config.attention_global_kv:
+            if config.attention_global_kv_scope != "route":
+                raise ValueError("attention_global_kv_scope currently supports only 'route'")
+            if config.attention_global_tokens_per_write != 1:
+                raise ValueError("attention_global_tokens_per_write currently supports only 1")
+            if config.attention_global_sink_slots + config.attention_global_window_slots <= 0:
+                raise ValueError("Attention Global KV requires at least one retained slot")
+            if config.parallel_passing:
+                raise ValueError("Attention Global KV is route-only and does not support parallel_passing yet")
         backbone = config.base.backbone()
         route_backbone = backbone
         if config.route_block_ffn_multiplier is not None:
             route_backbone = replace(backbone, ffn_multiplier=config.route_block_ffn_multiplier)
+        if config.attention_global_kv:
+            route_backbone = replace(
+                route_backbone,
+                attention_global_logit_bias_init=config.attention_global_logit_bias_init,
+                attention_global_sink_slots=config.attention_global_sink_slots,
+            )
         self.token_embedding = nn.Embedding(config.base.vocab_size, config.base.d_model)
         self.pre_blocks = nn.ModuleList([TransformerBlock(backbone) for _ in range(config.pre_blocks)])
         self.route_blocks = nn.ModuleList(
@@ -205,6 +253,13 @@ class BrianRouteCore(ModuleBase):
             self.global_cache = None
             self.global_write = None
             self.global_read = None
+        if config.attention_global_kv:
+            self.attention_global_cache = CanonicalAttentionGlobalKVCache(
+                config.attention_global_sink_slots,
+                config.attention_global_window_slots,
+            )
+        else:
+            self.attention_global_cache = None
         self.norm = RMSNorm(config.base.d_model)
         self.lm_head = nn.Linear(config.base.d_model, config.base.vocab_size, bias=False)
         self.lm_head.weight = self.token_embedding.weight
@@ -254,6 +309,12 @@ class BrianRouteCore(ModuleBase):
             "global_window_attention_mass": [],
             "global_read_gate": [],
             "global_cache_slots": [],
+            "attention_global_kv_slots": [],
+            "attention_global_kv_write_count": [],
+            "attention_global_kv_logit_bias": [],
+            "attention_global_kv_last_token_mass": [],
+            "attention_global_kv_sink_last_token_mass": [],
+            "attention_global_kv_window_last_token_mass": [],
             "parallel_delta_cache_slots": [],
             "hard_exit_enabled": bool(hard_exit),
             "max_route_steps": self.config.max_route_steps,
@@ -277,6 +338,16 @@ class BrianRouteCore(ModuleBase):
             )
             global_state = self.global_cache.write(global_state, self._global_write(hidden))
         last_global_actions = None
+        attention_global_state = None
+        if self.config.attention_global_kv:
+            assert self.attention_global_cache is not None
+            attention_global_state = self.attention_global_cache.empty(
+                batch_size=batch_size,
+                n_heads=self.config.base.n_heads,
+                head_dim=self.config.base.d_model // self.config.base.n_heads,
+                device=input_ids.device,
+                dtype=hidden.dtype,
+            )
 
         if route_mode == "parallel" or self.config.parallel_passing:
             hidden, position, route_info = self._run_parallel_route(hidden, position, route_info, hard_exit, global_state)
@@ -338,7 +409,20 @@ class BrianRouteCore(ModuleBase):
             selected = torch.where(exited, torch.full_like(selected, self.out_action), selected)
             use_weighted_fusion = use_weighted_fusion & ~exited & (selected != self.out_action)
             exit_now = selected == self.out_action
-            hidden = self._apply_routed_blocks(hidden, position, selected, top_actions, top_weights, use_weighted_fusion)
+            if self.config.attention_global_kv and attention_global_state is not None:
+                hidden, write_key, write_value, write_valid = self._apply_routed_blocks_with_attention_global(
+                    hidden,
+                    position,
+                    selected,
+                    top_actions,
+                    top_weights,
+                    use_weighted_fusion,
+                    attention_global_state,
+                    route_info,
+                )
+            else:
+                hidden = self._apply_routed_blocks(hidden, position, selected, top_actions, top_weights, use_weighted_fusion)
+                write_key = write_value = write_valid = None
             if hard_exit:
                 exited = exited | exit_now
             position = self._next_position(selected, top_actions, top_weights, use_weighted_fusion)
@@ -346,6 +430,21 @@ class BrianRouteCore(ModuleBase):
                 assert self.global_write is not None and self.global_cache is not None
                 global_state = self.global_cache.write(global_state, self._global_write(hidden, selected))
                 last_global_actions = selected
+            if self.config.attention_global_kv and attention_global_state is not None:
+                assert self.attention_global_cache is not None
+                assert write_key is not None and write_value is not None and write_valid is not None
+                write_valid = write_valid & ~exited & (selected != self.out_action)
+                if torch.any(write_valid):
+                    attention_global_state = self.attention_global_cache.write(
+                        attention_global_state,
+                        write_key,
+                        write_value,
+                        write_valid,
+                    )
+                route_info["attention_global_kv_slots"].append(
+                    torch.tensor(float(attention_global_state.slots), device=input_ids.device, dtype=hidden.dtype)
+                )
+                route_info["attention_global_kv_write_count"].append(write_valid.to(hidden.dtype).sum())
 
             route_info["route_logits"].append(logits)
             route_info["route_probs"].append(probs)
@@ -732,6 +831,131 @@ class BrianRouteCore(ModuleBase):
                 next_hidden[fallback_mask] = self._apply_selected_blocks(hidden, position, selected)[fallback_mask]
         return next_hidden
 
+    def _apply_routed_blocks_with_attention_global(
+        self,
+        hidden: torch.Tensor,
+        position: torch.Tensor,
+        selected: torch.Tensor,
+        top_actions: torch.Tensor,
+        top_weights: torch.Tensor,
+        use_weighted_fusion: torch.Tensor,
+        attention_global_state: AttentionGlobalKVState,
+        route_info: dict[str, Any],
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        next_hidden = hidden.clone()
+        write_key, write_value, write_valid = self._empty_attention_global_write(hidden)
+        block_position = self._block_position(position)
+        for action, block in enumerate(self.route_blocks):
+            top1_mask = (selected == action) & ~use_weighted_fusion
+            if torch.any(top1_mask):
+                indices = torch.nonzero(top1_mask, as_tuple=False).flatten()
+                output, key_summary, value_summary, metrics = block(
+                    hidden[indices],
+                    block_position[indices],
+                    attention_global_state.index_select(indices),
+                    return_attention_kv=True,
+                )
+                next_hidden[indices] = output
+                write_key[indices] = key_summary.to(write_key.dtype)
+                write_value[indices] = value_summary.to(write_value.dtype)
+                write_valid[indices] = True
+                self._append_attention_global_metrics(route_info, metrics)
+
+        if torch.any(use_weighted_fusion):
+            accum = torch.zeros_like(hidden)
+            key_accum = torch.zeros_like(write_key)
+            value_accum = torch.zeros_like(write_value)
+            weight_sum = torch.zeros(hidden.size(0), dtype=hidden.dtype, device=hidden.device)
+            for action, block in enumerate(self.route_blocks):
+                for rank in range(top_actions.size(1)):
+                    mask = use_weighted_fusion & (top_actions[:, rank] == action)
+                    if not torch.any(mask):
+                        continue
+                    indices = torch.nonzero(mask, as_tuple=False).flatten()
+                    action_output, key_summary, value_summary, metrics = block(
+                        hidden[indices],
+                        block_position[indices],
+                        attention_global_state.index_select(indices),
+                        return_attention_kv=True,
+                    )
+                    weight = top_weights[indices, rank].to(hidden.dtype)
+                    accum[indices] = accum[indices] + action_output * weight.view(-1, 1, 1)
+                    key_accum[indices] = key_accum[indices] + key_summary.to(key_accum.dtype) * weight.view(-1, 1, 1)
+                    value_accum[indices] = (
+                        value_accum[indices] + value_summary.to(value_accum.dtype) * weight.view(-1, 1, 1)
+                    )
+                    weight_sum[indices] = weight_sum[indices] + weight
+                    self._append_attention_global_metrics(route_info, metrics)
+            weighted_mask = use_weighted_fusion & (weight_sum > 0)
+            if torch.any(weighted_mask):
+                denom = weight_sum[weighted_mask]
+                next_hidden[weighted_mask] = accum[weighted_mask] / denom.view(-1, 1, 1)
+                write_key[weighted_mask] = key_accum[weighted_mask] / denom.view(-1, 1, 1)
+                write_value[weighted_mask] = value_accum[weighted_mask] / denom.view(-1, 1, 1)
+                write_valid[weighted_mask] = True
+            fallback_mask = use_weighted_fusion & (weight_sum <= 0)
+            if torch.any(fallback_mask):
+                selected_hidden, selected_key, selected_value, selected_valid = self._apply_selected_blocks_with_attention_global(
+                    hidden,
+                    position,
+                    selected,
+                    attention_global_state,
+                    route_info,
+                )
+                next_hidden[fallback_mask] = selected_hidden[fallback_mask]
+                write_key[fallback_mask] = selected_key[fallback_mask]
+                write_value[fallback_mask] = selected_value[fallback_mask]
+                write_valid[fallback_mask] = selected_valid[fallback_mask]
+        return next_hidden, write_key, write_value, write_valid
+
+    def _apply_selected_blocks_with_attention_global(
+        self,
+        hidden: torch.Tensor,
+        position: torch.Tensor,
+        selected: torch.Tensor,
+        attention_global_state: AttentionGlobalKVState,
+        route_info: dict[str, Any],
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        next_hidden = hidden.clone()
+        write_key, write_value, write_valid = self._empty_attention_global_write(hidden)
+        block_position = self._block_position(position)
+        for action, block in enumerate(self.route_blocks):
+            mask = selected == action
+            if torch.any(mask):
+                indices = torch.nonzero(mask, as_tuple=False).flatten()
+                output, key_summary, value_summary, metrics = block(
+                    hidden[indices],
+                    block_position[indices],
+                    attention_global_state.index_select(indices),
+                    return_attention_kv=True,
+                )
+                next_hidden[indices] = output
+                write_key[indices] = key_summary.to(write_key.dtype)
+                write_value[indices] = value_summary.to(write_value.dtype)
+                write_valid[indices] = True
+                self._append_attention_global_metrics(route_info, metrics)
+        return next_hidden, write_key, write_value, write_valid
+
+    def _empty_attention_global_write(self, hidden: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        head_dim = self.config.base.d_model // self.config.base.n_heads
+        shape = (hidden.size(0), self.config.base.n_heads, head_dim)
+        return (
+            hidden.new_zeros(shape),
+            hidden.new_zeros(shape),
+            torch.zeros(hidden.size(0), dtype=torch.bool, device=hidden.device),
+        )
+
+    def _append_attention_global_metrics(self, route_info: dict[str, Any], metrics: dict[str, torch.Tensor]) -> None:
+        for key in [
+            "attention_global_kv_logit_bias",
+            "attention_global_kv_last_token_mass",
+            "attention_global_kv_sink_last_token_mass",
+            "attention_global_kv_window_last_token_mass",
+        ]:
+            value = metrics.get(key)
+            if value is not None:
+                route_info[key].append(value)
+
     def _next_position(
         self,
         selected: torch.Tensor,
@@ -908,6 +1132,12 @@ class BrianRouteCore(ModuleBase):
             "global_window_slots": self.config.global_window_slots,
             "global_adapter_scope": self.config.global_adapter_scope,
             "global_head_delta_rank": self.config.global_head_delta_rank,
+            "attention_global_kv": str(self.config.attention_global_kv),
+            "attention_global_kv_scope": self.config.attention_global_kv_scope,
+            "attention_global_sink_slots": self.config.attention_global_sink_slots,
+            "attention_global_window_slots": self.config.attention_global_window_slots,
+            "attention_global_tokens_per_write": self.config.attention_global_tokens_per_write,
+            "attention_global_logit_bias_init": str(self.config.attention_global_logit_bias_init),
             "parallel_passing": str(self.config.parallel_passing),
             "beam_size": self.config.beam_size,
             "branch_cost": str(self.config.branch_cost),

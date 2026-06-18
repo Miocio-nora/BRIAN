@@ -1,0 +1,20 @@
+extends: corrected_package_a_r125_5b_a0_selected_random_explore_no_location_bias_covfloor_stronglen.yaml
+stage: stage5_attention_global_kv
+run_name: corrected_attention_global_kv_r125_5b
+model_config: ../model/brian_r125_sphere16_no_location_bias_attention_global_kv.yaml
+post_train_benchmarks:
+  label: s_attention_global_kv_corrected
+wandb:
+  group: corrected_attention_global_kv_r125_5b
+  tags:
+  - corrected_package_a
+  - attention_global_kv
+  - r125
+  - 5b
+  - route_only
+  - selected_balance_002
+  - coverage_floor
+  - strong_length
+  - no_location_bias
+  - random_explore
+  - no_route_imitation

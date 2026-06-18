@@ -30,9 +30,20 @@ class RouteBlock(ModuleBase):
         else:
             raise ValueError(f"Unknown block position injection: {position_injection}")
 
-    def forward(self, hidden: torch.Tensor, position: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self,
+        hidden: torch.Tensor,
+        position: torch.Tensor,
+        attention_global_state: object | None = None,
+        *,
+        return_attention_kv: bool = False,
+    ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor, torch.Tensor, dict[str, torch.Tensor]]:
         bias = self._position_bias(position)
-        return self.block(hidden + bias)
+        return self.block(
+            hidden + bias,
+            attention_global_state,
+            return_attention_kv=return_attention_kv,
+        )
 
     def _position_bias(self, position: torch.Tensor) -> torch.Tensor:
         if self.position_injection == "direct_add":

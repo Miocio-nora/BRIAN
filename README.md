@@ -29,6 +29,8 @@ Implemented v0.1 pieces:
   selected-balance / transition-diversity / exit-boundary losses;
 - route-path visualization reports with optional W&B upload during training;
 - minimal canonical Global KV path with sink + sliding window retention for Stage 5;
+- route-only attention-level Global KV path that lets route-pool attention read
+  shared compressed K/V memory directly;
 - experimental Stage 6 parallel passing with beam scoring, pruning, shared base Global KV, and per-branch delta memory;
 - JSONL train/eval logs with throughput, latency, CUDA memory diagnostics, model stats, data manifest references, checkpoint save/resume, and routing report generation;
 - B200-compatible conda environment using PyTorch CUDA 12.8 wheels.
@@ -133,6 +135,15 @@ without selective-balance-style constraints.
 
 The corrected route-core judgment is tracked in
 [reports/corrected_free_sphere_r125_2b_experiment_judgment.md](./reports/corrected_free_sphere_r125_2b_experiment_judgment.md).
+
+Stage 5 Global KV now has two separate implementations. The existing
+`global_kv` path stores compressed hidden-state memory and reads it back through
+adapter layers. The new `attention_global_kv` path stores compressed
+attention-level K/V slots and prepends them directly inside route-pool
+self-attention. The attention-level branch is documented in
+[reports/attention_global_kv_design.md](./reports/attention_global_kv_design.md)
+and is configured by
+`configs/train/corrected_attention_global_kv_r125_5b.yaml`.
 
 See [BRIAN-Sphere-LLM_PROJECT_PLAN.md](./BRIAN-Sphere-LLM_PROJECT_PLAN.md) for the full technical plan.
 See [CODEX_GUIDANCE.md](./CODEX_GUIDANCE.md) for implementation guidance.
@@ -577,6 +588,25 @@ These cover the local-KV baseline, uncompressed and compressed Global KV, no-sin
 default sink+window Global KV, a small cache-window sweep, per-block Global KV adapters,
 shared per-head low-rank adapter deltas, and per-block plus per-head low-rank adapter deltas.
 
+Run the corrected R125 5B attention-level Global KV validation:
+
+```bash
+python scripts/train.py \
+  --config configs/train/corrected_attention_global_kv_r125_5b.yaml
+```
+
+The smoke version is:
+
+```bash
+python scripts/train.py \
+  --config configs/train/corrected_attention_global_kv_r125_5b_smoke.yaml
+```
+
+This branch is additive to the hidden-summary `global_kv` path. It sets
+`attention_global_kv: true`, keeps `global_kv: false`, stores route-only K/V
+memory with sink plus sliding-window retention, and logs
+`attention_global_kv_*` diagnostics.
+
 Compare top-k weighted fusion against parallel passing:
 
 ```bash
@@ -836,7 +866,7 @@ Routing behavior is a first-class research output. Every routed model should rep
 - latency/token, train step time, inference timing, and CUDA memory snapshots;
 - difficulty-step correlation;
 - `OUT` probability by difficulty.
-Global KV reports additionally track global read gate, local/global read ratios, global cache slots, sink/window attention mass, and cache window/capacity utilization.
+Global KV reports additionally track global read gate, local/global read ratios, global cache slots, sink/window attention mass, and cache window/capacity utilization. Attention-level Global KV reports add route-only K/V slot counts, write counts, learned global logit bias, and sink/window attention mass diagnostics.
 
 The most important route-core diagnostic is:
 
