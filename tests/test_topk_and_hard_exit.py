@@ -161,6 +161,35 @@ def test_self_recur_cap_blocks_consecutive_self_loops() -> None:
     assert output["routing_summary"]["self_recur_cap_count"] > 0
 
 
+def test_self_recur_cap_keeps_route_loss_finite_when_targets_are_masked() -> None:
+    cfg = BrianRouteConfig(
+        base=BaselineConfig(vocab_size=64, context_length=8, layers=5, d_model=32, n_heads=4),
+        pre_blocks=1,
+        route_pool_blocks=3,
+        post_blocks=1,
+        block_position_dim=8,
+        max_route_steps=4,
+        top_k=1,
+        later_top_k=1,
+    )
+    model = BrianRouteCore(cfg)
+    _set_router_bias(model, {0: 10.0, 1: 0.0, 2: -1.0, cfg.route_pool_blocks: -10.0})
+    input_ids = torch.randint(0, 64, (2, 8))
+
+    output = model(
+        input_ids,
+        targets=input_ids,
+        route_mode="scheduled",
+        pseudo_policy="balanced_coverage",
+        router_probability=1.0,
+        loss_weights={"route": 0.0},
+        routing_constraints={"self_recur_max_consecutive": 1},
+    )
+
+    assert torch.isfinite(output["loss_components"]["route_loss"])
+    assert torch.isfinite(output["loss"])
+
+
 def test_pseudo_route_targets_control_forward_and_supervise_out_even_when_router_prefers_out() -> None:
     cfg = BrianRouteConfig(
         base=BaselineConfig(vocab_size=64, context_length=8, layers=4, d_model=32, n_heads=4),

@@ -1175,7 +1175,7 @@ class BrianRouteCore(ModuleBase):
             return logits, torch.zeros(logits.size(0), dtype=torch.bool, device=logits.device)
         adjusted = logits.clone()
         rows = torch.nonzero(capped, as_tuple=False).flatten()
-        adjusted[rows, last_internal_action[rows]] = torch.finfo(logits.dtype).min
+        adjusted[rows, last_internal_action[rows]] = logits.new_tensor(-1.0e4)
         return adjusted, capped
 
     def _enforce_self_recur_cap_on_selected(
