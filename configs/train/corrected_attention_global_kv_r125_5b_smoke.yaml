@@ -6,6 +6,8 @@ eval_interval: 3
 save_interval: 3
 route_path_visualization:
   enabled: false
+router_space_visualization:
+  enabled: false
 post_train_benchmarks:
   enabled: false
 wandb:

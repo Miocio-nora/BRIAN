@@ -283,6 +283,7 @@ def _forward_routed_for_visualization(
     config: dict[str, Any],
     route_mode: str,
     global_step: int,
+    collect_router_space: bool = False,
 ) -> dict[str, Any]:
     routing_cfg = _mapping_config(config, "routing")
     loss_weights = dict(_mapping_config(config, "loss_weights"))
@@ -306,6 +307,7 @@ def _forward_routed_for_visualization(
         ),
         router_probability=router_probability,
         global_step=global_step,
+        collect_router_space=collect_router_space,
     )
 
 

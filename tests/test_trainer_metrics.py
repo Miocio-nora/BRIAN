@@ -29,6 +29,7 @@ from brian_sphere_llm.train.trainer import (
     _next_train_batch,
     _restore_dataloader_position,
     _route_path_visualization_config,
+    _router_space_visualization_config,
     _schedule_values,
     _set_sampler_epoch,
     _wrap_distributed_model,
@@ -261,6 +262,19 @@ def test_route_path_visualization_config_uses_save_interval_default() -> None:
     assert config["top_paths"] == 12
     assert config["upload_to_wandb"] is True
     assert config["output_dir"] == "route_path_visualizations"
+
+
+def test_router_space_visualization_config_uses_save_interval_default() -> None:
+    config = _router_space_visualization_config(
+        {"router_space_visualization": {"enabled": True, "max_points": 512}},
+        default_interval=2500,
+    )
+
+    assert config["enabled"] is True
+    assert config["interval"] == 2500
+    assert config["max_points"] == 512
+    assert config["upload_to_wandb"] is True
+    assert config["output_dir"] == "router_space_visualizations"
 
 
 def test_distributed_cuda_device_uses_local_rank(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -4,6 +4,11 @@ run_name: corrected_global_kv_r125_5b_compressed
 model_config: ../model/brian_r125_sphere16_no_location_bias_global_kv.yaml
 post_train_benchmarks:
   label: s_global_kv_corrected_compressed
+router_space_visualization:
+  enabled: true
+  interval: 2500
+  max_points: 2048
+  upload_to_wandb: true
 wandb:
   group: corrected_global_kv_r125_5b
   tags:

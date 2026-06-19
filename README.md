@@ -145,6 +145,12 @@ self-attention. The attention-level branch is documented in
 and is configured by
 `configs/train/corrected_attention_global_kv_r125_5b.yaml`.
 
+Router-space diagnostics are documented in
+[reports/router_space_diagnostics.md](./reports/router_space_diagnostics.md).
+They project the router MLP hidden state and the router scoring-layer expert
+vectors into PCA space to inspect block expert separation, domination, and
+self-recurrent collapse.
+
 See [BRIAN-Sphere-LLM_PROJECT_PLAN.md](./BRIAN-Sphere-LLM_PROJECT_PLAN.md) for the full technical plan.
 See [CODEX_GUIDANCE.md](./CODEX_GUIDANCE.md) for implementation guidance.
 
@@ -607,6 +613,19 @@ This branch is additive to the hidden-summary `global_kv` path. It sets
 memory with sink plus sliding-window retention, and logs
 `attention_global_kv_*` diagnostics.
 
+Generate a router-space diagnostic for a run:
+
+```bash
+python scripts/eval.py \
+  --config configs/eval/router_space_visualization.yaml \
+  --run <routed_run> \
+  --checkpoint checkpoint_latest
+```
+
+This writes `router_space_visualization.html` and `.json` under the run
+directory. New Global KV validation starts can also upload the same view during
+training through `router_space_visualization`.
+
 Compare top-k weighted fusion against parallel passing:
 
 ```bash
@@ -867,6 +886,9 @@ Routing behavior is a first-class research output. Every routed model should rep
 - difficulty-step correlation;
 - `OUT` probability by difficulty.
 Global KV reports additionally track global read gate, local/global read ratios, global cache slots, sink/window attention mass, and cache window/capacity utilization. Attention-level Global KV reports add route-only K/V slot counts, write counts, learned global logit bias, and sink/window attention mass diagnostics.
+Router-space reports track selected/raw/effective action domination, dead
+actions, router entropy, self-recurrent ratio, and scoring-layer expert
+geometry.
 
 The most important route-core diagnostic is:
 

@@ -11,6 +11,7 @@ from typing import Any
 
 from brian_sphere_llm.data.dataloader import build_dataloader
 from brian_sphere_llm.data.manifest import sha256_text
+from brian_sphere_llm.eval.router_space_visualization import make_router_space_visualization_from_payload
 from brian_sphere_llm.eval.route_path_visualization import make_route_path_visualization_from_train_log
 from brian_sphere_llm.eval.routing_report import make_routing_report
 from brian_sphere_llm.train.checkpoint import (
@@ -212,6 +213,7 @@ def train_from_config(config_path: str | Path) -> Path:
     eval_log = JsonlLogger(run_dir / "eval_log.jsonl") if is_main_process else None
     write_routing_report = _bool_config(config, "write_routing_report_on_checkpoint", default=True)
     route_path_visualization = _route_path_visualization_config(config, default_interval=save_interval)
+    router_space_visualization = _router_space_visualization_config(config, default_interval=save_interval)
     ddp_no_sync_microbatches = _ddp_no_sync_microbatch_count(
         model,
         distributed=distributed,
@@ -244,6 +246,12 @@ def train_from_config(config_path: str | Path) -> Path:
         schedule_values: dict[str, float] = {}
         routing_summary: dict[str, Any] = {}
         routing_numeric_values: dict[str, list[float]] = {}
+        router_space_payload: dict[str, Any] | None = None
+        collect_router_space = is_main_process and _visualization_due(
+            router_space_visualization,
+            step=step,
+            max_steps=max_steps,
+        )
         for micro_step in range(gradient_accumulation_steps):
             batch, iterator, data_epoch, microbatch_in_epoch = _next_train_batch(
                 train_loader,
@@ -255,7 +263,14 @@ def train_from_config(config_path: str | Path) -> Path:
             should_sync_gradients = micro_step == gradient_accumulation_steps - 1
             with _gradient_sync_context(model, distributed=distributed, should_sync=should_sync_gradients):
                 with _autocast_context(device, str(config.get("precision", "fp32"))):
-                    outputs = _forward_for_stage(model, batch, config=config, route_mode=stage_mode, global_step=step)
+                    outputs = _forward_for_stage(
+                        model,
+                        batch,
+                        config=config,
+                        route_mode=stage_mode,
+                        global_step=step,
+                        collect_router_space=collect_router_space and should_sync_gradients,
+                    )
                     loss = outputs["loss"]
                     scaled_loss = loss / gradient_accumulation_steps
                 scaled_loss.backward()
@@ -265,6 +280,8 @@ def train_from_config(config_path: str | Path) -> Path:
             if "schedule_values" in outputs:
                 schedule_values.update(outputs["schedule_values"])
             _accumulate_routing_summary(routing_summary, routing_numeric_values, outputs.get("routing_summary", {}))
+            if collect_router_space and should_sync_gradients and "router_space" in outputs:
+                router_space_payload = outputs["router_space"]
         if config.get("grad_clip") is not None:
             torch.nn.utils.clip_grad_norm_(model.parameters(), _float_config(config, "grad_clip", minimum=0.0))
         optimizer.step()
@@ -323,6 +340,15 @@ def train_from_config(config_path: str | Path) -> Path:
                 max_steps=max_steps,
                 config=route_path_visualization,
             )
+            _maybe_log_router_space_visualization(
+                wandb_run,
+                run_dir=run_dir,
+                model=dist_utils.unwrap_model(model),
+                payload=router_space_payload,
+                step=step,
+                max_steps=max_steps,
+                config=router_space_visualization,
+            )
 
         if step % eval_interval == 0 or step == max_steps:
             eval_row = evaluate(model, val_loader, config=config, device=device, route_mode=stage_mode, global_step=step)
@@ -377,7 +403,15 @@ def train_from_config(config_path: str | Path) -> Path:
     return run_dir
 
 
-def _forward_for_stage(model: Any, batch: "torch.Tensor", *, config: dict[str, Any], route_mode: str, global_step: int) -> dict:
+def _forward_for_stage(
+    model: Any,
+    batch: "torch.Tensor",
+    *,
+    config: dict[str, Any],
+    route_mode: str,
+    global_step: int,
+    collect_router_space: bool = False,
+) -> dict:
     if route_mode == "baseline":
         return model(batch, targets=batch)
     routing_cfg = _mapping_config(config, "routing")
@@ -408,6 +442,7 @@ def _forward_for_stage(model: Any, batch: "torch.Tensor", *, config: dict[str, A
         ),
         router_probability=router_probability,
         global_step=global_step,
+        collect_router_space=collect_router_space,
     )
     if schedule_values:
         outputs["schedule_values"] = schedule_values
@@ -542,6 +577,42 @@ def _route_path_visualization_config(config: dict[str, Any], *, default_interval
     }
 
 
+def _router_space_visualization_config(config: dict[str, Any], *, default_interval: int) -> dict[str, Any]:
+    cfg = dict(_mapping_config(config, "router_space_visualization"))
+    enabled = _bool_value(cfg.get("enabled", False), "router_space_visualization.enabled")
+    interval = _int_config(
+        {"interval": cfg.get("interval", default_interval)},
+        "interval",
+        minimum=1,
+    )
+    max_points = _int_config({"max_points": cfg.get("max_points", 2048)}, "max_points", minimum=1)
+    upload_to_wandb = _bool_value(
+        cfg.get("upload_to_wandb", True),
+        "router_space_visualization.upload_to_wandb",
+    )
+    output_dir = str(cfg.get("output_dir", "router_space_visualizations"))
+    if not output_dir:
+        raise ValueError("router_space_visualization.output_dir must be a non-empty string.")
+    wandb_key = str(cfg.get("wandb_key", "router_space"))
+    if not wandb_key:
+        raise ValueError("router_space_visualization.wandb_key must be a non-empty string.")
+    return {
+        "enabled": enabled,
+        "interval": interval,
+        "max_points": max_points,
+        "upload_to_wandb": upload_to_wandb,
+        "output_dir": output_dir,
+        "wandb_key": wandb_key,
+    }
+
+
+def _visualization_due(config: Mapping[str, Any], *, step: int, max_steps: int) -> bool:
+    if not config.get("enabled"):
+        return False
+    interval = int(config["interval"])
+    return step % interval == 0 or step == max_steps
+
+
 def _maybe_log_route_path_visualization(
     wandb_run: Any | None,
     *,
@@ -586,6 +657,50 @@ def _maybe_log_route_path_visualization(
     return html_path
 
 
+def _maybe_log_router_space_visualization(
+    wandb_run: Any | None,
+    *,
+    run_dir: Path,
+    model: Any,
+    payload: dict[str, Any] | None,
+    step: int,
+    max_steps: int,
+    config: Mapping[str, Any],
+) -> Path | None:
+    if not _visualization_due(config, step=step, max_steps=max_steps):
+        return None
+    if payload is None:
+        return None
+    output_dir = run_dir / str(config["output_dir"])
+    output_path = output_dir / f"router_space_step_{step:08d}.html"
+    try:
+        html_path = make_router_space_visualization_from_payload(
+            payload,
+            model,
+            output_path=output_path,
+            step=step,
+            max_points=int(config["max_points"]),
+            metadata={"run_dir": str(run_dir), "source": "train_step"},
+        )
+    except Exception as exc:  # pragma: no cover - defensive; visualization must not kill training.
+        error = {
+            "step": step,
+            "error_type": type(exc).__name__,
+            "error": str(exc),
+        }
+        JsonlLogger(run_dir / "router_space_visualization_errors.jsonl").write(error)
+        _wandb_log_named_visualization_error(wandb_run, "router_space", error)
+        return None
+    if config.get("upload_to_wandb"):
+        _wandb_log_html(
+            wandb_run,
+            key=str(config["wandb_key"]),
+            html_path=html_path,
+            step=step,
+        )
+    return html_path
+
+
 def _wandb_log_html(wandb_run: Any | None, *, key: str, html_path: Path, step: int) -> None:
     if wandb_run is None:
         return
@@ -606,12 +721,16 @@ def _wandb_log_html(wandb_run: Any | None, *, key: str, html_path: Path, step: i
 
 
 def _wandb_log_visualization_error(wandb_run: Any | None, error: dict[str, Any]) -> None:
+    _wandb_log_named_visualization_error(wandb_run, "route_paths", error)
+
+
+def _wandb_log_named_visualization_error(wandb_run: Any | None, key: str, error: dict[str, Any]) -> None:
     if wandb_run is None:
         return
     step = error.get("step")
     payload = {
-        "visualization/route_paths_error_type": error.get("error_type"),
-        "visualization/route_paths_error": error.get("error"),
+        f"visualization/{key}_error_type": error.get("error_type"),
+        f"visualization/{key}_error": error.get("error"),
     }
     if isinstance(step, int) and not isinstance(step, bool):
         wandb_run.log(payload, step=step)

@@ -22,6 +22,16 @@ class LatentRouter(ModuleBase):
             nn.Linear(hidden_dim, num_actions),
         )
 
-    def forward(self, hidden: torch.Tensor, position: torch.Tensor) -> torch.Tensor:
+    def embedding(self, hidden: torch.Tensor, position: torch.Tensor) -> torch.Tensor:
         pooled = hidden.mean(dim=1)
-        return self.net(torch.cat([pooled, position], dim=-1))
+        features = torch.cat([pooled, position], dim=-1)
+        return self.net[1](self.net[0](features))
+
+    def logits_from_embedding(self, embedding: torch.Tensor) -> torch.Tensor:
+        return self.net[2](embedding)
+
+    def expert_vectors(self) -> torch.Tensor:
+        return self.net[2].weight
+
+    def forward(self, hidden: torch.Tensor, position: torch.Tensor) -> torch.Tensor:
+        return self.logits_from_embedding(self.embedding(hidden, position))

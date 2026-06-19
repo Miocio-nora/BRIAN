@@ -282,6 +282,7 @@ class BrianRouteCore(ModuleBase):
         log_path_counts: bool = False,
         router_probability: float | None = None,
         global_step: int = 0,
+        collect_router_space: bool = False,
     ) -> dict[str, Any]:
         loss_weights = _loss_weights_mapping(loss_weights)
         routing_constraints = _routing_constraints_mapping(routing_constraints)
@@ -348,6 +349,7 @@ class BrianRouteCore(ModuleBase):
                 device=input_ids.device,
                 dtype=hidden.dtype,
             )
+        router_space_records: list[dict[str, Any]] | None = [] if collect_router_space else None
 
         if route_mode == "parallel" or self.config.parallel_passing:
             hidden, position, route_info = self._run_parallel_route(hidden, position, route_info, hard_exit, global_state)
@@ -369,7 +371,14 @@ class BrianRouteCore(ModuleBase):
                 route_info["global_cache_slots"].append(
                     torch.tensor(float(global_state.slots), device=input_ids.device, dtype=hidden.dtype)
                 )
-            logits = self._apply_location_bias(self.router(hidden, self._router_position(position)), position)
+            router_position = self._router_position(position)
+            router_embedding = self.router.embedding(hidden, router_position) if router_space_records is not None else None
+            raw_logits = (
+                self.router.logits_from_embedding(router_embedding)
+                if router_embedding is not None
+                else self.router(hidden, router_position)
+            )
+            logits = self._apply_location_bias(raw_logits, position)
             logits = self._apply_route_logit_noise(logits, global_step, routing_options)
             logits = self._apply_route_constraints(logits, step, max_steps, routing_constraints)
             probs = F.softmax(logits, dim=-1)
@@ -409,6 +418,21 @@ class BrianRouteCore(ModuleBase):
             selected = torch.where(exited, torch.full_like(selected, self.out_action), selected)
             use_weighted_fusion = use_weighted_fusion & ~exited & (selected != self.out_action)
             exit_now = selected == self.out_action
+            if router_space_records is not None and router_embedding is not None:
+                router_space_records.append(
+                    {
+                        "step": int(step),
+                        "embedding": router_embedding.detach(),
+                        "raw_logits": raw_logits.detach(),
+                        "effective_logits": logits.detach(),
+                        "probs": probs.detach(),
+                        "selected_actions": selected.detach(),
+                        "top_actions": top_actions.detach(),
+                        "top_weights": top_weights.detach(),
+                        "exited_before": exited.detach(),
+                        "exit_now": exit_now.detach(),
+                    }
+                )
             if self.config.attention_global_kv and attention_global_state is not None:
                 hidden, write_key, write_value, write_valid = self._apply_routed_blocks_with_attention_global(
                     hidden,
@@ -489,6 +513,12 @@ class BrianRouteCore(ModuleBase):
                 include_path_counts=log_path_counts,
             ),
         }
+        if router_space_records is not None:
+            output["router_space"] = {
+                "records": router_space_records,
+                "num_actions": self.config.route_pool_blocks + 1,
+                "out_action": self.out_action,
+            }
         if targets is not None:
             lm = build_causal_lm_loss(logits, targets)
             route = route_imitation_loss(route_info["route_logits"], route_info["route_targets"]).to(lm.device)

@@ -1,0 +1,5 @@
+eval_name: router_space_visualization
+checkpoint: checkpoint_latest
+split: val
+max_batches: 4
+max_points: 2048
