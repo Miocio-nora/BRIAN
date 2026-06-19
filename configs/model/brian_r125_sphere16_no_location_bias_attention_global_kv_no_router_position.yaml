@@ -1,0 +1,4 @@
+extends: brian_r125_sphere16_no_location_bias_attention_global_kv.yaml
+model_name: brian_r125_sphere16_no_location_bias_attention_global_kv_no_router_position
+position_to_router: false
+position_to_blocks: true

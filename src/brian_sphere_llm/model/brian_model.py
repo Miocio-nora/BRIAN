@@ -317,6 +317,13 @@ class BrianRouteCore(ModuleBase):
             "attention_global_kv_sink_last_token_mass": [],
             "attention_global_kv_window_last_token_mass": [],
             "parallel_delta_cache_slots": [],
+            "random_route_probability": torch.tensor(
+                self._random_route_probability(global_step, routing_options),
+                dtype=hidden.dtype,
+                device=input_ids.device,
+            ),
+            "random_route_override_count": [],
+            "self_recur_cap_count": [],
             "hard_exit_enabled": bool(hard_exit),
             "max_route_steps": self.config.max_route_steps,
             "route_logit_noise_std": torch.tensor(
@@ -350,6 +357,8 @@ class BrianRouteCore(ModuleBase):
                 dtype=hidden.dtype,
             )
         router_space_records: list[dict[str, Any]] | None = [] if collect_router_space else None
+        last_internal_action = torch.full((batch_size,), -1, dtype=torch.long, device=input_ids.device)
+        same_internal_run_length = torch.zeros(batch_size, dtype=torch.long, device=input_ids.device)
 
         if route_mode == "parallel" or self.config.parallel_passing:
             hidden, position, route_info = self._run_parallel_route(hidden, position, route_info, hard_exit, global_state)
@@ -381,6 +390,12 @@ class BrianRouteCore(ModuleBase):
             logits = self._apply_location_bias(raw_logits, position)
             logits = self._apply_route_logit_noise(logits, global_step, routing_options)
             logits = self._apply_route_constraints(logits, step, max_steps, routing_constraints)
+            logits, self_recur_cap_mask = self._apply_self_recur_cap(
+                logits,
+                last_internal_action,
+                same_internal_run_length,
+                routing_constraints,
+            )
             probs = F.softmax(logits, dim=-1)
             effective_top_k = self._top_k_for_step(step)
             top_actions, top_weights = self._topk_actions(probs, effective_top_k)
@@ -413,10 +428,34 @@ class BrianRouteCore(ModuleBase):
             else:
                 raise ValueError(f"Unknown route_mode: {route_mode}")
 
+            if route_mode in {"free", "scheduled"}:
+                selected, random_route_mask = self._apply_random_route_override(
+                    selected,
+                    global_step,
+                    routing_options,
+                    last_internal_action,
+                    same_internal_run_length,
+                    routing_constraints,
+                )
+            else:
+                random_route_mask = torch.zeros_like(selected, dtype=torch.bool)
+            selected, selected_cap_mask = self._enforce_self_recur_cap_on_selected(
+                selected,
+                logits,
+                last_internal_action,
+                same_internal_run_length,
+                routing_constraints,
+            )
             if self._force_final_exit(step, max_steps, routing_constraints):
                 selected = torch.full_like(selected, self.out_action)
             selected = torch.where(exited, torch.full_like(selected, self.out_action), selected)
-            use_weighted_fusion = use_weighted_fusion & ~exited & (selected != self.out_action)
+            use_weighted_fusion = (
+                use_weighted_fusion
+                & ~random_route_mask
+                & ~selected_cap_mask
+                & ~exited
+                & (selected != self.out_action)
+            )
             exit_now = selected == self.out_action
             if router_space_records is not None and router_embedding is not None:
                 router_space_records.append(
@@ -429,6 +468,8 @@ class BrianRouteCore(ModuleBase):
                         "selected_actions": selected.detach(),
                         "top_actions": top_actions.detach(),
                         "top_weights": top_weights.detach(),
+                        "random_route_override": random_route_mask.detach(),
+                        "self_recur_cap_active": self_recur_cap_mask.detach(),
                         "exited_before": exited.detach(),
                         "exit_now": exit_now.detach(),
                     }
@@ -477,10 +518,19 @@ class BrianRouteCore(ModuleBase):
             route_info["topk_weights"].append(top_weights)
             route_info["used_weighted_fusion"].append(use_weighted_fusion)
             route_info["exit_flags"].append(exit_now)
+            route_info["random_route_override_count"].append(random_route_mask.to(hidden.dtype).sum())
+            route_info["self_recur_cap_count"].append(
+                (self_recur_cap_mask | selected_cap_mask).to(hidden.dtype).sum()
+            )
             if has_route_target:
                 route_info["route_targets"].append(target_action)
             route_info["position_norms"].append(position.norm(dim=-1).mean())
             route_info["location_distance"].append(self.position_table.location_distance(position, probs))
+            last_internal_action, same_internal_run_length = self._update_self_recur_state(
+                selected,
+                last_internal_action,
+                same_internal_run_length,
+            )
             if hard_exit and torch.all(exited):
                 break
 
@@ -803,6 +853,56 @@ class BrianRouteCore(ModuleBase):
         probs = F.softmax(logits.float() / temperature, dim=-1)
         return torch.multinomial(probs, num_samples=1).squeeze(1)
 
+    def _random_route_probability(self, global_step: int, options: Mapping[str, Any]) -> float:
+        if not self.training:
+            return 0.0
+        start = _routing_float(options, "random_route_probability", default=0.0, minimum=0.0)
+        if start <= 0.0:
+            return 0.0
+        if start > 1.0:
+            raise ValueError("routing.random_route_probability must be <= 1.0.")
+        minimum = _routing_float(options, "random_route_min_probability", default=0.0, minimum=0.0)
+        if minimum > 1.0:
+            raise ValueError("routing.random_route_min_probability must be <= 1.0.")
+        if minimum > start:
+            raise ValueError("routing.random_route_min_probability must be <= routing.random_route_probability.")
+        decay_steps = _routing_int(options, "random_route_decay_steps", default=0, minimum=0)
+        if decay_steps <= 0:
+            return start
+        progress = min(1.0, max(0.0, float(global_step) / float(decay_steps)))
+        return start + (minimum - start) * progress
+
+    def _apply_random_route_override(
+        self,
+        selected: torch.Tensor,
+        global_step: int,
+        routing_options: Mapping[str, Any],
+        last_internal_action: torch.Tensor,
+        same_internal_run_length: torch.Tensor,
+        routing_constraints: Mapping[str, Any],
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        probability = self._random_route_probability(global_step, routing_options)
+        if probability <= 0.0:
+            return selected, torch.zeros_like(selected, dtype=torch.bool)
+        eligible = selected != self.out_action
+        random_mask = (torch.rand_like(selected.float()) < probability) & eligible
+        if not torch.any(random_mask):
+            return selected, random_mask
+        random_actions = torch.randint(
+            0,
+            self.config.route_pool_blocks,
+            (selected.size(0),),
+            dtype=torch.long,
+            device=selected.device,
+        )
+        random_actions = self._avoid_capped_self_recur_actions(
+            random_actions,
+            last_internal_action,
+            same_internal_run_length,
+            routing_constraints,
+        )
+        return torch.where(random_mask, random_actions, selected), random_mask
+
     def _apply_selected_blocks(self, hidden: torch.Tensor, position: torch.Tensor, selected: torch.Tensor) -> torch.Tensor:
         next_hidden = hidden.clone()
         block_position = self._block_position(position)
@@ -1048,6 +1148,86 @@ class BrianRouteCore(ModuleBase):
         if std <= 0.0:
             return logits
         return logits + torch.randn_like(logits) * std
+
+    def _self_recur_max_consecutive(self, constraints: Mapping[str, Any]) -> int:
+        if "self_recur_max_consecutive" in constraints:
+            key = "self_recur_max_consecutive"
+        elif "self_recur_cap" in constraints:
+            key = "self_recur_cap"
+        elif "max_consecutive_self_recur" in constraints:
+            key = "max_consecutive_self_recur"
+        else:
+            return 0
+        return _constraint_int(constraints, key, default=0, minimum=0)
+
+    def _apply_self_recur_cap(
+        self,
+        logits: torch.Tensor,
+        last_internal_action: torch.Tensor,
+        same_internal_run_length: torch.Tensor,
+        constraints: Mapping[str, Any],
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        max_consecutive = self._self_recur_max_consecutive(constraints)
+        if max_consecutive <= 0:
+            return logits, torch.zeros(logits.size(0), dtype=torch.bool, device=logits.device)
+        capped = (last_internal_action >= 0) & (same_internal_run_length >= max_consecutive)
+        if not torch.any(capped):
+            return logits, torch.zeros(logits.size(0), dtype=torch.bool, device=logits.device)
+        adjusted = logits.clone()
+        rows = torch.nonzero(capped, as_tuple=False).flatten()
+        adjusted[rows, last_internal_action[rows]] = torch.finfo(logits.dtype).min
+        return adjusted, capped
+
+    def _enforce_self_recur_cap_on_selected(
+        self,
+        selected: torch.Tensor,
+        logits: torch.Tensor,
+        last_internal_action: torch.Tensor,
+        same_internal_run_length: torch.Tensor,
+        constraints: Mapping[str, Any],
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        max_consecutive = self._self_recur_max_consecutive(constraints)
+        if max_consecutive <= 0:
+            return selected, torch.zeros_like(selected, dtype=torch.bool)
+        capped = (last_internal_action >= 0) & (same_internal_run_length >= max_consecutive)
+        invalid = capped & (selected == last_internal_action) & (selected != self.out_action)
+        if not torch.any(invalid):
+            return selected, torch.zeros_like(selected, dtype=torch.bool)
+        replacement = torch.argmax(logits, dim=-1)
+        return torch.where(invalid, replacement, selected), invalid
+
+    def _avoid_capped_self_recur_actions(
+        self,
+        actions: torch.Tensor,
+        last_internal_action: torch.Tensor,
+        same_internal_run_length: torch.Tensor,
+        constraints: Mapping[str, Any],
+    ) -> torch.Tensor:
+        max_consecutive = self._self_recur_max_consecutive(constraints)
+        if max_consecutive <= 0 or self.config.route_pool_blocks <= 1:
+            return actions
+        capped = (last_internal_action >= 0) & (same_internal_run_length >= max_consecutive)
+        invalid = capped & (actions == last_internal_action)
+        if not torch.any(invalid):
+            return actions
+        replacement = (actions + 1) % self.config.route_pool_blocks
+        return torch.where(invalid, replacement, actions)
+
+    def _update_self_recur_state(
+        self,
+        selected: torch.Tensor,
+        last_internal_action: torch.Tensor,
+        same_internal_run_length: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        internal = selected != self.out_action
+        same_as_last = internal & (selected == last_internal_action)
+        next_run_length = torch.where(
+            internal,
+            torch.where(same_as_last, same_internal_run_length + 1, torch.ones_like(same_internal_run_length)),
+            torch.zeros_like(same_internal_run_length),
+        )
+        next_last = torch.where(internal, selected, torch.full_like(last_internal_action, -1))
+        return next_last, next_run_length
 
     def _apply_route_constraints(
         self,

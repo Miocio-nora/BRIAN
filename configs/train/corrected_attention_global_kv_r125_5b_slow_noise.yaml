@@ -1,0 +1,28 @@
+extends: corrected_attention_global_kv_r125_5b.yaml
+run_name: corrected_attention_global_kv_r125_5b_slow_noise
+routing:
+  logit_noise_std: 0.08
+  logit_noise_decay_steps: 50000
+  logit_noise_min_std: 0.008
+  random_route_probability: 0.25
+  random_route_decay_steps: 50000
+  random_route_min_probability: 0.03
+  constraints:
+    self_recur_max_consecutive: 2
+post_train_benchmarks:
+  label: s_attention_global_kv_slow_noise
+wandb:
+  group: corrected_attention_global_kv_r125_5b
+  tags:
+  - corrected_package_a
+  - attention_global_kv
+  - r125
+  - 5b
+  - slow_noise
+  - random_route_override
+  - self_recur_cap
+  - selected_balance_002
+  - coverage_floor
+  - strong_length
+  - no_location_bias
+  - no_route_imitation

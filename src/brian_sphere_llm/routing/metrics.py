@@ -118,6 +118,24 @@ def summarize_routes(
             summary["route_logit_noise_std"] = float(noise_std)
         elif isinstance(noise_std, torch.Tensor) and noise_std.numel() == 1:
             summary["route_logit_noise_std"] = float(noise_std.detach().cpu())
+    random_route_probability = route_info.get("random_route_probability")
+    if random_route_probability is not None:
+        if isinstance(random_route_probability, (int, float)):
+            summary["random_route_probability"] = float(random_route_probability)
+        elif isinstance(random_route_probability, torch.Tensor) and random_route_probability.numel() == 1:
+            summary["random_route_probability"] = float(random_route_probability.detach().cpu())
+    if "random_route_override_count" in route_info and route_info["random_route_override_count"]:
+        counts_tensor = torch.stack(route_info["random_route_override_count"])
+        count = float(counts_tensor.sum().detach().cpu())
+        total = _route_decision_count(actions)
+        summary["random_route_override_count"] = count
+        summary["random_route_override_fraction"] = count / max(1, total)
+    if "self_recur_cap_count" in route_info and route_info["self_recur_cap_count"]:
+        counts_tensor = torch.stack(route_info["self_recur_cap_count"])
+        count = float(counts_tensor.sum().detach().cpu())
+        total = _route_decision_count(actions)
+        summary["self_recur_cap_count"] = count
+        summary["self_recur_cap_fraction"] = count / max(1, total)
     if "global_attention_mass" in route_info and route_info["global_attention_mass"]:
         mass = torch.stack(route_info["global_attention_mass"])
         summary["global_attention_mass"] = float(mass.mean().detach().cpu())
@@ -182,6 +200,12 @@ def _path_examples(stacked_actions: "torch.Tensor", *, max_examples: int) -> lis
             }
         )
     return examples
+
+
+def _route_decision_count(actions: Any) -> int:
+    if not actions:
+        return 0
+    return int(sum(int(action.numel()) for action in actions))
 
 
 def _path_counts(stacked_actions: "torch.Tensor", *, out_action: int) -> list[dict[str, Any]]:

@@ -1061,7 +1061,13 @@ def _validate_routing_constraints_config(constraints: Any, path: Path, errors: l
     if not isinstance(constraints, dict):
         errors.append(f"{path}: routing.constraints must be a mapping")
         return
-    int_keys = {"min_exit_step", "exit_ramp_start"}
+    int_keys = {
+        "min_exit_step",
+        "exit_ramp_start",
+        "self_recur_max_consecutive",
+        "self_recur_cap",
+        "max_consecutive_self_recur",
+    }
     float_keys = {
         "early_exit_logit_penalty",
         "exit_ramp_logit_bias",

@@ -1,0 +1,21 @@
+extends: corrected_attention_global_kv_r125_5b_slow_noise.yaml
+run_name: corrected_attention_global_kv_r125_5b_slow_noise_no_router_position
+model_config: ../model/brian_r125_sphere16_no_location_bias_attention_global_kv_no_router_position.yaml
+post_train_benchmarks:
+  label: s_attention_global_kv_slow_noise_no_router_position
+wandb:
+  group: corrected_attention_global_kv_r125_5b
+  tags:
+  - corrected_package_a
+  - attention_global_kv
+  - r125
+  - 5b
+  - slow_noise
+  - random_route_override
+  - self_recur_cap
+  - no_router_position
+  - selected_balance_002
+  - coverage_floor
+  - strong_length
+  - no_location_bias
+  - no_route_imitation

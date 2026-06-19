@@ -103,6 +103,64 @@ def test_later_top_k_enables_weighted_fusion_after_first_step() -> None:
     assert output["routing_summary"]["topk_block_histogram"]["1"] == 2
 
 
+def test_random_route_override_is_training_only_and_disables_weighted_fusion() -> None:
+    cfg = BrianRouteConfig(
+        base=BaselineConfig(vocab_size=64, context_length=8, layers=5, d_model=32, n_heads=4),
+        pre_blocks=1,
+        route_pool_blocks=3,
+        post_blocks=1,
+        block_position_dim=8,
+        max_route_steps=2,
+        top_k=2,
+        later_top_k=2,
+    )
+    model = BrianRouteCore(cfg)
+    _set_router_bias(model, {0: 10.0, 1: 0.0, 2: 0.0, cfg.route_pool_blocks: -10.0})
+    input_ids = torch.randint(0, 64, (16, 8))
+    options = {"random_route_probability": 1.0}
+
+    model.train()
+    output = model(input_ids, route_mode="free", routing_options=options)
+
+    assert output["routing_summary"]["random_route_probability"] == pytest.approx(1.0)
+    assert output["routing_summary"]["random_route_override_fraction"] == pytest.approx(1.0)
+    for weighted in output["route_info"]["used_weighted_fusion"]:
+        assert not torch.any(weighted)
+
+    model.eval()
+    eval_output = model(input_ids, route_mode="free", routing_options=options)
+
+    assert eval_output["routing_summary"]["random_route_probability"] == pytest.approx(0.0)
+    assert eval_output["routing_summary"]["random_route_override_fraction"] == pytest.approx(0.0)
+    assert eval_output["routing_summary"]["weighted_fusion_ratio"] == pytest.approx(1.0)
+
+
+def test_self_recur_cap_blocks_consecutive_self_loops() -> None:
+    cfg = BrianRouteConfig(
+        base=BaselineConfig(vocab_size=64, context_length=8, layers=5, d_model=32, n_heads=4),
+        pre_blocks=1,
+        route_pool_blocks=3,
+        post_blocks=1,
+        block_position_dim=8,
+        max_route_steps=4,
+        top_k=1,
+        later_top_k=1,
+    )
+    model = BrianRouteCore(cfg)
+    _set_router_bias(model, {0: 10.0, 1: 0.0, 2: -1.0, cfg.route_pool_blocks: -10.0})
+    input_ids = torch.randint(0, 64, (2, 8))
+
+    output = model(
+        input_ids,
+        route_mode="free",
+        routing_constraints={"self_recur_max_consecutive": 1},
+    )
+
+    selected = torch.stack(output["route_info"]["selected_actions"])
+    assert torch.all(selected[1:] != selected[:-1])
+    assert output["routing_summary"]["self_recur_cap_count"] > 0
+
+
 def test_pseudo_route_targets_control_forward_and_supervise_out_even_when_router_prefers_out() -> None:
     cfg = BrianRouteConfig(
         base=BaselineConfig(vocab_size=64, context_length=8, layers=4, d_model=32, n_heads=4),

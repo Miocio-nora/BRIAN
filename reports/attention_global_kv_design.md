@@ -114,6 +114,43 @@ Experiment manifest:
 configs/experiments/route_core_attention_global_kv_corrected_r125_5b.yaml
 ```
 
+## Routing Robustness Follow-Up
+
+The initial hidden-summary Global KV run reached strong intermediate loss but
+ended in a router collapse: the router saturated into one internal block and
+repeated self-routing. The attention-level Global KV run is healthier at early
+checkpoints, but it uses the same no-noise route policy and can still form a
+small number of repeated path templates.
+
+The follow-up configs add three concrete safeguards:
+
+- `logit_noise_std`, `logit_noise_decay_steps`, and `logit_noise_min_std` add
+  slow-decaying Gaussian noise to route logits during training only.
+- `random_route_probability`, `random_route_decay_steps`, and
+  `random_route_min_probability` override selected internal routes during
+  training, forcing the model to tolerate arbitrary routed block execution. This
+  is independent of router sampling and disables weighted top-2 fusion for those
+  overridden examples.
+- `routing.constraints.self_recur_max_consecutive` is a hard cap. Once a sample
+  has selected the same internal block too many times in a row, that block is
+  masked for the next route decision.
+
+The prepared attention-level follow-up is:
+
+```text
+configs/train/corrected_attention_global_kv_r125_5b_slow_noise.yaml
+```
+
+A no-router-position attention variant is also available:
+
+```text
+configs/train/corrected_attention_global_kv_r125_5b_slow_noise_no_router_position.yaml
+```
+
+It keeps position injection inside route blocks but removes position from the
+router input. This isolates whether the router is using previous block location
+as a shortcut path-state variable instead of scoring from hidden-state content.
+
 ## Current Limitations
 
 - Writes one memory token per routed block call only.

@@ -145,6 +145,29 @@ self-attention. The attention-level branch is documented in
 and is configured by
 `configs/train/corrected_attention_global_kv_r125_5b.yaml`.
 
+The first hidden-summary Global KV 5B run showed a late router collapse into a
+self-recurrent single-block path. The follow-up Global KV configs now include
+three concrete routing-robustness controls:
+
+- slow train-time route-logit noise, decayed rather than hard-switched off;
+- true random internal-route override during training, so the model adapts to
+  off-policy routed computation instead of only sampling from its own router;
+- a hard self-recur cap that masks the current block after repeated
+  self-selection.
+
+The prepared configs are:
+
+```text
+configs/train/corrected_attention_global_kv_r125_5b_slow_noise.yaml
+configs/train/corrected_global_kv_r125_5b_slow_noise.yaml
+configs/train/corrected_global_kv_r125_5b_slow_noise_no_router_position.yaml
+```
+
+The no-router-position variant keeps block-position injection inside route
+blocks but removes position from the router input, testing whether direct
+location access is helping the router learn path templates instead of
+hidden-state-dependent routing.
+
 Router-space diagnostics are documented in
 [reports/router_space_diagnostics.md](./reports/router_space_diagnostics.md).
 They project the router MLP hidden state and the router scoring-layer expert

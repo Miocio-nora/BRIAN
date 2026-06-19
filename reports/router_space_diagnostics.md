@@ -91,3 +91,42 @@ self_recur_ratio: 0.933
 
 This confirms the failure is router saturation and self-recurrent collapse, not
 ordinary validation overfitting.
+
+## Routing Robustness Controls
+
+Router-space collapse is now treated as a first-class training risk for Global
+KV runs. The mitigation branch keeps the corrected strong-length constraints
+and adds:
+
+- slow route-logit noise: a training-only Gaussian perturbation that decays from
+  a larger initial value to a nonzero floor;
+- true random internal-route override: a training-only replacement of selected
+  internal actions, independent of the router's own distribution;
+- hard self-recur cap: a constraint that prevents repeated self-selection from
+  continuing past a configured run length.
+
+These metrics are logged when enabled:
+
+```text
+route_logit_noise_std
+random_route_probability
+random_route_override_fraction
+self_recur_cap_fraction
+```
+
+The no-router-position variants should be inspected with this diagnostic
+because they change the plotted router-space input from:
+
+```text
+[mean(hidden); current block-position state]
+```
+
+to:
+
+```text
+[mean(hidden); zeros]
+```
+
+while still allowing route blocks to receive position. If route diversity
+improves without damaging LM quality, that is evidence that direct router access
+to previous location was encouraging path-template collapse.
