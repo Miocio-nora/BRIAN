@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import gc
+import json
 import os
 import re
 import subprocess
@@ -18,7 +19,7 @@ def run_post_train_benchmarks(
     *,
     project_root: str | Path | None = None,
 ) -> list[dict[str, Any]]:
-    cfg = _mapping(train_config.get("post_train_benchmarks"))
+    cfg = _mapping(train_config.get("post_train_benchmarks"), name="post_train_benchmarks")
     if not _bool(cfg.get("enabled", False)):
         return []
 
@@ -55,24 +56,96 @@ def run_post_train_benchmarks(
     return results
 
 
+def run_checkpoint_benchmarks(
+    run_dir: str | Path,
+    train_config: dict[str, Any],
+    *,
+    checkpoint: str,
+    step: int,
+    project_root: str | Path | None = None,
+) -> list[dict[str, Any]]:
+    cfg = _mapping(train_config.get("checkpoint_benchmarks"), name="checkpoint_benchmarks")
+    if not _bool(cfg.get("enabled", False)):
+        return []
+
+    run_dir = Path(run_dir)
+    project_root = Path(project_root or Path.cwd())
+    label = f"{_safe_label(str(cfg.get('label') or run_dir.name))}_step{int(step):08d}"
+    commands = build_benchmark_commands(
+        run_dir,
+        train_config,
+        cfg_key="checkpoint_benchmarks",
+        project_root=project_root,
+        checkpoint=checkpoint,
+        label=label,
+    )
+    fail_on_error = _bool(cfg.get("fail_on_error", False))
+    summary_path = run_dir / str(cfg.get("summary_path", "checkpoint_benchmarks.jsonl"))
+    _release_torch_cache()
+
+    results: list[dict[str, Any]] = []
+    env = _subprocess_env(project_root)
+    for spec in commands:
+        started = time.time()
+        completed = subprocess.run(
+            spec["command"],
+            cwd=project_root,
+            env=env,
+            check=False,
+        )
+        result = {
+            "step": int(step),
+            "checkpoint": checkpoint,
+            "name": spec["name"],
+            "command": spec["command"],
+            "output_path": spec["output_path"],
+            "samples_output_path": spec["samples_output_path"],
+            "returncode": completed.returncode,
+            "elapsed_seconds": time.time() - started,
+            "metrics": _extract_benchmark_metrics(spec["name"], spec["output_path"]),
+        }
+        results.append(result)
+        _append_jsonl(summary_path, result)
+        if completed.returncode != 0 and fail_on_error:
+            raise RuntimeError(f"Checkpoint benchmark {spec['name']} failed with exit code {completed.returncode}.")
+    return results
+
+
 def build_post_train_benchmark_commands(
     run_dir: str | Path,
     train_config: dict[str, Any],
     *,
     project_root: str | Path | None = None,
 ) -> list[dict[str, Any]]:
-    cfg = _mapping(train_config.get("post_train_benchmarks"))
+    return build_benchmark_commands(
+        run_dir,
+        train_config,
+        cfg_key="post_train_benchmarks",
+        project_root=project_root,
+    )
+
+
+def build_benchmark_commands(
+    run_dir: str | Path,
+    train_config: dict[str, Any],
+    *,
+    cfg_key: str,
+    project_root: str | Path | None = None,
+    checkpoint: str | None = None,
+    label: str | None = None,
+) -> list[dict[str, Any]]:
+    cfg = _mapping(train_config.get(cfg_key), name=cfg_key)
     if not _bool(cfg.get("enabled", False)):
         return []
 
     run_dir = Path(run_dir)
     project_root = Path(project_root or Path.cwd())
     output_dir = _path(cfg.get("output_dir", run_dir / "benchmarks"), project_root=project_root)
-    label = _safe_label(str(cfg.get("label") or run_dir.name))
-    checkpoint = str(cfg.get("checkpoint", "checkpoint_latest"))
+    label = _safe_label(str(label or cfg.get("label") or run_dir.name))
+    checkpoint = str(checkpoint or cfg.get("checkpoint", "checkpoint_latest"))
     commands: list[dict[str, Any]] = []
 
-    reasoning_cfg = _mapping(cfg.get("reasoning"))
+    reasoning_cfg = _mapping(cfg.get("reasoning"), name=f"{cfg_key}.reasoning")
     if _bool(reasoning_cfg.get("enabled", True)):
         output_path = _path(
             reasoning_cfg.get("output_path", output_dir / f"{label}.reasoning_s600.json"),
@@ -104,7 +177,7 @@ def build_post_train_benchmark_commands(
             }
         )
 
-    public_cfg = _mapping(cfg.get("public"))
+    public_cfg = _mapping(cfg.get("public"), name=f"{cfg_key}.public")
     if _bool(public_cfg.get("enabled", True)):
         output_path = _path(
             public_cfg.get("output_path", output_dir / f"public_{label}_s200.json"),
@@ -139,11 +212,46 @@ def build_post_train_benchmark_commands(
     return commands
 
 
-def _mapping(value: Any) -> dict[str, Any]:
+def _extract_benchmark_metrics(name: str, output_path: str) -> dict[str, Any]:
+    path = Path(output_path)
+    if not path.exists():
+        return {}
+    try:
+        report = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    if name == "reasoning_s600":
+        overall = report.get("overall", {}) if isinstance(report.get("overall"), dict) else {}
+        return {
+            "exact_match_accuracy": overall.get("exact_match_accuracy"),
+            "teacher_forced_token_accuracy": overall.get("teacher_forced_token_accuracy"),
+            "sample_count": overall.get("sample_count"),
+        }
+    if name == "public_s600":
+        overall = report.get("overall", {}) if isinstance(report.get("overall"), dict) else {}
+        by_task = report.get("by_task", {}) if isinstance(report.get("by_task"), dict) else {}
+        metrics = {
+            "accuracy": overall.get("accuracy"),
+            "sample_count": overall.get("sample_count"),
+        }
+        for task, task_report in by_task.items():
+            if isinstance(task_report, dict):
+                metrics[f"{task}_accuracy"] = task_report.get("accuracy")
+        return metrics
+    return {}
+
+
+def _append_jsonl(path: Path, row: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(row, sort_keys=True, allow_nan=False) + "\n")
+
+
+def _mapping(value: Any, *, name: str = "post_train_benchmarks") -> dict[str, Any]:
     if value is None:
         return {}
     if not isinstance(value, dict):
-        raise ValueError("post_train_benchmarks entries must be mappings.")
+        raise ValueError(f"{name} entries must be mappings.")
     return value
 
 

@@ -151,6 +151,22 @@ It keeps position injection inside route blocks but removes position from the
 router input. This isolates whether the router is using previous block location
 as a shortcut path-state variable instead of scoring from hidden-state content.
 
+The next rerun package uses the token-balanced R125 5B recipe and keeps
+intermediate benchmark evidence:
+
+```text
+configs/data/r125_main_5b_balanced.yaml
+configs/train/corrected_global_kv_r125_5b_balanced_slow_noise.yaml
+configs/train/corrected_attention_global_kv_r125_5b_balanced_slow_noise.yaml
+```
+
+These configs retain model-only `checkpoint_step_*` checkpoints every 5000
+steps and run public/reasoning benchmark probes every 15000 steps. This is
+intended to test whether the sharp validation-loss gains are genuine
+generalization, benchmark-distribution mismatch, or late shortcut overfitting.
+The balanced no-router-position branch was not continued because the earlier
+no-position evidence was not strong enough to spend more training compute.
+
 ## Current Limitations
 
 - Writes one memory token per routed block call only.

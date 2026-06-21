@@ -60,6 +60,7 @@ def test_prepare_tiny_synthetic_data(tmp_path: Path) -> None:
         "source_mixture_expected",
         "source_mixture_realized",
         "source_mixture_realized_share",
+        "mixture_balance",
         "sha256_manifest",
         "manifest_row_count",
         "manifest_source_text_hashes_verified",
@@ -221,6 +222,77 @@ def test_prepare_mixture_data_records_expected_and_realized_shares(
     assert code_rows[0]["source_dataset"] == "code"
     assert code_rows[0]["route_metadata"]["task_family"] == "code_structured"
     assert math.isclose(sum(stats["source_mixture_realized_share"].values()), 1.0)
+
+
+def test_prepare_mixture_can_balance_by_tokens(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_hf_rows(*, dataset_name: str, split: str, streaming: bool):
+        for index in range(1000):
+            yield {
+                "sample_id": f"{dataset_name}-{index}",
+                "text": "fineweb long row " + "education " * 120,
+                "source_url_or_id": f"{split}-{index}",
+            }
+
+    monkeypatch.setattr("brian_sphere_llm.data.prepare.iter_hf_text_dataset", fake_hf_rows)
+    cfg = load_yaml("configs/data/r125_tiny_debug.yaml")
+    cfg["output_dir"] = str(tmp_path / "tokenized")
+    cfg["manifest_path"] = str(tmp_path / "manifest.jsonl")
+    cfg["target_tokens"] = 6000
+    cfg["validation_tokens"] = 0
+    cfg["sequence_length"] = 64
+    cfg["synthetic_only"]["enabled"] = False
+    cfg["mixture_balance"] = "token"
+    cfg["tokenization"] = {"batch_size": 1}
+    cfg["mixture"] = {
+        "fineweb_edu": {"weight": 0.5, "source_dataset": "fineweb", "split": "train"},
+        "math_symbolic_qa": {
+            "weight": 0.5,
+            "source_dataset": "synthetic_math_symbolic",
+            "sample_count": 1000,
+        },
+    }
+    config_path = tmp_path / "data.yaml"
+    save_yaml(cfg, config_path)
+
+    output_dir = prepare_data(config_path)
+    stats = json.loads((output_dir / "stats.json").read_text(encoding="utf-8"))
+    shares = stats["source_mixture_realized_share"]
+
+    assert stats["mixture_balance"] == "token"
+    assert abs(shares["fineweb_edu"] - 0.5) < 0.15
+    assert abs(shares["math_symbolic_qa"] - 0.5) < 0.15
+
+
+def test_local_synthetic_sources_can_be_packed_without_hf(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fail_hf_rows(*, dataset_name: str, split: str, streaming: bool):
+        raise AssertionError(f"unexpected HF load for {dataset_name}")
+
+    monkeypatch.setattr("brian_sphere_llm.data.prepare.iter_hf_text_dataset", fail_hf_rows)
+    rows = list(
+        islice(
+            _mixture_rows(
+                {
+                    "target_tokens": 1000,
+                    "seed": 1,
+                    "mixture": {
+                        "math_symbolic_qa": {
+                            "weight": 1.0,
+                            "source_dataset": "synthetic_math_symbolic",
+                            "pack_examples_per_doc": 4,
+                        },
+                    },
+                }
+            ),
+            2,
+        )
+    )
+
+    assert rows[0]["mixture_tag"] == "math_symbolic_qa"
+    assert rows[0]["route_metadata"]["packed_examples"] == 4
+    assert "\n" in rows[0]["text"]
 
 
 def test_prepare_mixture_uses_local_synthetic_math_and_code_without_hf(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -1,0 +1,36 @@
+extends: r125_main_5b.yaml
+recipe_name: r125_main_5b_balanced
+output_dir: data/tokenized/r125_main_5b_balanced
+manifest_path: data/manifests/r125_main_5b_balanced.jsonl
+mixture_balance: token
+tokenization:
+  batch_size: 512
+  parallelism: true
+mixture:
+  fineweb_edu:
+    weight: 0.70
+    source_dataset: HuggingFaceFW/fineweb-edu
+    split: train
+  tinystories:
+    weight: 0.10
+    source_dataset: roneneldan/TinyStories
+    split: train
+    repeat: true
+  synthetic_routing:
+    weight: 0.10
+    source_dataset: brian_synthetic_routing
+    split: train
+    sample_count: 20000000
+    pack_examples_per_doc: 32
+  math_symbolic_qa:
+    weight: 0.05
+    source_dataset: synthetic_math_symbolic
+    split: train
+    sample_count: 20000000
+    pack_examples_per_doc: 64
+  code_structured:
+    weight: 0.05
+    source_dataset: synthetic_code_structured
+    split: train
+    sample_count: 10000000
+    pack_examples_per_doc: 32

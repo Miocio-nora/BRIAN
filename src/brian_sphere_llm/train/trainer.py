@@ -4,6 +4,7 @@ from collections.abc import Mapping
 from contextlib import nullcontext
 import json
 import math
+import shutil
 import time
 from datetime import datetime
 from pathlib import Path
@@ -11,6 +12,7 @@ from typing import Any
 
 from brian_sphere_llm.data.dataloader import build_dataloader
 from brian_sphere_llm.data.manifest import sha256_text
+from brian_sphere_llm.eval.post_train_benchmarks import run_checkpoint_benchmarks
 from brian_sphere_llm.eval.router_space_visualization import make_router_space_visualization_from_payload
 from brian_sphere_llm.eval.route_path_visualization import make_route_path_visualization_from_train_log
 from brian_sphere_llm.eval.routing_report import make_routing_report
@@ -214,6 +216,9 @@ def train_from_config(config_path: str | Path) -> Path:
     write_routing_report = _bool_config(config, "write_routing_report_on_checkpoint", default=True)
     route_path_visualization = _route_path_visualization_config(config, default_interval=save_interval)
     router_space_visualization = _router_space_visualization_config(config, default_interval=save_interval)
+    checkpoint_retention = _checkpoint_retention_config(config, default_interval=save_interval)
+    checkpoint_benchmarks = _checkpoint_benchmark_config(config, default_interval=save_interval)
+    benchmark_log = JsonlLogger(run_dir / "benchmark_log.jsonl") if is_main_process and checkpoint_benchmarks["enabled"] else None
     ddp_no_sync_microbatches = _ddp_no_sync_microbatch_count(
         model,
         distributed=distributed,
@@ -395,6 +400,57 @@ def train_from_config(config_path: str | Path) -> Path:
             )
             if is_main_process and write_routing_report:
                 make_routing_report(run_dir)
+        retained_checkpoint_name: str | None = None
+        if _retained_checkpoint_due(
+            checkpoint_retention,
+            checkpoint_benchmarks,
+            step=step,
+            max_steps=max_steps,
+        ):
+            retained_checkpoint_name = f"{checkpoint_retention['prefix']}_{step:08d}"
+            if is_main_process:
+                save_checkpoint(
+                    run_dir / retained_checkpoint_name,
+                    model=dist_utils.unwrap_model(model),
+                    optimizer=optimizer,
+                    step=step,
+                    best_eval_loss=best_eval_loss,
+                    extra=_checkpoint_training_state(data_epoch, microbatch_in_epoch),
+                    include_optimizer=bool(checkpoint_retention["include_optimizer"]),
+                    include_rng_state=bool(checkpoint_retention["include_rng_state"]),
+                )
+                _prune_retained_checkpoints(
+                    run_dir,
+                    prefix=str(checkpoint_retention["prefix"]),
+                    keep_last=int(checkpoint_retention["keep_last"]),
+                )
+        if _checkpoint_benchmark_due(checkpoint_benchmarks, step=step, max_steps=max_steps):
+            checkpoint_name = retained_checkpoint_name or f"{checkpoint_retention['prefix']}_{step:08d}"
+            if retained_checkpoint_name is None and is_main_process:
+                save_checkpoint(
+                    run_dir / checkpoint_name,
+                    model=dist_utils.unwrap_model(model),
+                    optimizer=optimizer,
+                    step=step,
+                    best_eval_loss=best_eval_loss,
+                    extra=_checkpoint_training_state(data_epoch, microbatch_in_epoch),
+                    include_optimizer=False,
+                    include_rng_state=False,
+                )
+            if is_main_process:
+                benchmark_results = run_checkpoint_benchmarks(
+                    run_dir,
+                    config,
+                    checkpoint=checkpoint_name,
+                    step=step,
+                    project_root=Path(__file__).resolve().parents[3],
+                )
+                benchmark_row = _benchmark_results_row(benchmark_results, step=step)
+                if benchmark_log is not None:
+                    benchmark_log.write(benchmark_row)
+                _wandb_log(wandb_run, "benchmark", benchmark_row)
+            if distributed:
+                dist_utils.barrier()
     if is_main_process and not (run_dir / "routing_report.json").exists():
         make_routing_report(run_dir)
     _finish_wandb(wandb_run, final_step=max_steps, best_eval_loss=best_eval_loss)
@@ -611,6 +667,108 @@ def _visualization_due(config: Mapping[str, Any], *, step: int, max_steps: int) 
         return False
     interval = int(config["interval"])
     return step % interval == 0 or step == max_steps
+
+
+def _checkpoint_retention_config(config: dict[str, Any], *, default_interval: int) -> dict[str, Any]:
+    cfg = dict(_mapping_config(config, "checkpoint_retention"))
+    enabled = _bool_value(cfg.get("enabled", False), "checkpoint_retention.enabled")
+    interval = _int_config(
+        {"interval": cfg.get("interval", default_interval)},
+        "interval",
+        minimum=1,
+    )
+    keep_last = _int_config({"keep_last": cfg.get("keep_last", 0)}, "keep_last", minimum=0)
+    prefix = str(cfg.get("prefix", "checkpoint_step"))
+    if not prefix:
+        raise ValueError("checkpoint_retention.prefix must be a non-empty string.")
+    include_optimizer = _bool_value(
+        cfg.get("include_optimizer", False),
+        "checkpoint_retention.include_optimizer",
+    )
+    include_rng_state = _bool_value(
+        cfg.get("include_rng_state", False),
+        "checkpoint_retention.include_rng_state",
+    )
+    return {
+        "enabled": enabled,
+        "interval": interval,
+        "keep_last": keep_last,
+        "prefix": prefix,
+        "include_optimizer": include_optimizer,
+        "include_rng_state": include_rng_state,
+    }
+
+
+def _checkpoint_benchmark_config(config: dict[str, Any], *, default_interval: int) -> dict[str, Any]:
+    cfg = dict(_mapping_config(config, "checkpoint_benchmarks"))
+    enabled = _bool_value(cfg.get("enabled", False), "checkpoint_benchmarks.enabled")
+    interval = _int_config(
+        {"interval": cfg.get("interval", default_interval)},
+        "interval",
+        minimum=1,
+    )
+    return {
+        "enabled": enabled,
+        "interval": interval,
+    }
+
+
+def _retained_checkpoint_due(
+    retention: Mapping[str, Any],
+    benchmarks: Mapping[str, Any],
+    *,
+    step: int,
+    max_steps: int,
+) -> bool:
+    if _checkpoint_benchmark_due(benchmarks, step=step, max_steps=max_steps):
+        return True
+    if not retention.get("enabled"):
+        return False
+    interval = int(retention["interval"])
+    return step % interval == 0 or step == max_steps
+
+
+def _checkpoint_benchmark_due(config: Mapping[str, Any], *, step: int, max_steps: int) -> bool:
+    if not config.get("enabled"):
+        return False
+    interval = int(config["interval"])
+    return step % interval == 0 or step == max_steps
+
+
+def _prune_retained_checkpoints(run_dir: Path, *, prefix: str, keep_last: int) -> None:
+    if keep_last <= 0:
+        return
+    checkpoints = sorted(
+        (path for path in run_dir.glob(f"{prefix}_*") if path.is_dir()),
+        key=lambda path: _checkpoint_step_from_name(path.name, prefix=prefix),
+    )
+    for checkpoint_dir in checkpoints[:-keep_last]:
+        shutil.rmtree(checkpoint_dir, ignore_errors=True)
+
+
+def _checkpoint_step_from_name(name: str, *, prefix: str) -> int:
+    prefix_text = f"{prefix}_"
+    if not name.startswith(prefix_text):
+        return -1
+    try:
+        return int(name[len(prefix_text) :])
+    except ValueError:
+        return -1
+
+
+def _benchmark_results_row(results: list[dict[str, Any]], *, step: int) -> dict[str, Any]:
+    row: dict[str, Any] = {"step": step}
+    for result in results:
+        name = str(result.get("name", "benchmark"))
+        row[f"{name}_returncode"] = result.get("returncode")
+        row[f"{name}_elapsed_seconds"] = result.get("elapsed_seconds")
+        if result.get("output_path") is not None:
+            row[f"{name}_output_path"] = str(result["output_path"])
+        metrics = result.get("metrics")
+        if isinstance(metrics, Mapping):
+            for key, value in metrics.items():
+                row[f"{name}_{key}"] = value
+    return row
 
 
 def _maybe_log_route_path_visualization(

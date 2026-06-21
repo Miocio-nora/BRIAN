@@ -1,0 +1,39 @@
+extends: corrected_global_kv_r125_5b_slow_noise.yaml
+run_name: corrected_global_kv_r125_5b_balanced_slow_noise
+data_config: ../data/r125_main_5b_balanced.yaml
+checkpoint_retention:
+  enabled: true
+  interval: 5000
+  keep_last: 20
+  include_optimizer: false
+  include_rng_state: false
+checkpoint_benchmarks:
+  enabled: true
+  interval: 15000
+  output_dir: reports/package_a_benchmarks
+  label: s_balanced_global_kv_slow_noise
+  fail_on_error: false
+  reasoning:
+    enabled: true
+    config: configs/eval/reasoning_eval_s600.yaml
+  public:
+    enabled: true
+    config: configs/eval/public_benchmark_s600.yaml
+post_train_benchmarks:
+  label: s_balanced_global_kv_slow_noise
+wandb:
+  group: corrected_global_kv_r125_5b_balanced
+  tags:
+  - corrected_package_a
+  - global_kv
+  - r125
+  - 5b
+  - balanced_data
+  - slow_noise
+  - random_route_override
+  - self_recur_cap
+  - selected_balance_002
+  - coverage_floor
+  - strong_length
+  - no_location_bias
+  - no_route_imitation

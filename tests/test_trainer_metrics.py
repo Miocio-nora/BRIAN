@@ -697,6 +697,26 @@ def test_train_from_config_can_skip_best_checkpoint(tmp_path: Path) -> None:
     assert not (run_dir / "checkpoint_best").exists()
 
 
+def test_train_from_config_retains_numbered_model_only_checkpoints(tmp_path: Path) -> None:
+    train_config = _write_tiny_train_fixture(
+        tmp_path,
+        max_steps=3,
+        resume=False,
+        save_best_checkpoint=False,
+        checkpoint_retention={"enabled": True, "interval": 1, "keep_last": 2},
+    )
+
+    run_dir = train_from_config(train_config)
+
+    assert not (run_dir / "checkpoint_step_00000001").exists()
+    assert (run_dir / "checkpoint_step_00000002" / "state.pt").exists()
+    assert (run_dir / "checkpoint_step_00000003" / "state.pt").exists()
+    payload = torch.load(run_dir / "checkpoint_step_00000003" / "state.pt", map_location="cpu", weights_only=False)
+    assert payload["step"] == 3
+    assert "model" in payload
+    assert "optimizer" not in payload
+
+
 def test_train_from_config_logs_routed_behavior(tmp_path: Path) -> None:
     train_config = _write_tiny_routed_train_fixture(tmp_path)
 
@@ -791,6 +811,7 @@ def _write_tiny_train_fixture(
     resume: bool,
     write_routing_report_on_checkpoint: bool = True,
     save_best_checkpoint: bool = True,
+    checkpoint_retention: dict[str, object] | None = None,
 ) -> Path:
     tokenized = tmp_path / "tokenized_resume"
     sequences = [
@@ -847,6 +868,7 @@ def _write_tiny_train_fixture(
             "resume": resume,
             "write_routing_report_on_checkpoint": write_routing_report_on_checkpoint,
             "save_best_checkpoint": save_best_checkpoint,
+            "checkpoint_retention": checkpoint_retention or {"enabled": False},
         },
         train_config,
     )

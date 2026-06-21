@@ -10,7 +10,7 @@ import json
 import math
 import os
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from brian_sphere_llm.data.download import iter_hf_text_dataset
 from brian_sphere_llm.data.filter import keep_text, normalize_text
@@ -73,10 +73,30 @@ def prepare_data(config_path: str | Path) -> Path:
     source_text_enabled = _source_text_enabled(config)
     synthetic_cfg = _mapping_config(config.get("synthetic_only", {}), "synthetic_only")
     synthetic_only = _bool_config(synthetic_cfg.get("enabled", False), "synthetic_only.enabled")
+    mixture_balance = _mixture_balance_mode(config)
+    samples: Iterator[dict[str, Any]] | None = None
     if synthetic_only:
         samples = _synthetic_rows(config)
+        encoded_batches = _encoded_sample_batches(
+            samples,
+            tokenizer,
+            batch_size=tokenization_batch_size,
+            prefetch_batches=tokenization_prefetch_batches,
+        )
+    elif mixture_balance == "token":
+        encoded_batches = _token_balanced_encoded_sample_batches(
+            config,
+            tokenizer,
+            batch_size=tokenization_batch_size,
+        )
     else:
         samples = _mixture_rows(config)
+        encoded_batches = _encoded_sample_batches(
+            samples,
+            tokenizer,
+            batch_size=tokenization_batch_size,
+            prefetch_batches=tokenization_prefetch_batches,
+        )
 
     train_tokens = 0
     val_tokens = 0
@@ -104,12 +124,7 @@ def prepare_data(config_path: str | Path) -> Path:
         )
         manifest_handles = stack.enter_context(_open_manifest_writers(output_manifest_path, manifest_path))
         try:
-            for pending, token_batch in _encoded_sample_batches(
-                samples,
-                tokenizer,
-                batch_size=tokenization_batch_size,
-                prefetch_batches=tokenization_prefetch_batches,
-            ):
+            for pending, token_batch in encoded_batches:
                 for (index, sample, text), tokens in zip(pending, token_batch, strict=True):
                     if not tokens:
                         continue
@@ -144,7 +159,9 @@ def prepare_data(config_path: str | Path) -> Path:
                 if train_tokens >= target_tokens and val_tokens >= val_tokens_target:
                     break
         finally:
-            _close_iterator(samples)
+            _close_iterator(encoded_batches)
+            if samples is not None:
+                _close_iterator(samples)
         if val_tokens == 0 and first_train_tokens is not None:
             val_writer.add_document(first_train_tokens)
         train_sequence_count = train_writer.close()
@@ -166,6 +183,7 @@ def prepare_data(config_path: str | Path) -> Path:
         "source_mixture_expected": source_mixture_expected,
         "source_mixture_realized": source_mixture_realized,
         "source_mixture_realized_share": source_mixture_realized_share,
+        "mixture_balance": mixture_balance,
         "sha256_manifest": manifest_hash.hexdigest(),
         "tokenization_batch_size": tokenization_batch_size,
         "tokenization_prefetch_batches": tokenization_prefetch_batches,
@@ -253,20 +271,27 @@ def _sample_batches(samples: Iterator[dict[str, Any]], *, batch_size: int) -> It
         yield batch
 
 
+def _normalized_sample_batch(
+    sample_batch: list[tuple[int, dict[str, Any]]],
+) -> tuple[list[tuple[int, dict[str, Any], str]], list[str]]:
+    pending: list[tuple[int, dict[str, Any], str]] = []
+    texts: list[str] = []
+    for index, sample in sample_batch:
+        text = normalize_text(sample["text"])
+        if not keep_text(text):
+            continue
+        pending.append((index, sample, text))
+        texts.append(text)
+    return pending, texts
+
+
 def _normalized_sample_batches(
     samples: Iterator[dict[str, Any]],
     *,
     batch_size: int,
 ) -> Iterator[tuple[list[tuple[int, dict[str, Any], str]], list[str]]]:
     for sample_batch in _sample_batches(samples, batch_size=batch_size):
-        pending: list[tuple[int, dict[str, Any], str]] = []
-        texts: list[str] = []
-        for index, sample in sample_batch:
-            text = normalize_text(sample["text"])
-            if not keep_text(text):
-                continue
-            pending.append((index, sample, text))
-            texts.append(text)
+        pending, texts = _normalized_sample_batch(sample_batch)
         if pending:
             yield pending, texts
 
@@ -312,6 +337,48 @@ def _encode_text_batch(tokenizer: Any, texts: list[str]) -> list[list[int]]:
     if input_ids is None:
         return [tokenizer.encode(text, add_special_tokens=True) for text in texts]
     return [list(tokens) for tokens in input_ids]
+
+
+def _token_balanced_encoded_sample_batches(
+    config: dict[str, Any],
+    tokenizer: Any,
+    *,
+    batch_size: int,
+) -> Iterator[tuple[list[tuple[int, dict[str, Any], str]], list[list[int]]]]:
+    sources = _mixture_sources(config, token_balanced=True)
+    sample_index = 0
+    try:
+        while sources:
+            source = min(sources, key=lambda entry: (entry["emitted_tokens"] / entry["weight"], entry["order"]))
+            raw_batch: list[tuple[int, dict[str, Any]]] = []
+            while len(raw_batch) < batch_size:
+                try:
+                    sample = _next_source_sample(source)
+                except StopIteration:
+                    _close_iterator(source["rows"])
+                    if source["repeat"]:
+                        source["repeat_count"] += 1
+                        source["rows"] = source["factory"]()
+                        continue
+                    sources.remove(source)
+                    break
+                raw_batch.append((sample_index, sample))
+                sample_index += 1
+            if not raw_batch:
+                continue
+            pending, texts = _normalized_sample_batch(raw_batch)
+            if not pending:
+                continue
+            token_batch = _encode_text_batch(tokenizer, texts)
+            emitted_tokens = sum(len(tokens) for tokens in token_batch if tokens)
+            source["emitted_tokens"] += emitted_tokens
+            source["emitted_rows"] += len(token_batch)
+            if emitted_tokens <= 0:
+                source["empty_batches"] += 1
+            yield pending, token_batch
+    finally:
+        for source in sources:
+            _close_iterator(source["rows"])
 
 
 def _audit_prepared_manifest(manifest_path: Path, tokenizer: Any) -> dict[str, Any]:
@@ -377,28 +444,18 @@ def _synthetic_rows(config: dict[str, Any]):
 
 
 def _mixture_rows(config: dict[str, Any]):
-    mixture_cfg = _mapping_config(config.get("mixture", {}), "mixture")
-    target_tokens = _int_config(config, "target_tokens", default=0, minimum=0)
-    seed = _int_config(config, "seed", default=1, minimum=0)
-    synthetic_count = max(1000, target_tokens // 1000)
-    sources: list[dict[str, Any]] = []
-    for order, (tag, item) in enumerate(mixture_cfg.items()):
-        item = _mapping_config(item, f"mixture.{tag}")
-        weight = _float_config(item, "weight", minimum=0.0)
-        if weight <= 0.0:
-            continue
-        if tag in {"synthetic_routing", "math_symbolic_qa", "code_structured"}:
-            row_iter = _local_synthetic_mixture_rows(tag, item, synthetic_count, seed)
-        else:
-            row_iter = _hf_mixture_rows(tag, item)
-        sources.append({"order": order, "weight": weight, "emitted": 0, "rows": row_iter})
+    sources = _mixture_sources(config, token_balanced=False)
     try:
         while sources:
             source = min(sources, key=lambda entry: (entry["emitted"] / entry["weight"], entry["order"]))
             try:
-                yield next(source["rows"])
+                yield _next_source_sample(source)
             except StopIteration:
                 _close_iterator(source["rows"])
+                if source["repeat"]:
+                    source["repeat_count"] += 1
+                    source["rows"] = source["factory"]()
+                    continue
                 sources.remove(source)
                 continue
             source["emitted"] += 1
@@ -407,17 +464,127 @@ def _mixture_rows(config: dict[str, Any]):
             _close_iterator(source["rows"])
 
 
+def _mixture_balance_mode(config: dict[str, Any]) -> str:
+    value = str(config.get("mixture_balance", "document")).strip().lower().replace("_", "-")
+    if value in {"document", "documents", "doc", "docs"}:
+        return "document"
+    if value in {"token", "tokens"}:
+        return "token"
+    raise ValueError("mixture_balance must be 'document' or 'token'.")
+
+
+def _mixture_sources(config: dict[str, Any], *, token_balanced: bool) -> list[dict[str, Any]]:
+    mixture_cfg = _mapping_config(config.get("mixture", {}), "mixture")
+    target_tokens = _int_config(config, "target_tokens", default=0, minimum=0)
+    val_tokens = _int_config(config, "validation_tokens", default=0, minimum=0)
+    seed = _int_config(config, "seed", default=1, minimum=0)
+    total_target_tokens = target_tokens + val_tokens
+    sources: list[dict[str, Any]] = []
+    for order, (tag, item) in enumerate(mixture_cfg.items()):
+        item = _mapping_config(item, f"mixture.{tag}")
+        weight = _float_config(item, "weight", minimum=0.0)
+        if weight <= 0.0:
+            continue
+        repeat = _bool_config(item.get("repeat", False), f"mixture.{tag}.repeat")
+        factory = _mixture_row_factory(
+            str(tag),
+            item,
+            seed=seed,
+            total_target_tokens=total_target_tokens,
+            token_balanced=token_balanced,
+        )
+        sources.append(
+            {
+                "order": order,
+                "weight": weight,
+                "emitted": 0,
+                "emitted_tokens": 0,
+                "emitted_rows": 0,
+                "empty_batches": 0,
+                "repeat": repeat,
+                "repeat_count": 0,
+                "factory": factory,
+                "rows": factory(),
+            }
+        )
+    return sources
+
+
+def _mixture_row_factory(
+    tag: str,
+    item: dict[str, Any],
+    *,
+    seed: int,
+    total_target_tokens: int,
+    token_balanced: bool,
+) -> Callable[[], Iterator[dict[str, Any]]]:
+    def factory() -> Iterator[dict[str, Any]]:
+        if tag in {"synthetic_routing", "math_symbolic_qa", "code_structured"}:
+            count = _synthetic_source_count(item, total_target_tokens, token_balanced=token_balanced)
+            return _local_synthetic_mixture_rows(tag, item, count, seed)
+        return _hf_mixture_rows(tag, item)
+
+    return factory
+
+
+def _synthetic_source_count(item: dict[str, Any], total_target_tokens: int, *, token_balanced: bool) -> int:
+    if "sample_count" in item:
+        return _int_config(item, "sample_count", minimum=1)
+    divisor = 100 if token_balanced else 1000
+    return max(1000, total_target_tokens // divisor)
+
+
+def _next_source_sample(source: dict[str, Any]) -> dict[str, Any]:
+    sample = next(source["rows"])
+    repeat_count = int(source.get("repeat_count", 0))
+    if repeat_count <= 0:
+        return sample
+    repeated = dict(sample)
+    repeated["sample_id"] = f"{sample['sample_id']}-repeat{repeat_count}"
+    repeated["source_url_or_id"] = f"{sample['source_url_or_id']}#repeat{repeat_count}"
+    return repeated
+
+
 def _local_synthetic_mixture_rows(tag: str, item: dict[str, Any], count: int, seed: int) -> Iterator[dict[str, Any]]:
+    pack_examples = _int_config(item, "pack_examples_per_doc", default=1, minimum=1)
     if tag == "synthetic_routing":
-        yield from _synthetic_mixture_rows(item, count, seed)
+        rows = _synthetic_mixture_rows(item, count, seed)
+    elif tag == "math_symbolic_qa":
+        rows = _math_symbolic_rows(item, count, seed)
+    elif tag == "code_structured":
+        rows = _code_structured_rows(item, count, seed)
+    else:
+        raise ValueError(f"Unsupported local synthetic mixture tag: {tag}")
+    if pack_examples <= 1:
+        yield from rows
         return
-    if tag == "math_symbolic_qa":
-        yield from _math_symbolic_rows(item, count, seed)
-        return
-    if tag == "code_structured":
-        yield from _code_structured_rows(item, count, seed)
-        return
-    raise ValueError(f"Unsupported local synthetic mixture tag: {tag}")
+    yield from _packed_local_rows(tag, rows, pack_examples)
+
+
+def _packed_local_rows(tag: str, rows: Iterator[dict[str, Any]], pack_examples: int) -> Iterator[dict[str, Any]]:
+    packed_index = 0
+    buffer: list[dict[str, Any]] = []
+    for row in rows:
+        buffer.append(row)
+        if len(buffer) >= pack_examples:
+            yield _packed_local_row(tag, buffer, packed_index)
+            packed_index += 1
+            buffer = []
+    if buffer:
+        yield _packed_local_row(tag, buffer, packed_index)
+
+
+def _packed_local_row(tag: str, rows: list[dict[str, Any]], packed_index: int) -> dict[str, Any]:
+    first = rows[0]
+    return {
+        "sample_id": f"{tag}-pack-{packed_index}",
+        "text": "\n".join(str(row["text"]) for row in rows),
+        "source_dataset": first.get("source_dataset", tag),
+        "source_url_or_id": f"{tag}-pack-{packed_index}",
+        "license": first.get("license", "internal-test"),
+        "mixture_tag": tag,
+        "route_metadata": {"task_family": tag, "packed_examples": len(rows)},
+    }
 
 
 def _synthetic_mixture_rows(item: dict[str, Any], count: int, seed: int) -> Iterator[dict[str, Any]]:

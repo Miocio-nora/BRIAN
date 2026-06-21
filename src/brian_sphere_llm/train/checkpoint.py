@@ -17,10 +17,11 @@ def save_checkpoint(
     path: str | Path,
     *,
     model: Any,
-    optimizer: Any,
+    optimizer: Any | None,
     step: int,
     best_eval_loss: float | None = None,
     extra: Mapping[str, Any] | None = None,
+    include_optimizer: bool = True,
     include_rng_state: bool = True,
 ) -> None:
     if torch is None:
@@ -29,10 +30,13 @@ def save_checkpoint(
     path.mkdir(parents=True, exist_ok=True)
     payload: dict[str, Any] = {
         "model": model.state_dict(),
-        "optimizer": optimizer.state_dict(),
         "step": step,
         "best_eval_loss": best_eval_loss,
     }
+    if include_optimizer:
+        if optimizer is None:
+            raise ValueError("optimizer is required when include_optimizer is true.")
+        payload["optimizer"] = optimizer.state_dict()
     if extra:
         payload.update(dict(extra))
     if include_rng_state:

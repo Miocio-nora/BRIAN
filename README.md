@@ -163,6 +163,32 @@ configs/train/corrected_global_kv_r125_5b_slow_noise.yaml
 configs/train/corrected_global_kv_r125_5b_slow_noise_no_router_position.yaml
 ```
 
+The first 5B Global KV runs used `r125_main_5b`, whose realized token mixture
+was FineWeb-Edu dominated despite the declared 70/10/10/5/5 source weights. A
+token-balanced replacement has been prepared:
+
+```text
+configs/data/r125_main_5b_balanced.yaml
+```
+
+It realizes approximately 70% FineWeb-Edu, 10% TinyStories, 10% synthetic
+routing, 5% symbolic math, and 5% structured code by token count. The balanced
+Global KV rerun configs are:
+
+```text
+configs/train/corrected_global_kv_r125_5b_balanced_slow_noise.yaml
+configs/train/corrected_attention_global_kv_r125_5b_balanced_slow_noise.yaml
+```
+
+These runs retain model-only `checkpoint_step_*` checkpoints every 5000 steps
+and run reasoning/public benchmark probes every 15000 steps, writing
+`benchmark_log.jsonl` plus benchmark JSON reports. The goal is to separate
+validation-loss overfitting or shortcut behavior from true public-benchmark
+generalization.
+
+The balanced no-router-position rerun was intentionally dropped after the
+earlier no-position evidence failed to justify more compute.
+
 The no-router-position variant keeps block-position injection inside route
 blocks but removes position from the router input, testing whether direct
 location access is helping the router learn path templates instead of
@@ -207,6 +233,7 @@ The planned fixed-length data recipes are declared under `configs/data/`:
 | `r125_smoke` | 100M | 2048 | first baseline and fixed-route checks |
 | `r125_main_2b` | 2B | 2048 | first serious R125 route-core validation |
 | `r125_main_5b` | 5B | 2048 | stronger R125 run if 2B looks promising |
+| `r125_main_5b_balanced` | 5B | 2048 | token-balanced R125 rerun for Global KV/public benchmark diagnosis |
 | `r350_main_10b` | 10B | 4096 | first R350 scaling trend check |
 | `r350_main_30b` | 30B | 4096 | stronger R350 run |
 | `r1b_pilot_10b` | 10B | 4096 | 1B architecture pilot |
