@@ -45,6 +45,8 @@ class BackboneConfig:
     ffn_multiplier: float = 4.0
     attention_global_logit_bias_init: float | None = None
     attention_global_sink_slots: int = 0
+    attention_global_kv_mode: str = "summary"
+    attention_global_code_dim: int | None = None
 
 
 class RMSNorm(ModuleBase):
@@ -100,11 +102,25 @@ class CausalSelfAttention(ModuleBase):
         self.dropout = config.dropout
         self.rope = RotaryEmbedding(self.head_dim, config.context_length)
         self.attention_global_sink_slots = int(config.attention_global_sink_slots)
+        self.attention_global_kv_mode = str(config.attention_global_kv_mode)
+        if self.attention_global_kv_mode not in {"summary", "token_compressed"}:
+            raise ValueError(f"Unknown attention_global_kv_mode: {self.attention_global_kv_mode}")
+        self.attention_global_code_dim = int(config.attention_global_code_dim or self.head_dim)
         self.global_logit_bias = (
             nn.Parameter(torch.tensor(float(config.attention_global_logit_bias_init)))
             if config.attention_global_logit_bias_init is not None
             else None
         )
+        if self.attention_global_kv_mode == "token_compressed":
+            self.global_key_write = nn.Linear(self.head_dim, self.attention_global_code_dim, bias=False)
+            self.global_value_write = nn.Linear(self.head_dim, self.attention_global_code_dim, bias=False)
+            self.global_key_read = nn.Linear(self.attention_global_code_dim, self.head_dim, bias=False)
+            self.global_value_read = nn.Linear(self.attention_global_code_dim, self.head_dim, bias=False)
+        else:
+            self.global_key_write = None
+            self.global_value_write = None
+            self.global_key_read = None
+            self.global_value_read = None
 
     def forward(
         self,
@@ -120,15 +136,15 @@ class CausalSelfAttention(ModuleBase):
         k = k.view(batch, seq_len, self.n_heads, self.head_dim).transpose(1, 2)
         v = v.view(batch, seq_len, self.n_heads, self.head_dim).transpose(1, 2)
         q, k = self.rope(q, k)
-        key_summary = k.mean(dim=2)
-        value_summary = v.mean(dim=2)
+        write_key, write_value = self._attention_global_write_tensors(k, v)
         global_keys = getattr(attention_global_state, "keys", None)
         global_values = getattr(attention_global_state, "values", None)
         global_valid = getattr(attention_global_state, "valid", None)
         has_global = global_keys is not None and int(global_keys.size(2)) > 0
         if has_global:
-            all_k = torch.cat([global_keys.to(dtype=k.dtype), k], dim=2)
-            all_v = torch.cat([global_values.to(dtype=v.dtype), v], dim=2)
+            global_k, global_v = self._attention_global_read_tensors(global_keys, global_values, dtype=k.dtype)
+            all_k = torch.cat([global_k, k], dim=2)
+            all_v = torch.cat([global_v, v], dim=2)
             attn_mask = self._global_prefix_mask(global_valid, seq_len, dtype=q.dtype, device=q.device)
             y = F.scaled_dot_product_attention(
                 q,
@@ -138,7 +154,7 @@ class CausalSelfAttention(ModuleBase):
                 is_causal=False,
                 dropout_p=self.dropout if self.training else 0.0,
             )
-            metrics = self._global_attention_metrics(q, k, global_keys, global_valid)
+            metrics = self._global_attention_metrics(q, k, global_k, global_valid)
         else:
             y = F.scaled_dot_product_attention(
                 q,
@@ -151,8 +167,30 @@ class CausalSelfAttention(ModuleBase):
         y = y.transpose(1, 2).contiguous().view(batch, seq_len, dim)
         output = self.out(y)
         if return_attention_kv:
-            return output, key_summary, value_summary, metrics
+            return output, write_key, write_value, metrics
         return output
+
+    def _attention_global_write_tensors(self, k: torch.Tensor, v: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        if self.attention_global_kv_mode == "token_compressed":
+            assert self.global_key_write is not None
+            assert self.global_value_write is not None
+            return self.global_key_write(k), self.global_value_write(v)
+        return k.mean(dim=2), v.mean(dim=2)
+
+    def _attention_global_read_tensors(
+        self,
+        global_keys: torch.Tensor,
+        global_values: torch.Tensor,
+        *,
+        dtype: torch.dtype,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        if self.attention_global_kv_mode == "token_compressed":
+            assert self.global_key_read is not None
+            assert self.global_value_read is not None
+            keys = self.global_key_read(global_keys.to(dtype=dtype))
+            values = self.global_value_read(global_values.to(dtype=dtype))
+            return keys, values
+        return global_keys.to(dtype=dtype), global_values.to(dtype=dtype)
 
     def _global_prefix_mask(
         self,

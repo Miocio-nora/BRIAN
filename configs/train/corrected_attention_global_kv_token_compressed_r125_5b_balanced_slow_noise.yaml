@@ -1,0 +1,24 @@
+extends: corrected_attention_global_kv_r125_5b_balanced_slow_noise.yaml
+run_name: corrected_attention_global_kv_token_compressed_r125_5b_balanced_slow_noise
+model_config: ../model/brian_r125_sphere16_no_location_bias_attention_global_kv_token_compressed.yaml
+checkpoint_benchmarks:
+  label: s_balanced_attention_global_kv_token_compressed_slow_noise
+post_train_benchmarks:
+  label: s_balanced_attention_global_kv_token_compressed_slow_noise
+wandb:
+  group: corrected_attention_global_kv_token_compressed_r125_5b_balanced
+  tags:
+  - corrected_package_a
+  - attention_global_kv
+  - token_compressed_attention_global_kv
+  - r125
+  - 5b
+  - balanced_data
+  - slow_noise
+  - random_route_override
+  - self_recur_cap
+  - selected_balance_002
+  - coverage_floor
+  - strong_length
+  - no_location_bias
+  - no_route_imitation

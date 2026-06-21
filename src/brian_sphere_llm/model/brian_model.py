@@ -72,6 +72,8 @@ class BrianRouteConfig:
     global_head_delta_rank: int = 0
     attention_global_kv: bool = False
     attention_global_kv_scope: str = "route"
+    attention_global_kv_mode: str = "summary"
+    attention_global_code_dim: int | None = None
     attention_global_sink_slots: int = 4
     attention_global_window_slots: int = 32
     attention_global_tokens_per_write: int = 1
@@ -132,6 +134,12 @@ class BrianRouteConfig:
             ),
             attention_global_kv=_bool_value(data.get("attention_global_kv", False), "attention_global_kv"),
             attention_global_kv_scope=str(data.get("attention_global_kv_scope", "route")),
+            attention_global_kv_mode=str(data.get("attention_global_kv_mode", "summary")),
+            attention_global_code_dim=_optional_int_value(
+                data.get("attention_global_code_dim"),
+                "attention_global_code_dim",
+                minimum=1,
+            ),
             attention_global_sink_slots=_int_value(
                 data.get("attention_global_sink_slots", 4),
                 "attention_global_sink_slots",
@@ -187,6 +195,8 @@ class BrianRouteCore(ModuleBase):
         if config.attention_global_kv:
             if config.attention_global_kv_scope != "route":
                 raise ValueError("attention_global_kv_scope currently supports only 'route'")
+            if config.attention_global_kv_mode not in {"summary", "token_compressed"}:
+                raise ValueError(f"Unknown attention_global_kv_mode: {config.attention_global_kv_mode}")
             if config.attention_global_tokens_per_write != 1:
                 raise ValueError("attention_global_tokens_per_write currently supports only 1")
             if config.attention_global_sink_slots + config.attention_global_window_slots <= 0:
@@ -202,6 +212,8 @@ class BrianRouteCore(ModuleBase):
                 route_backbone,
                 attention_global_logit_bias_init=config.attention_global_logit_bias_init,
                 attention_global_sink_slots=config.attention_global_sink_slots,
+                attention_global_kv_mode=config.attention_global_kv_mode,
+                attention_global_code_dim=config.attention_global_code_dim,
             )
         self.token_embedding = nn.Embedding(config.base.vocab_size, config.base.d_model)
         self.pre_blocks = nn.ModuleList([TransformerBlock(backbone) for _ in range(config.pre_blocks)])
@@ -352,7 +364,7 @@ class BrianRouteCore(ModuleBase):
             attention_global_state = self.attention_global_cache.empty(
                 batch_size=batch_size,
                 n_heads=self.config.base.n_heads,
-                head_dim=self.config.base.d_model // self.config.base.n_heads,
+                head_dim=self._attention_global_cache_dim(),
                 device=input_ids.device,
                 dtype=hidden.dtype,
             )
@@ -498,7 +510,8 @@ class BrianRouteCore(ModuleBase):
             if self.config.attention_global_kv and attention_global_state is not None:
                 assert self.attention_global_cache is not None
                 assert write_key is not None and write_value is not None and write_valid is not None
-                write_valid = write_valid & ~exited & (selected != self.out_action)
+                write_allowed = (~exited & (selected != self.out_action)).unsqueeze(1)
+                write_valid = write_valid & write_allowed
                 if torch.any(write_valid):
                     attention_global_state = self.attention_global_cache.write(
                         attention_global_state,
@@ -986,8 +999,8 @@ class BrianRouteCore(ModuleBase):
                     return_attention_kv=True,
                 )
                 next_hidden[indices] = output
-                write_key[indices] = key_summary.to(write_key.dtype)
-                write_value[indices] = value_summary.to(write_value.dtype)
+                write_key[indices] = self._attention_global_write_tensor(key_summary).to(write_key.dtype)
+                write_value[indices] = self._attention_global_write_tensor(value_summary).to(write_value.dtype)
                 write_valid[indices] = True
                 self._append_attention_global_metrics(route_info, metrics)
 
@@ -1010,9 +1023,11 @@ class BrianRouteCore(ModuleBase):
                     )
                     weight = top_weights[indices, rank].to(hidden.dtype)
                     accum[indices] = accum[indices] + action_output * weight.view(-1, 1, 1)
-                    key_accum[indices] = key_accum[indices] + key_summary.to(key_accum.dtype) * weight.view(-1, 1, 1)
+                    write_key_summary = self._attention_global_write_tensor(key_summary).to(key_accum.dtype)
+                    write_value_summary = self._attention_global_write_tensor(value_summary).to(value_accum.dtype)
+                    key_accum[indices] = key_accum[indices] + write_key_summary * weight.view(-1, 1, 1, 1)
                     value_accum[indices] = (
-                        value_accum[indices] + value_summary.to(value_accum.dtype) * weight.view(-1, 1, 1)
+                        value_accum[indices] + write_value_summary * weight.view(-1, 1, 1, 1)
                     )
                     weight_sum[indices] = weight_sum[indices] + weight
                     self._append_attention_global_metrics(route_info, metrics)
@@ -1020,8 +1035,8 @@ class BrianRouteCore(ModuleBase):
             if torch.any(weighted_mask):
                 denom = weight_sum[weighted_mask]
                 next_hidden[weighted_mask] = accum[weighted_mask] / denom.view(-1, 1, 1)
-                write_key[weighted_mask] = key_accum[weighted_mask] / denom.view(-1, 1, 1)
-                write_value[weighted_mask] = value_accum[weighted_mask] / denom.view(-1, 1, 1)
+                write_key[weighted_mask] = key_accum[weighted_mask] / denom.view(-1, 1, 1, 1)
+                write_value[weighted_mask] = value_accum[weighted_mask] / denom.view(-1, 1, 1, 1)
                 write_valid[weighted_mask] = True
             fallback_mask = use_weighted_fusion & (weight_sum <= 0)
             if torch.any(fallback_mask):
@@ -1060,20 +1075,36 @@ class BrianRouteCore(ModuleBase):
                     return_attention_kv=True,
                 )
                 next_hidden[indices] = output
-                write_key[indices] = key_summary.to(write_key.dtype)
-                write_value[indices] = value_summary.to(write_value.dtype)
+                write_key[indices] = self._attention_global_write_tensor(key_summary).to(write_key.dtype)
+                write_value[indices] = self._attention_global_write_tensor(value_summary).to(write_value.dtype)
                 write_valid[indices] = True
                 self._append_attention_global_metrics(route_info, metrics)
         return next_hidden, write_key, write_value, write_valid
 
     def _empty_attention_global_write(self, hidden: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        head_dim = self.config.base.d_model // self.config.base.n_heads
-        shape = (hidden.size(0), self.config.base.n_heads, head_dim)
+        dim = self._attention_global_cache_dim()
+        if self.config.attention_global_kv_mode == "token_compressed":
+            slots = hidden.size(1)
+        else:
+            slots = 1
+        shape = (hidden.size(0), self.config.base.n_heads, slots, dim)
         return (
             hidden.new_zeros(shape),
             hidden.new_zeros(shape),
-            torch.zeros(hidden.size(0), dtype=torch.bool, device=hidden.device),
+            torch.zeros(hidden.size(0), slots, dtype=torch.bool, device=hidden.device),
         )
+
+    def _attention_global_cache_dim(self) -> int:
+        if self.config.attention_global_kv_mode == "token_compressed":
+            return int(self.config.attention_global_code_dim or (self.config.base.d_model // self.config.base.n_heads))
+        return self.config.base.d_model // self.config.base.n_heads
+
+    def _attention_global_write_tensor(self, tensor: torch.Tensor) -> torch.Tensor:
+        if tensor.dim() == 3:
+            return tensor.unsqueeze(2)
+        if tensor.dim() == 4:
+            return tensor
+        raise ValueError("Attention Global KV writes must be rank 3 or rank 4 tensors.")
 
     def _append_attention_global_metrics(self, route_info: dict[str, Any], metrics: dict[str, torch.Tensor]) -> None:
         for key in [
@@ -1344,6 +1375,8 @@ class BrianRouteCore(ModuleBase):
             "global_head_delta_rank": self.config.global_head_delta_rank,
             "attention_global_kv": str(self.config.attention_global_kv),
             "attention_global_kv_scope": self.config.attention_global_kv_scope,
+            "attention_global_kv_mode": self.config.attention_global_kv_mode,
+            "attention_global_code_dim": str(self.config.attention_global_code_dim),
             "attention_global_sink_slots": self.config.attention_global_sink_slots,
             "attention_global_window_slots": self.config.attention_global_window_slots,
             "attention_global_tokens_per_write": self.config.attention_global_tokens_per_write,
@@ -1378,6 +1411,12 @@ def _optional_float_value(
     if value is None:
         return None
     return _float_value(value, name, minimum=minimum, maximum=maximum)
+
+
+def _optional_int_value(value: Any, name: str, *, minimum: int | None = None) -> int | None:
+    if value is None:
+        return None
+    return _int_value(value, name, minimum=minimum)
 
 
 def _loss_weights_mapping(loss_weights: Mapping[str, Any] | None) -> Mapping[str, Any]:

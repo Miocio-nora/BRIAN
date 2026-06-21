@@ -32,22 +32,53 @@ layer should share K/V.
 `CanonicalAttentionGlobalKVCache` stores:
 
 ```text
-keys:   [batch, heads, slots, head_dim]
-values: [batch, heads, slots, head_dim]
+keys:   [batch, heads, slots, cache_dim]
+values: [batch, heads, slots, cache_dim]
 valid:  [batch, slots]
 ```
 
-Each route block call writes one compressed attention memory slot per sample by
-mean-pooling the block attention K/V over the sequence length:
+The original implementation uses `attention_global_kv_mode: summary`. Each route
+block call writes one compressed attention memory slot per sample by mean-pooling
+the block attention K/V over the sequence length:
 
 ```text
 write_key   = mean(local_attention_key over tokens)
 write_value = mean(local_attention_value over tokens)
 ```
 
-This is intentionally compressed: it is not a full raw token-level cache. It
-keeps the memory budget controlled while still giving later route steps direct
-K/V access inside attention.
+This is intentionally compressed, but it is not a full token-level cache.
+
+The newer implementation uses `attention_global_kv_mode: token_compressed`.
+Instead of mean-pooling over sequence length, it writes every token's K/V for
+every head:
+
+```text
+local_key:   [batch, heads, seq_len, head_dim]
+local_value: [batch, heads, seq_len, head_dim]
+```
+
+Each token K/V is projected through learned per-block write projections:
+
+```text
+write_key   = global_key_write(local_key)     # head_dim -> attention_global_code_dim
+write_value = global_value_write(local_value) # head_dim -> attention_global_code_dim
+```
+
+The cache stores these compressed token-level codes as:
+
+```text
+[batch, heads, token_slots, attention_global_code_dim]
+```
+
+When later route blocks read the cache, they first map the compressed global
+codes back to attention head dimension:
+
+```text
+read_key   = global_key_read(cached_key_code)     # attention_global_code_dim -> head_dim
+read_value = global_value_read(cached_value_code) # attention_global_code_dim -> head_dim
+```
+
+Then attention directly attends to the decoded global K/V prefix.
 
 ## Retention
 
@@ -63,6 +94,11 @@ M_global = M_sink + M_window
   window.
 
 The R125 5B config currently uses sink 4 and window 32.
+
+For `summary` mode, one routed block call writes one slot. For
+`token_compressed` mode, one routed block call writes `seq_len` token slots, and
+then retention immediately keeps only the configured sink/window slots. This is
+the intended mechanism: token-level K/V is written, but memory remains bounded.
 
 ## Attention Path
 
@@ -100,6 +136,12 @@ Main validation config:
 
 ```text
 configs/train/corrected_attention_global_kv_r125_5b.yaml
+```
+
+Token-compressed attention Global KV config:
+
+```text
+configs/train/corrected_attention_global_kv_token_compressed_r125_5b_balanced_slow_noise.yaml
 ```
 
 Smoke config:
@@ -169,8 +211,9 @@ no-position evidence was not strong enough to spend more training compute.
 
 ## Current Limitations
 
-- Writes one memory token per routed block call only.
-- Does not store full token-level K/V.
+- `summary` mode writes one memory token per routed block call only.
+- `token_compressed` mode writes token-level K/V, but only retains the configured
+  sink/window token slots after each write.
 - Does not support parallel passing yet.
 - Does not yet include long-context benchmark evidence.
 - Attention-mass logging is approximate and intentionally cheap.

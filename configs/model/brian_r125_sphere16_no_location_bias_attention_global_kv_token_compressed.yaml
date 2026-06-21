@@ -1,0 +1,4 @@
+extends: brian_r125_sphere16_no_location_bias_attention_global_kv.yaml
+model_name: brian_r125_sphere16_no_location_bias_attention_global_kv_token_compressed
+attention_global_kv_mode: token_compressed
+attention_global_code_dim: 32
