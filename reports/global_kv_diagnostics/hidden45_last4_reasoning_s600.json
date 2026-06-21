@@ -1,0 +1,14 @@
+{
+  "checkpoint": "checkpoint_step_00045000",
+  "mode": "hidden_last4",
+  "overall": {
+    "answer_tokens_mean": 11.865,
+    "exact_match_accuracy": 0.0,
+    "generated_tokens_mean": 11.865,
+    "sample_count": 600,
+    "teacher_forced_token_accuracy": 0.27201779123654124,
+    "visible_cot_tokens_mean": 11.861666666666666
+  },
+  "run_dir": "runs/corrected_global_kv_r125_5b_balanced_slow_noise",
+  "sample_count": 600
+}
