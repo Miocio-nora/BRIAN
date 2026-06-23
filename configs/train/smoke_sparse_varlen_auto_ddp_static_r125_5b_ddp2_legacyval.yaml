@@ -1,0 +1,3 @@
+extends: smoke_sparse_varlen_auto_r125_5b_ddp2_legacyval.yaml
+run_name: smoke_sparse_varlen_auto_ddp_static_r125_5b_ddp2_legacyval
+ddp_find_unused_parameters: false

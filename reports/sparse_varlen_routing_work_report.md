@@ -1,6 +1,6 @@
 # Sparse Varlen Routing B 方案工作报告
 
-更新时间：2026-06-23 19:17 JST
+更新时间：2026-06-23 20:16 JST
 
 ## 目标
 
@@ -170,3 +170,84 @@ tmp/runs_sparse_varlen_smoke/smoke_sparse_varlen_r125_5b_ddp2_legacyval
 ## 当前结论
 
 `sparse_varlen` 的语义、因果性、CUDA backward、DDP eval、DDP train smoke 均通过；但吞吐严重失败。当前实现应保留为受测原型和 correctness reference，不建议进入正式 Package A 训练，也不建议替代当前 `sparse` A 方案。
+
+## 2026-06-23 追加优化检查
+
+### 新证据：per-block microbenchmark
+
+在 B200/cu128、r125 block shape (`B=4, S=2048, D=768, H=12`) 上，单个 route block 的局部计时显示：
+
+| Path | Forward mean | Backward mean | 结论 |
+| --- | ---: | ---: | --- |
+| full dense block + select | ~0.95 ms | ~2.85 ms | 最快/最稳定 |
+| current padded sparse A | ~1.35 ms | ~3.39 ms | 比 dense 慢 |
+| FlexAttention varlen B | ~7.5 ms | ~10.2 ms | 明显不可用 |
+
+不同 selected density 从 0.1% 到 50% 的测试也没有发现 Flex B 划算区间；dense fused SDPA/GEMM 在 B200 上太强，selected sparse 的小 kernel、mask 构造、scatter/gather 开销吃掉了理论 FLOPs 优势。
+
+### 代码调整
+
+`route_block_execution: sparse_varlen` 现在支持 backend 选择：
+
+- `BRIAN_SPARSE_VARLEN_BACKEND=flex`：强制使用原 FlexAttention packed-varlen reference backend。
+- `BRIAN_SPARSE_VARLEN_BACKEND=dense`：使用 dense full block + selected gather。
+- `BRIAN_SPARSE_VARLEN_BACKEND=dense_compiled`：实验性编译 dense block 后 selected gather。
+- `auto`：CPU 走 `flex` 以保留 correctness reference；CUDA 默认走 `dense`，避免 Flex 性能灾难。
+
+新增对照配置：
+
+- `configs/train/smoke_sparse_varlen_auto_r125_5b_ddp2_legacyval.yaml`
+- `configs/train/smoke_full_sequence_r125_5b_ddp2_legacyval.yaml`
+- `configs/train/smoke_sparse_varlen_auto_ddp_static_r125_5b_ddp2_legacyval.yaml`
+- `configs/train/smoke_sparse_varlen_auto_compiled_r125_5b_ddp2_legacyval.yaml`
+
+### 追加测试
+
+```bash
+/home/dredvpn009/Flash_Storage/anaconda3/envs/brian-sparse-varlen/bin/python -m pytest tests/test_sparse_route_block_execution.py -q
+/home/dredvpn009/Flash_Storage/anaconda3/envs/brian-sparse-varlen/bin/python -m pytest tests/test_config_inventory.py -q
+```
+
+结果：
+
+```text
+12 passed
+21 passed
+```
+
+新增覆盖：
+
+- `dense` backend 强制模式下与 `full_sequence` top-1 输出 allclose。
+- `dense_compiled` backend 保留为实验选项，但不作为默认。
+
+### 追加 smoke 对照
+
+所有 run 都在 `CUDA_VISIBLE_DEVICES=2,3` 上执行。注意：当时 GPU 2/3 同时存在外部 eval 任务，各占约 30GB 显存，因此绝对吞吐低于空卡状态；但同一时间窗口内的相对比较仍有参考价值。
+
+| Run | Backend | Steps | Mean tokens/s | Last-20 tokens/s | Final tokens/s | Max tokens/s | Last eval tokens/s |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `smoke_sparse_varlen_r125_5b_ddp2_legacyval` | Flex varlen | 100 | 23,064.98 | 23,979.30 | 24,944 | 25,171 | 14,171 |
+| `smoke_sparse_varlen_auto_r125_5b_ddp2_legacyval` | auto dense | 100 | 53,991.95 | 56,511.40 | 45,302 | 79,000 | 28,911 |
+| `smoke_full_sequence_r125_5b_ddp2_legacyval` | full sequence | 100 | 63,575.38 | 68,269.20 | 81,808 | 87,721 | 24,536 |
+| `smoke_sparse_varlen_auto_ddp_static_r125_5b_ddp2_legacyval` | auto dense, DDP static | 100 | 56,071.68 | 48,705.30 | 58,551 | 83,730 | 24,879 |
+| `smoke_sparse_varlen_auto_compiled_r125_5b_ddp2_legacyval` | dense compiled | 100 | 63,118.33 | 62,493.65 | 53,527 | 97,883 | 19,440 |
+
+### Updated Conclusion
+
+Correctness 已经比较充分：Flex reference、dense fallback、CUDA bf16/backward、DDP eval、DDP train 都跑通。
+
+性能结论仍然没有达成目标：
+
+- Flex varlen 原方案从性能上失败。
+- CUDA auto dense fallback 能把 Flex 的 24k 提升到约 54-56k mean/last20，但只是恢复到 A/full-sequence 同级别，不能证明真正 sparse 加速。
+- full_sequence 在同一窗口仍更强，last20 约 68k，说明当前 selected sparse 路径不是瓶颈解。
+- `ddp_find_unused_parameters=false` 没有改善，且对未来 router collapse 场景不安全。
+- `dense_compiled` 有单点 97.9k，但均值不稳定，不能作为默认。
+
+下一步若必须达到预期加速，不能再只替换 attention API；需要做 grouped expert execution：
+
+- 用 `torch._grouped_mm` / Triton grouped GEMM 合并多个 route block 的 QKV/out/FFN linear。
+- attention 需要按 expert 分组后批处理，避免每个 block 一个 Python/kernel 小调用。
+- 目标是把 16 route steps * 8 route blocks 的碎片化执行降到少量 grouped kernels。
+
+当前提交可作为 correctness-safe 原型和性能负结果记录；尚不能标记为“达到预期加速”。

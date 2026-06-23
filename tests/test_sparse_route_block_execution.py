@@ -174,6 +174,30 @@ def test_sparse_varlen_route_block_execution_cuda_backward() -> None:
     assert torch.isfinite(grad).all()
 
 
+def test_sparse_varlen_dense_backend_matches_full_sequence_top1(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("BRIAN_SPARSE_VARLEN_BACKEND", "dense")
+    torch.manual_seed(37)
+    full, sparse = _paired_models("sparse_varlen")
+    hidden = torch.randn(2, 6, 64)
+    position = _position(full, 2, 6)
+    selected = torch.tensor(
+        [
+            [0, 1, 2, full.out_action, 0, 1],
+            [2, 0, full.out_action, 1, 2, 0],
+        ],
+        dtype=torch.long,
+    )
+    top_actions = selected.unsqueeze(-1)
+    top_weights = torch.ones(*selected.shape, 1)
+    use_weighted_fusion = torch.zeros_like(selected, dtype=torch.bool)
+
+    with torch.no_grad():
+        expected = full._apply_routed_blocks(hidden, position, selected, top_actions, top_weights, use_weighted_fusion)
+        actual = sparse._apply_routed_blocks(hidden, position, selected, top_actions, top_weights, use_weighted_fusion)
+
+    assert torch.allclose(actual, expected, atol=1e-5, rtol=1e-5)
+
+
 def test_sparse_varlen_route_block_execution_is_suffix_invariant() -> None:
     torch.manual_seed(29)
     cfg = BrianRouteConfig(

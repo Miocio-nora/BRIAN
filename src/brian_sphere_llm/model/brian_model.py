@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -994,7 +995,12 @@ class BrianRouteCore(ModuleBase):
         query_mask: torch.Tensor,
     ) -> torch.Tensor:
         if self.config.route_block_execution == "sparse_varlen":
-            return block.forward_selected_varlen(hidden, block_position, query_mask)
+            backend = _sparse_varlen_backend(hidden)
+            if backend == "flex":
+                return block.forward_selected_varlen(hidden, block_position, query_mask)
+            if backend == "dense_compiled" and not self.activation_checkpointing:
+                return block.forward_selected_dense(hidden, block_position, query_mask, compile_cuda=True)
+            return checkpoint_if_enabled(self, block, hidden, block_position)[query_mask]
         return block.forward_selected(hidden, block_position, query_mask)
 
     def _apply_selected_blocks_sparse(
@@ -1743,6 +1749,19 @@ def _route_block_execution_value(value: Any) -> str:
     if execution not in {"full_sequence", "sparse", "sparse_varlen"}:
         raise ValueError("route_block_execution must be 'full_sequence', 'sparse', or 'sparse_varlen'.")
     return execution
+
+
+def _sparse_varlen_backend(hidden: torch.Tensor) -> str:
+    backend = os.environ.get("BRIAN_SPARSE_VARLEN_BACKEND", "auto").strip().lower()
+    if backend in {"flex", "flex_attention"}:
+        return "flex"
+    if backend in {"dense", "dense_selected"}:
+        return "dense"
+    if backend in {"dense_compiled", "compiled_dense"}:
+        return "dense_compiled"
+    if backend != "auto":
+        raise ValueError("BRIAN_SPARSE_VARLEN_BACKEND must be 'auto', 'dense', 'dense_compiled', or 'flex'.")
+    return "dense" if hidden.is_cuda else "flex"
 
 
 def _optional_float_value(

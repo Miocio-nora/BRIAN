@@ -1,0 +1,2 @@
+extends: smoke_sparse_varlen_r125_5b_ddp2_legacyval.yaml
+run_name: smoke_sparse_varlen_auto_r125_5b_ddp2_legacyval

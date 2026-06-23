@@ -20,6 +20,7 @@ class RouteBlock(ModuleBase):
         super().__init__()
         self.block = TransformerBlock(backbone)
         self.position_injection = position_injection
+        self._compiled_dense_forward = None
         if position_injection == "adapter":
             self.position_adapter = nn.Linear(position_dim, backbone.d_model, bias=False)
             nn.init.zeros_(self.position_adapter.weight)
@@ -52,6 +53,20 @@ class RouteBlock(ModuleBase):
     def forward_selected_varlen(self, hidden: torch.Tensor, position: torch.Tensor, query_mask: torch.Tensor) -> torch.Tensor:
         bias = self._position_bias(position)
         return self.block.forward_selected_varlen(hidden + bias, query_mask)
+
+    def forward_selected_dense(
+        self,
+        hidden: torch.Tensor,
+        position: torch.Tensor,
+        query_mask: torch.Tensor,
+        *,
+        compile_cuda: bool = False,
+    ) -> torch.Tensor:
+        if compile_cuda and hidden.is_cuda:
+            if self._compiled_dense_forward is None:
+                self._compiled_dense_forward = torch.compile(self.forward, dynamic=False)
+            return self._compiled_dense_forward(hidden, position)[query_mask]
+        return self.forward(hidden, position)[query_mask]
 
     def _position_bias(self, position: torch.Tensor) -> torch.Tensor:
         if self.position_injection == "direct_add":
