@@ -204,32 +204,29 @@ class CausalSelfAttention(ModuleBase):
         k = apply_rotary(k, cos, sin)
         q = self.rope.apply_to_positions(q, query_positions)
 
-        selected = q.new_empty((q.size(0), self.n_heads, self.head_dim))
-        key_positions = torch.arange(seq_len, device=x.device)
-        for batch_index_tensor in torch.unique(batch_indices, sorted=True):
-            batch_index = int(batch_index_tensor.item())
-            row_mask = batch_indices == batch_index
-            q_b = q[row_mask].transpose(0, 1).unsqueeze(0)
-            positions_b = query_positions[row_mask]
-            allowed = key_positions.unsqueeze(0) <= positions_b.unsqueeze(1)
-            attn_mask = torch.zeros(
-                1,
-                1,
-                int(positions_b.numel()),
-                seq_len,
-                dtype=q.dtype,
-                device=x.device,
-            ).masked_fill(~allowed.unsqueeze(0).unsqueeze(0), torch.finfo(q.dtype).min)
-            y_b = F.scaled_dot_product_attention(
-                q_b,
-                k[batch_index : batch_index + 1],
-                v[batch_index : batch_index + 1],
-                attn_mask=attn_mask,
-                is_causal=False,
-                dropout_p=self.dropout if self.training else 0.0,
-            )
-            selected[row_mask] = y_b.squeeze(0).transpose(0, 1).to(dtype=selected.dtype)
+        counts = query_mask.sum(dim=1)
+        max_selected = int(counts.max().item())
+        offsets = torch.repeat_interleave(torch.cumsum(counts, dim=0) - counts, counts)
+        local_indices = torch.arange(q.size(0), device=x.device) - offsets
 
+        q_padded = q.new_zeros((batch, max_selected, self.n_heads, self.head_dim))
+        query_positions_padded = torch.zeros(batch, max_selected, dtype=torch.long, device=x.device)
+        query_valid = torch.zeros(batch, max_selected, dtype=torch.bool, device=x.device)
+        q_padded[batch_indices, local_indices] = q
+        query_positions_padded[batch_indices, local_indices] = query_positions
+        query_valid[batch_indices, local_indices] = True
+
+        key_positions = torch.arange(seq_len, device=x.device)
+        attn_mask = (key_positions.view(1, 1, seq_len) <= query_positions_padded.unsqueeze(-1)).unsqueeze(1)
+        y = F.scaled_dot_product_attention(
+            q_padded.transpose(1, 2),
+            k,
+            v,
+            attn_mask=attn_mask,
+            is_causal=False,
+            dropout_p=self.dropout if self.training else 0.0,
+        )
+        selected = y.transpose(1, 2)[query_valid].to(dtype=q.dtype)
         return self.out(selected.reshape(-1, dim))
 
     def _attention_global_write_tensors(self, k: torch.Tensor, v: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:

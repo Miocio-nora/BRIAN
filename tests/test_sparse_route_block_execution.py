@@ -52,6 +52,29 @@ def test_sparse_route_block_execution_matches_full_sequence_top1() -> None:
     assert torch.allclose(actual, expected, atol=1e-5, rtol=1e-5)
 
 
+def test_sparse_route_block_execution_handles_empty_batch_rows_for_action() -> None:
+    torch.manual_seed(13)
+    full, sparse = _paired_models()
+    hidden = torch.randn(3, 6, 24)
+    position = _position(full, 3, 6)
+    selected = torch.tensor(
+        [
+            [0, 0, 0, full.out_action, 0, 0],
+            [1, 1, 1, full.out_action, 1, 1],
+            [2, 0, full.out_action, 2, 0, 2],
+        ],
+        dtype=torch.long,
+    )
+    top_actions = selected.unsqueeze(-1)
+    top_weights = torch.ones(*selected.shape, 1)
+    use_weighted_fusion = torch.zeros_like(selected, dtype=torch.bool)
+
+    expected = full._apply_routed_blocks(hidden, position, selected, top_actions, top_weights, use_weighted_fusion)
+    actual = sparse._apply_routed_blocks(hidden, position, selected, top_actions, top_weights, use_weighted_fusion)
+
+    assert torch.allclose(actual, expected, atol=1e-5, rtol=1e-5)
+
+
 def test_sparse_route_block_execution_matches_full_sequence_weighted_fusion() -> None:
     torch.manual_seed(17)
     full, sparse = _paired_models()
