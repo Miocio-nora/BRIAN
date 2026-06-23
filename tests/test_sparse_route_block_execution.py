@@ -304,7 +304,7 @@ def test_latest_attention_global_kv_cache_preserves_invalid_tokens() -> None:
     assert torch.allclose(state.values[0, 0, 0], torch.tensor([[11.0, 11.0], [18.0, 18.0], [13.0, 13.0]]))
 
 
-def _pure_factorized_cfg() -> BrianRouteConfig:
+def _pure_factorized_cfg(*, attention_global_route_execution: str = "selected") -> BrianRouteConfig:
     return BrianRouteConfig(
         base=BaselineConfig(vocab_size=64, context_length=8, layers=5, d_model=64, n_heads=4),
         pre_blocks=1,
@@ -318,6 +318,7 @@ def _pure_factorized_cfg() -> BrianRouteConfig:
         attention_global_sink_slots=0,
         attention_global_window_slots=0,
         attention_global_logit_bias_init=-2.0,
+        attention_global_route_execution=attention_global_route_execution,
     )
 
 
@@ -510,6 +511,54 @@ def test_pure_factorized_attention_global_selected_matches_full_sequence_weighte
         assert torch.allclose(actual_tensor, expected_tensor, atol=1e-5, rtol=1e-5)
 
 
+def test_pure_factorized_attention_global_top1_fast_matches_selected() -> None:
+    torch.manual_seed(49)
+    selected_model = BrianRouteCore(_pure_factorized_cfg()).eval()
+    fast_model = BrianRouteCore(_pure_factorized_cfg(attention_global_route_execution="top1_fast")).eval()
+    fast_model.load_state_dict(selected_model.state_dict())
+    hidden = torch.randn(2, 6, 64)
+    position = _position(selected_model, 2, 6)
+    state = _pure_factorized_state(selected_model, 2, 6)
+    selected = torch.tensor(
+        [
+            [0, 1, 2, selected_model.out_action, 0, 1],
+            [2, 0, selected_model.out_action, 1, 2, 0],
+        ],
+        dtype=torch.long,
+    )
+    top_actions = selected.unsqueeze(-1)
+    top_weights = torch.ones(*selected.shape, 1)
+    use_weighted_fusion = torch.zeros_like(selected, dtype=torch.bool)
+
+    with torch.no_grad():
+        expected = selected_model._apply_routed_blocks_with_attention_global(
+            hidden,
+            position,
+            selected,
+            top_actions,
+            top_weights,
+            use_weighted_fusion,
+            state,
+            _attention_global_route_info(),
+        )
+        actual = fast_model._apply_routed_blocks_with_attention_global(
+            hidden,
+            position,
+            selected,
+            top_actions,
+            top_weights,
+            use_weighted_fusion,
+            state,
+            _attention_global_route_info(),
+        )
+
+    assert torch.allclose(actual[0], expected[0], atol=1e-5, rtol=1e-5)
+    assert torch.equal(actual[3], expected[3])
+    valid = expected[3].unsqueeze(2).unsqueeze(-1).expand_as(expected[1])
+    assert torch.allclose(actual[1][valid], expected[1][valid], atol=1e-5, rtol=1e-5)
+    assert torch.allclose(actual[2][valid], expected[2][valid], atol=1e-5, rtol=1e-5)
+
+
 def test_summarize_routing_false_keeps_loss_fields_without_diagnostics() -> None:
     torch.manual_seed(39)
     cfg = BrianRouteConfig(
@@ -613,6 +662,26 @@ def test_sparse_route_block_execution_config_stats_and_validation() -> None:
 
     assert cfg.attention_global_kv_mode == "pure_factorized"
     assert model.model_stats()["attention_global_kv_mode"] == "pure_factorized"
+    cfg = BrianRouteConfig.from_dict(
+        {
+            "base": {"vocab_size": 64, "context_length": 6, "layers": 4, "d_model": 64, "n_heads": 4},
+            "pre_blocks": 1,
+            "route_pool_blocks": 2,
+            "post_blocks": 1,
+            "block_position_dim": 8,
+            "max_route_steps": 2,
+            "attention_global_kv": True,
+            "attention_global_kv_mode": "pure_factorized",
+            "attention_global_code_dim": 12,
+            "attention_global_sink_slots": 0,
+            "attention_global_window_slots": 0,
+            "attention_global_route_execution": "top1_fast",
+        }
+    )
+    model = BrianRouteCore(cfg)
+
+    assert cfg.attention_global_route_execution == "top1_fast"
+    assert model.model_stats()["attention_global_route_execution"] == "top1_fast"
     with pytest.raises(ValueError, match="route_block_execution"):
         BrianRouteConfig.from_dict(
             {

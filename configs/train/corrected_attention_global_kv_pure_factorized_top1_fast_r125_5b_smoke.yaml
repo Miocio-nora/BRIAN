@@ -1,0 +1,3 @@
+extends: corrected_attention_global_kv_pure_factorized_r125_5b_smoke.yaml
+run_name: smoke_corrected_attention_global_kv_pure_factorized_top1_fast_r125_5b
+model_config: ../model/brian_r125_sphere16_no_location_bias_attention_global_kv_pure_factorized_top1_fast.yaml

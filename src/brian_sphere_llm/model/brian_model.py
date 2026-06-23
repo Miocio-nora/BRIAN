@@ -80,6 +80,7 @@ class BrianRouteConfig:
     attention_global_window_slots: int = 32
     attention_global_tokens_per_write: int = 1
     attention_global_logit_bias_init: float = -4.0
+    attention_global_route_execution: str = "selected"
     parallel_passing: bool = False
     beam_size: int = 2
     branch_cost: float = 0.01
@@ -162,6 +163,7 @@ class BrianRouteConfig:
                 data.get("attention_global_logit_bias_init", -4.0),
                 "attention_global_logit_bias_init",
             ),
+            attention_global_route_execution=str(data.get("attention_global_route_execution", "selected")),
             parallel_passing=_bool_value(data.get("parallel_passing", False), "parallel_passing"),
             beam_size=_int_value(data.get("beam_size", 2), "beam_size", minimum=1),
             branch_cost=_float_value(data.get("branch_cost", 0.01), "branch_cost", minimum=0.0),
@@ -205,6 +207,13 @@ class BrianRouteCore(ModuleBase):
                 raise ValueError(f"Unknown attention_global_kv_mode: {config.attention_global_kv_mode}")
             if config.attention_global_tokens_per_write != 1:
                 raise ValueError("attention_global_tokens_per_write currently supports only 1")
+            if config.attention_global_route_execution not in {"selected", "top1_fast"}:
+                raise ValueError("attention_global_route_execution must be 'selected' or 'top1_fast'.")
+            if (
+                config.attention_global_route_execution != "selected"
+                and config.attention_global_kv_mode != "pure_factorized"
+            ):
+                raise ValueError("attention_global_route_execution fast paths currently require pure_factorized mode.")
             if (
                 config.attention_global_kv_mode != "pure_factorized"
                 and config.attention_global_sink_slots + config.attention_global_window_slots <= 0
@@ -553,6 +562,7 @@ class BrianRouteCore(ModuleBase):
                     use_weighted_fusion,
                     attention_global_state,
                     route_info,
+                    weighted_fusion_possible=weighted_fusion_possible,
                 )
             else:
                 hidden = self._apply_routed_blocks(
@@ -1478,8 +1488,21 @@ class BrianRouteCore(ModuleBase):
         use_weighted_fusion: torch.Tensor,
         attention_global_state: AttentionGlobalKVState,
         route_info: dict[str, Any],
+        *,
+        weighted_fusion_possible: bool = True,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         if selected.dim() == 2 and self.config.attention_global_kv_mode == "pure_factorized":
+            if (
+                self.config.attention_global_route_execution == "top1_fast"
+                and not weighted_fusion_possible
+            ):
+                return self._apply_routed_blocks_with_pure_factorized_attention_global_top1_fast(
+                    hidden,
+                    position,
+                    selected,
+                    attention_global_state,
+                    route_info,
+                )
             return self._apply_routed_blocks_with_pure_factorized_attention_global_selected(
                 hidden,
                 position,
@@ -1635,6 +1658,48 @@ class BrianRouteCore(ModuleBase):
                 write_key[fallback_mask] = selected_key[fallback_mask]
                 write_value[fallback_mask] = selected_value[fallback_mask]
                 write_valid[fallback_mask] = selected_valid[fallback_mask]
+        return next_hidden, write_key, write_value, write_valid
+
+    def _apply_routed_blocks_with_pure_factorized_attention_global_top1_fast(
+        self,
+        hidden: torch.Tensor,
+        position: torch.Tensor,
+        selected: torch.Tensor,
+        attention_global_state: AttentionGlobalKVState,
+        route_info: dict[str, Any],
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        next_hidden = hidden.clone()
+        dim = self._attention_global_cache_dim()
+        shape = (hidden.size(0), self._attention_global_cache_heads(), 1, hidden.size(1), dim)
+        write_key = hidden.new_empty(shape)
+        write_value = hidden.new_empty(shape)
+        write_valid = torch.zeros(hidden.size(0), 1, hidden.size(1), dtype=torch.bool, device=hidden.device)
+        block_position = self._block_position(position)
+        flat_selected = selected.reshape(-1)
+        flat_next = next_hidden.reshape(-1, hidden.size(-1))
+        flat_write_key = write_key[:, 0, 0].reshape(-1, write_key.size(-1))
+        flat_write_value = write_value[:, 0, 0].reshape(-1, write_value.size(-1))
+        flat_write_valid = write_valid[:, 0].reshape(-1)
+
+        for action, block in enumerate(self.route_blocks):
+            flat_mask = flat_selected == action
+            if not torch.any(flat_mask):
+                continue
+            mask = flat_mask.view_as(selected)
+            indices = torch.nonzero(flat_mask, as_tuple=False).flatten()
+            output, key_summary, value_summary, metrics = block.forward_selected_attention_global(
+                hidden,
+                block_position,
+                mask,
+                attention_global_state,
+                return_attention_kv=True,
+            )
+            flat_next.index_copy_(0, indices, output)
+            flat_write_key.index_copy_(0, indices, key_summary.to(flat_write_key.dtype))
+            flat_write_value.index_copy_(0, indices, value_summary.to(flat_write_value.dtype))
+            flat_write_valid.index_fill_(0, indices, True)
+            self._append_attention_global_metrics(route_info, metrics)
+
         return next_hidden, write_key, write_value, write_valid
 
     def _apply_routed_blocks_with_pure_factorized_attention_global_selected(
@@ -2144,6 +2209,7 @@ class BrianRouteCore(ModuleBase):
             "attention_global_kv_scope": self.config.attention_global_kv_scope,
             "attention_global_kv_mode": self.config.attention_global_kv_mode,
             "attention_global_code_dim": str(self.config.attention_global_code_dim),
+            "attention_global_route_execution": self.config.attention_global_route_execution,
             "attention_global_sink_slots": self.config.attention_global_sink_slots,
             "attention_global_window_slots": self.config.attention_global_window_slots,
             "attention_global_tokens_per_write": self.config.attention_global_tokens_per_write,

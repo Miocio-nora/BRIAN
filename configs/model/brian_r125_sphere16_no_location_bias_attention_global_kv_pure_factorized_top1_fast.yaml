@@ -1,0 +1,3 @@
+extends: brian_r125_sphere16_no_location_bias_attention_global_kv_pure_factorized.yaml
+model_name: brian_r125_sphere16_no_location_bias_attention_global_kv_pure_factorized_top1_fast
+attention_global_route_execution: top1_fast
