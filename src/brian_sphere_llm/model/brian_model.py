@@ -388,6 +388,7 @@ class BrianRouteCore(ModuleBase):
                 sequence_length=None if parallel_active else hidden.size(1),
             )
         router_space_records: list[dict[str, Any]] | None = [] if collect_router_space else None
+        record_route_diagnostics = summarize_routing or collect_router_space
         last_internal_action = torch.full(route_shape, -1, dtype=torch.long, device=input_ids.device)
         same_internal_run_length = torch.zeros(route_shape, dtype=torch.long, device=input_ids.device)
         grouped_route_weights = (
@@ -508,20 +509,18 @@ class BrianRouteCore(ModuleBase):
             )
             exit_now = selected == self.out_action
             record_embedding = self._last_token_view(router_embedding) if router_embedding is not None else None
-            record_raw_logits = self._last_token_view(raw_logits)
             record_logits = self._last_token_view(logits)
             record_probs = self._last_token_view(probs)
             record_selected = self._last_token_view(selected)
-            record_top_actions = self._last_token_view(top_actions)
-            record_top_weights = self._last_token_view(top_weights)
-            record_weighted_fusion = self._last_token_view(use_weighted_fusion)
-            record_random_route_mask = self._last_token_view(random_route_mask)
-            record_self_recur_cap_mask = self._last_token_view(self_recur_cap_mask)
-            record_selected_cap_mask = self._last_token_view(selected_cap_mask)
-            record_exited = self._last_token_view(exited)
-            record_exit_now = self._last_token_view(exit_now)
             record_target_action = self._last_token_view(target_action)
             if router_space_records is not None and router_embedding is not None:
+                record_raw_logits = self._last_token_view(raw_logits)
+                record_top_actions = self._last_token_view(top_actions)
+                record_top_weights = self._last_token_view(top_weights)
+                record_random_route_mask = self._last_token_view(random_route_mask)
+                record_self_recur_cap_mask = self._last_token_view(self_recur_cap_mask)
+                record_exited = self._last_token_view(exited)
+                record_exit_now = self._last_token_view(exit_now)
                 router_space_records.append(
                     {
                         "step": int(step),
@@ -591,19 +590,27 @@ class BrianRouteCore(ModuleBase):
             route_info["route_logits"].append(record_logits)
             route_info["route_probs"].append(record_probs)
             route_info["selected_actions"].append(record_selected)
-            route_info["topk_actions"].append(record_top_actions)
-            route_info["topk_weights"].append(record_top_weights)
-            route_info["used_weighted_fusion"].append(record_weighted_fusion)
-            route_info["exit_flags"].append(record_exit_now)
-            route_info["random_route_override_count"].append(record_random_route_mask.to(hidden.dtype).sum())
-            route_info["self_recur_cap_count"].append(
-                (record_self_recur_cap_mask | record_selected_cap_mask).to(hidden.dtype).sum()
-            )
             if has_route_target:
                 route_info["route_targets"].append(record_target_action)
             record_position = self._last_token_view(position)
-            route_info["position_norms"].append(record_position.norm(dim=-1).mean())
             route_info["location_distance"].append(self.position_table.location_distance(record_position, record_probs))
+            if record_route_diagnostics:
+                record_top_actions = self._last_token_view(top_actions)
+                record_top_weights = self._last_token_view(top_weights)
+                record_weighted_fusion = self._last_token_view(use_weighted_fusion)
+                record_random_route_mask = self._last_token_view(random_route_mask)
+                record_self_recur_cap_mask = self._last_token_view(self_recur_cap_mask)
+                record_selected_cap_mask = self._last_token_view(selected_cap_mask)
+                record_exit_now = self._last_token_view(exit_now)
+                route_info["topk_actions"].append(record_top_actions)
+                route_info["topk_weights"].append(record_top_weights)
+                route_info["used_weighted_fusion"].append(record_weighted_fusion)
+                route_info["exit_flags"].append(record_exit_now)
+                route_info["random_route_override_count"].append(record_random_route_mask.to(hidden.dtype).sum())
+                route_info["self_recur_cap_count"].append(
+                    (record_self_recur_cap_mask | record_selected_cap_mask).to(hidden.dtype).sum()
+                )
+                route_info["position_norms"].append(record_position.norm(dim=-1).mean())
             last_internal_action, same_internal_run_length = self._update_self_recur_state(
                 selected,
                 last_internal_action,

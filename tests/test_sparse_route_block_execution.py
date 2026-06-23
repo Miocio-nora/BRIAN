@@ -246,6 +246,40 @@ def test_sparse_varlen_route_block_execution_is_suffix_invariant() -> None:
     assert torch.allclose(logits_a[:, : prefix.size(1)], logits_b[:, : prefix.size(1)], atol=1e-5, rtol=1e-5)
 
 
+def test_summarize_routing_false_keeps_loss_fields_without_diagnostics() -> None:
+    torch.manual_seed(39)
+    cfg = BrianRouteConfig(
+        base=BaselineConfig(vocab_size=64, context_length=8, layers=5, d_model=64, n_heads=4),
+        pre_blocks=1,
+        route_pool_blocks=3,
+        post_blocks=1,
+        block_position_dim=8,
+        max_route_steps=2,
+        route_block_execution="grouped_dense",
+    )
+    model = BrianRouteCore(cfg).train()
+    input_ids = torch.randint(0, 64, (2, 8))
+
+    output = model(
+        input_ids,
+        targets=input_ids,
+        route_mode="scheduled",
+        pseudo_policy="sequential",
+        summarize_routing=False,
+    )
+    output["loss"].backward()
+
+    route_info = output["route_info"]
+    assert "routing_summary" not in output
+    assert len(route_info["route_logits"]) == cfg.max_route_steps
+    assert len(route_info["route_probs"]) == cfg.max_route_steps
+    assert len(route_info["selected_actions"]) == cfg.max_route_steps
+    assert len(route_info["location_distance"]) == cfg.max_route_steps
+    assert route_info["topk_actions"] == []
+    assert route_info["topk_weights"] == []
+    assert route_info["position_norms"] == []
+
+
 def test_sparse_route_block_execution_config_stats_and_validation() -> None:
     cfg = BrianRouteConfig.from_dict(
         {

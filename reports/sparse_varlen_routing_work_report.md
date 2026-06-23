@@ -1,6 +1,6 @@
 # Sparse Varlen Routing B 方案工作报告
 
-更新时间：2026-06-23 22:20 JST
+更新时间：2026-06-23 22:29 JST
 
 ## 目标
 
@@ -601,3 +601,41 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 PYTHONPATH=src /home/dredvpn009/Flash_Storage/anaco
 - 每 rank peak memory 应接近 b8acc2 的单 microbatch footprint，预计显著低于 b16acc1；实测为准。
 
 当前 0/1 GPU 仍被其他实验占用，因此本节只完成配置和测试准备，尚未把四卡吞吐写成结果。
+
+## 2026-06-23 Training Route Info Fast Path
+
+训练配置中 `routing.summary_interval: 0` 会关闭 routing summary，但旧 forward 仍然每个 route step 记录 top-k actions、top-k weights、weighted-fusion flags、exit flags、position norms、random-route/self-recur counts 等诊断字段。这些字段不参与 loss，只服务 eval/report/visualization。
+
+本轮改动：
+
+- 当 `summarize_routing=False` 且不收集 router-space 时，只保留 loss 必需字段：
+  - `route_logits`
+  - `route_probs`
+  - `selected_actions`
+  - `route_targets`
+  - `location_distance`
+- eval、routing summary、route path visualization、router-space collection 仍保留完整诊断字段。
+- 新增测试 `test_summarize_routing_false_keeps_loss_fields_without_diagnostics` 覆盖精简路径可以正常 backward，且诊断字段为空。
+
+测试：
+
+```bash
+/home/dredvpn009/Flash_Storage/anaconda3/envs/brian-sparse-varlen/bin/python -m pytest tests/test_sparse_route_block_execution.py -q
+/home/dredvpn009/Flash_Storage/anaconda3/envs/brian-sparse-varlen/bin/python -m pytest tests/test_config_inventory.py -q
+```
+
+结果：
+
+```text
+17 passed
+21 passed
+```
+
+b16acc1 对照：
+
+| Run | Last-20 tokens/s | Last-50 tokens/s | Final tokens/s | Peak memory/rank |
+| --- | ---: | ---: | ---: | ---: |
+| b16acc1 before | 121,582.75 | 121,900.78 | 122,015 | ~170.0GB |
+| b16acc1 fast route-info | 121,610.80 | 122,041.92 | 121,827 | ~169.7GB |
+
+结论：这是合理的训练路径清理，但吞吐收益很小，不是接近 150k 的关键路径。当前 gate 仍需要 DDP4 实测或 fused kernel。
