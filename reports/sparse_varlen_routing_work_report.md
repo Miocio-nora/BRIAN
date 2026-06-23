@@ -1,6 +1,6 @@
 # Sparse Varlen Routing B 方案工作报告
 
-更新时间：2026-06-23 21:24 JST
+更新时间：2026-06-23 21:36 JST
 
 ## 目标
 
@@ -431,6 +431,8 @@ CUDA_VISIBLE_DEVICES=2,3 PYTHONPATH=src /home/dredvpn009/Flash_Storage/anaconda3
 - `configs/train/smoke_full_sequence_fastlog_nounused_tf32_r125_5b_ddp2_legacyval.yaml`
 - `configs/train/smoke_full_sequence_fastlog_tf32_router1_r125_5b_ddp2_legacyval.yaml`
 - `configs/train/smoke_grouped_dense_fastlog_nounused_weightcache_gather_tf32_router1_r125_5b_ddp2_legacyval.yaml`
+- `configs/train/smoke_grouped_dense_fastlog_nounused_weightcache_gather_tf32_routedcompile_r125_5b_ddp2_legacyval.yaml`
+- `configs/train/smoke_grouped_dense_fastlog_nounused_weightcache_gather_tf32_router1_routedcompile_r125_5b_ddp2_legacyval.yaml`
 
 ### 测试
 
@@ -490,3 +492,24 @@ router1/top-2 结论：
 - grouped gather 在 top-2 weighted fusion 路径上领先更明显：79.4k vs 64.6k，约 +22.9%。
 - `grouped_dense` 的优势来自每 step 一次性计算全部 experts 并向量化 gather/fusion；full-sequence 在自由路由下只能按实际被选 block 逐 action 执行，DDP 还必须开启 unused-parameter 检查。
 - 代价仍是显存：router1 grouped gather 约 50.8GB/rank，full-sequence router1 约 41.1GB/rank。
+
+### Routed-Level Compile
+
+在上一版基础上继续把 `expert forward + gather/fusion` 放进同一个 compiled routed wrapper，而不是只 compile grouped expert forward。这个改动不改变数学语义，主要目的：
+
+- 让 Inductor 看到 grouped expert 输出的消费者，减少 graph 边界。
+- top-1 / `router_probability=0` 路径用 Python bool 跳过 `torch.any(use_weighted_fusion)` 的 per-step 同步。
+- top-2 / router1 路径也把 weighted gather/fusion 纳入 compiled wrapper。
+
+| Run | Last-20 tokens/s | Last-50 tokens/s | Final tokens/s | Final max memory/rank |
+| --- | ---: | ---: | ---: | ---: |
+| grouped gather TF32 top-1 | 93,026.25 | 93,116.70 | 92,353 | ~49.8GB |
+| grouped gather TF32 routedcompile top-1 | 95,803.05 | 96,052.32 | 95,056 | ~46.7GB |
+| grouped gather TF32 router1 | 79,427.50 | 78,969.18 | 79,853 | ~50.8GB |
+| grouped gather TF32 routedcompile router1 | 90,850.30 | 85,987.16 | 81,686 | ~47.4GB |
+
+routedcompile 结论：
+
+- top-1 路径稳定提升：95.8k vs 93.0k，约 +3.0%，同时显存从 ~49.8GB/rank 降到 ~46.7GB/rank。
+- router1/top-2 路径 last20 提升明显：90.9k vs 79.4k，约 +14.4%；但 last50 和 final 波动较大，需要更长 run 判断稳态。
+- 目前最佳 top-1 smoke 距 150k 仍有明显距离；继续优化的主方向仍是减少或融合 `E x B x S x D` expert activation materialization。

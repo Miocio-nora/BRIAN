@@ -192,6 +192,7 @@ class BrianRouteCore(ModuleBase):
         self.config = config
         self.activation_checkpointing = False
         self._compiled_grouped_route_blocks_forward = None
+        self._compiled_grouped_routed_blocks_forward = None
         if config.route_pool_finegrained:
             if config.pre_blocks + config.post_blocks > config.base.layers:
                 raise ValueError("pre + post must be <= base layer count for fine-grained route pools")
@@ -450,6 +451,7 @@ class BrianRouteCore(ModuleBase):
                 target_action = torch.full(route_shape, self.out_action, dtype=torch.long, device=input_ids.device)
 
             use_weighted_fusion = torch.zeros(route_shape, dtype=torch.bool, device=input_ids.device)
+            weighted_fusion_possible = False
             if route_mode in {"fixed", "pseudo"}:
                 selected = target_action
             elif route_mode == "scheduled":
@@ -461,6 +463,9 @@ class BrianRouteCore(ModuleBase):
                     routing_options,
                 )
                 use_weighted_fusion = use_router & (effective_top_k > 1)
+                weighted_fusion_possible = bool(
+                    effective_top_k > 1 and (router_probability is None or router_probability > 0.0)
+                )
             elif route_mode == "free":
                 selected = self._router_action(logits, routing_options)
                 use_weighted_fusion = torch.full(
@@ -469,6 +474,7 @@ class BrianRouteCore(ModuleBase):
                     dtype=torch.bool,
                     device=input_ids.device,
                 )
+                weighted_fusion_possible = effective_top_k > 1
             else:
                 raise ValueError(f"Unknown route_mode: {route_mode}")
 
@@ -552,6 +558,7 @@ class BrianRouteCore(ModuleBase):
                     top_weights,
                     use_weighted_fusion,
                     grouped_route_weights=grouped_route_weights,
+                    weighted_fusion_possible=weighted_fusion_possible,
                 )
                 write_key = write_value = write_valid = None
             if hard_exit:
@@ -1089,6 +1096,7 @@ class BrianRouteCore(ModuleBase):
         use_weighted_fusion: torch.Tensor,
         *,
         grouped_route_weights: tuple[Any, ...] | None = None,
+        weighted_fusion_possible: bool = True,
     ) -> torch.Tensor:
         if selected.dim() == 2:
             if self._grouped_dense_route_block_execution_enabled():
@@ -1100,6 +1108,7 @@ class BrianRouteCore(ModuleBase):
                     top_weights,
                     use_weighted_fusion,
                     grouped_route_weights=grouped_route_weights,
+                    weighted_fusion_possible=weighted_fusion_possible,
                 )
             if self._sparse_route_block_execution_enabled():
                 return self._apply_routed_blocks_sparse(
@@ -1178,12 +1187,73 @@ class BrianRouteCore(ModuleBase):
         use_weighted_fusion: torch.Tensor,
         *,
         grouped_route_weights: tuple[Any, ...] | None = None,
+        weighted_fusion_possible: bool = True,
     ) -> torch.Tensor:
         block_position = self._block_position(position)
-        action_outputs = self._grouped_route_blocks_forward(hidden, block_position, grouped_route_weights)
+        return self._grouped_routed_blocks_forward(
+            hidden,
+            block_position,
+            selected,
+            top_actions,
+            top_weights,
+            use_weighted_fusion,
+            grouped_route_weights,
+            weighted_fusion_possible,
+        )
+
+    def _grouped_routed_blocks_forward(
+        self,
+        hidden: torch.Tensor,
+        block_position: torch.Tensor,
+        selected: torch.Tensor,
+        top_actions: torch.Tensor,
+        top_weights: torch.Tensor,
+        use_weighted_fusion: torch.Tensor,
+        grouped_route_weights: tuple[Any, ...] | None,
+        weighted_fusion_possible: bool,
+    ) -> torch.Tensor:
+        if hidden.is_cuda:
+            if self._compiled_grouped_routed_blocks_forward is None:
+                self._compiled_grouped_routed_blocks_forward = torch.compile(
+                    self._grouped_routed_blocks_forward_eager,
+                    dynamic=False,
+                )
+            return self._compiled_grouped_routed_blocks_forward(
+                hidden,
+                block_position,
+                selected,
+                top_actions,
+                top_weights,
+                use_weighted_fusion,
+                grouped_route_weights,
+                weighted_fusion_possible,
+            )
+        return self._grouped_routed_blocks_forward_eager(
+            hidden,
+            block_position,
+            selected,
+            top_actions,
+            top_weights,
+            use_weighted_fusion,
+            grouped_route_weights,
+            weighted_fusion_possible,
+        )
+
+    def _grouped_routed_blocks_forward_eager(
+        self,
+        hidden: torch.Tensor,
+        block_position: torch.Tensor,
+        selected: torch.Tensor,
+        top_actions: torch.Tensor,
+        top_weights: torch.Tensor,
+        use_weighted_fusion: torch.Tensor,
+        grouped_route_weights: tuple[Any, ...] | None,
+        weighted_fusion_possible: bool,
+    ) -> torch.Tensor:
+        action_outputs = self._grouped_route_blocks_forward_eager(hidden, block_position, grouped_route_weights)
         selected_output = self._gather_grouped_action_outputs(action_outputs, selected)
         base = torch.where((selected != self.out_action).unsqueeze(-1), selected_output, hidden)
-        if not torch.any(use_weighted_fusion):
+        if not weighted_fusion_possible:
             return base
 
         top_outputs = self._gather_grouped_topk_outputs(action_outputs, top_actions)
