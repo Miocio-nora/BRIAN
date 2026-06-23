@@ -15,10 +15,18 @@ except ModuleNotFoundError:  # pragma: no cover - imported in environments witho
 
 if torch is not None:  # pragma: no cover - import path is exercised through model tests
     from torch.utils.checkpoint import checkpoint as torch_checkpoint
+    try:
+        from torch.nn.attention.flex_attention import create_block_mask, flex_attention
+    except ImportError:  # pragma: no cover - depends on PyTorch build
+        create_block_mask = None
+        flex_attention = None
 else:  # pragma: no cover
     torch_checkpoint = None
+    create_block_mask = None
+    flex_attention = None
 
 ModuleBase = nn.Module if nn is not None else object
+_compiled_flex_attention = None
 
 
 def require_torch() -> None:
@@ -32,6 +40,35 @@ def checkpoint_if_enabled(owner: nn.Module, module: nn.Module, *args: torch.Tens
             raise ModuleNotFoundError("PyTorch checkpointing is unavailable.")
         return torch_checkpoint(module, *args, use_reentrant=False)
     return module(*args)
+
+
+def flex_attention_if_available(
+    query: torch.Tensor,
+    key: torch.Tensor,
+    value: torch.Tensor,
+    *,
+    block_mask: Any,
+) -> torch.Tensor:
+    if flex_attention is None:
+        raise ModuleNotFoundError("PyTorch FlexAttention is required for sparse_varlen route block execution.")
+    if query.is_cuda:
+        global _compiled_flex_attention
+        if _compiled_flex_attention is None:
+            _compiled_flex_attention = torch.compile(flex_attention, dynamic=True)
+        return _compiled_flex_attention(
+            query,
+            key,
+            value,
+            block_mask=block_mask,
+            kernel_options={"ROWS_GUARANTEED_SAFE": True},
+        )
+    return flex_attention(
+        query,
+        key,
+        value,
+        block_mask=block_mask,
+        kernel_options={"ROWS_GUARANTEED_SAFE": True},
+    )
 
 
 @dataclass(frozen=True)
@@ -227,6 +264,61 @@ class CausalSelfAttention(ModuleBase):
             dropout_p=self.dropout if self.training else 0.0,
         )
         selected = y.transpose(1, 2)[query_valid].to(dtype=q.dtype)
+        return self.out(selected.reshape(-1, dim))
+
+    def forward_selected_varlen(self, x: torch.Tensor, query_mask: torch.Tensor) -> torch.Tensor:
+        batch, seq_len, dim = x.shape
+        if query_mask.shape != (batch, seq_len):
+            raise ValueError("query_mask must have shape [batch, seq_len].")
+        if self.training and self.dropout != 0.0:
+            raise ValueError("sparse_varlen route block execution currently requires attention dropout == 0.")
+        if create_block_mask is None:
+            raise ModuleNotFoundError("PyTorch FlexAttention block masks are required for sparse_varlen.")
+        batch_indices, query_positions = torch.where(query_mask)
+        if batch_indices.numel() == 0:
+            return x.new_empty((0, dim))
+
+        q_weight = self.qkv.weight[:dim, :]
+        kv_weight = self.qkv.weight[dim:, :]
+        q = F.linear(x[query_mask], q_weight)
+        kv = F.linear(x, kv_weight)
+        k, v = kv.chunk(2, dim=-1)
+
+        q = q.view(-1, self.n_heads, self.head_dim)
+        k = k.view(batch, seq_len, self.n_heads, self.head_dim).transpose(1, 2)
+        v = v.view(batch, seq_len, self.n_heads, self.head_dim).transpose(1, 2)
+
+        cos = self.rope.cos[:, :, :seq_len, :].to(device=k.device)
+        sin = self.rope.sin[:, :, :seq_len, :].to(device=k.device)
+        k = apply_rotary(k, cos, sin)
+        q = self.rope.apply_to_positions(q, query_positions)
+
+        query = q.transpose(0, 1).unsqueeze(0).contiguous()
+        key = k.permute(1, 0, 2, 3).reshape(1, self.n_heads, batch * seq_len, self.head_dim).contiguous()
+        value = v.permute(1, 0, 2, 3).reshape(1, self.n_heads, batch * seq_len, self.head_dim).contiguous()
+
+        key_indices = torch.arange(batch * seq_len, device=x.device)
+        key_batches = torch.div(key_indices, seq_len, rounding_mode="floor")
+        key_positions = key_indices % seq_len
+        query_batches = batch_indices
+        selected_query_positions = query_positions
+
+        def mask_mod(b: torch.Tensor, h: torch.Tensor, q_idx: torch.Tensor, kv_idx: torch.Tensor) -> torch.Tensor:
+            return (query_batches[q_idx] == key_batches[kv_idx]) & (
+                key_positions[kv_idx] <= selected_query_positions[q_idx]
+            )
+
+        block_mask = create_block_mask(
+            mask_mod,
+            B=1,
+            H=None,
+            Q_LEN=query.size(2),
+            KV_LEN=batch * seq_len,
+            device=x.device,
+            BLOCK_SIZE=(128, 128),
+        )
+        y = flex_attention_if_available(query, key, value, block_mask=block_mask)
+        selected = y.squeeze(0).transpose(0, 1).to(dtype=q.dtype)
         return self.out(selected.reshape(-1, dim))
 
     def _attention_global_write_tensors(self, k: torch.Tensor, v: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
@@ -445,6 +537,11 @@ class TransformerBlock(ModuleBase):
     def forward_selected(self, x: torch.Tensor, query_mask: torch.Tensor) -> torch.Tensor:
         attn_input = self.attn_norm(x)
         selected = x[query_mask] + self.attn.forward_selected(attn_input, query_mask)
+        return selected + self.ffn(self.ffn_norm(selected))
+
+    def forward_selected_varlen(self, x: torch.Tensor, query_mask: torch.Tensor) -> torch.Tensor:
+        attn_input = self.attn_norm(x)
+        selected = x[query_mask] + self.attn.forward_selected_varlen(attn_input, query_mask)
         return selected + self.ffn(self.ffn_norm(selected))
 
 

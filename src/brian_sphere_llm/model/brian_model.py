@@ -205,8 +205,8 @@ class BrianRouteCore(ModuleBase):
                 raise ValueError("Attention Global KV requires at least one retained slot")
             if config.parallel_passing:
                 raise ValueError("Attention Global KV is route-only and does not support parallel_passing yet")
-        if config.route_block_execution not in {"full_sequence", "sparse"}:
-            raise ValueError("route_block_execution must be 'full_sequence' or 'sparse'.")
+        if config.route_block_execution not in {"full_sequence", "sparse", "sparse_varlen"}:
+            raise ValueError("route_block_execution must be 'full_sequence', 'sparse', or 'sparse_varlen'.")
         backbone = config.base.backbone()
         route_backbone = backbone
         if config.route_block_ffn_multiplier is not None:
@@ -980,11 +980,22 @@ class BrianRouteCore(ModuleBase):
 
     def _sparse_route_block_execution_enabled(self) -> bool:
         return (
-            self.config.route_block_execution == "sparse"
+            self.config.route_block_execution in {"sparse", "sparse_varlen"}
             and not self.config.global_kv
             and not self.config.attention_global_kv
             and not self.config.parallel_passing
         )
+
+    def _forward_sparse_route_block(
+        self,
+        block: RouteBlock,
+        hidden: torch.Tensor,
+        block_position: torch.Tensor,
+        query_mask: torch.Tensor,
+    ) -> torch.Tensor:
+        if self.config.route_block_execution == "sparse_varlen":
+            return block.forward_selected_varlen(hidden, block_position, query_mask)
+        return block.forward_selected(hidden, block_position, query_mask)
 
     def _apply_selected_blocks_sparse(
         self,
@@ -997,7 +1008,7 @@ class BrianRouteCore(ModuleBase):
         for action, block in enumerate(self.route_blocks):
             mask = selected == action
             if torch.any(mask):
-                next_hidden[mask] = block.forward_selected(hidden, block_position, mask)
+                next_hidden[mask] = self._forward_sparse_route_block(block, hidden, block_position, mask)
         return next_hidden
 
     def _top_k_for_step(self, step: int) -> int:
@@ -1111,7 +1122,7 @@ class BrianRouteCore(ModuleBase):
         for action, block in enumerate(self.route_blocks):
             top1_mask = (selected == action) & ~use_weighted_fusion
             if torch.any(top1_mask):
-                next_hidden[top1_mask] = block.forward_selected(hidden, block_position, top1_mask)
+                next_hidden[top1_mask] = self._forward_sparse_route_block(block, hidden, block_position, top1_mask)
 
         if torch.any(use_weighted_fusion):
             accum = torch.zeros_like(hidden)
@@ -1122,7 +1133,7 @@ class BrianRouteCore(ModuleBase):
                     action_mask = action_mask | (use_weighted_fusion & (top_actions[..., rank] == action))
                 if not torch.any(action_mask):
                     continue
-                action_output = block.forward_selected(hidden, block_position, action_mask)
+                action_output = self._forward_sparse_route_block(block, hidden, block_position, action_mask)
                 flat_action_mask = action_mask.reshape(-1)
                 local_index = torch.empty_like(selected.reshape(-1), dtype=torch.long)
                 local_index[flat_action_mask] = torch.arange(action_output.size(0), device=hidden.device)
@@ -1729,8 +1740,8 @@ def _bool_value(value: Any, name: str) -> bool:
 
 def _route_block_execution_value(value: Any) -> str:
     execution = str(value)
-    if execution not in {"full_sequence", "sparse"}:
-        raise ValueError("route_block_execution must be 'full_sequence' or 'sparse'.")
+    if execution not in {"full_sequence", "sparse", "sparse_varlen"}:
+        raise ValueError("route_block_execution must be 'full_sequence', 'sparse', or 'sparse_varlen'.")
     return execution
 
 

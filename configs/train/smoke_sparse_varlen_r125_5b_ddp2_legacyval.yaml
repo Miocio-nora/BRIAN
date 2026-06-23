@@ -1,0 +1,18 @@
+extends: corrected_package_a_r125_5b_sparse_a0_selected_random_explore_no_location_bias_covfloor_stronglen_ddp2_legacyval.yaml
+run_name: smoke_sparse_varlen_r125_5b_ddp2_legacyval
+model_config: ../model/brian_r125_sphere16_no_location_bias_sparse_varlen.yaml
+output_root: tmp/runs_sparse_varlen_smoke
+max_steps: 100
+eval_interval: 50
+save_interval: 100
+checkpoint_retention:
+  enabled: true
+  keep_last: 1
+  include_optimizer: false
+  include_rng_state: false
+checkpoint_benchmarks:
+  enabled: false
+post_train_benchmarks:
+  enabled: false
+wandb:
+  enabled: false
