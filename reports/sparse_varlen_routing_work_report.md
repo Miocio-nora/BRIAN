@@ -1,6 +1,6 @@
 # Sparse Varlen Routing B 方案工作报告
 
-更新时间：2026-06-23 23:45 JST
+更新时间：2026-06-23 22:20 JST
 
 ## 目标
 
@@ -573,3 +573,31 @@ router1 / top-2 weighted fusion path：
 
 - `hybrid grouped_mm` 只在 standalone QKV microbench 有小幅收益，完整 top-1 smoke 为 95.68k last20，低于当前 einsum/routedcompile 95.80k；未进入主线实现。
 - `ddp_static_graph + gradient_as_bucket_view` 在 b16acc1 上无实质收益：121.54k last20 vs 121.58k；训练器保留可选 DDP 开关，但不推荐作为当前性能路径。
+
+## 2026-06-23 DDP4 Validation Prep
+
+为了验证 150k gate，不再继续在 2 卡上挤 batch。下一步更合理的是用 0-3 四卡保持 global batch 不变：
+
+- 2 卡 b16acc1：`world_size=2, batch_size=16, grad_accum=1`，effective batch = 32。
+- 4 卡 b8acc1：`world_size=4, batch_size=8, grad_accum=1`，effective batch = 32。
+
+新增待跑配置：
+
+- `configs/train/smoke_grouped_dense_fastlog_nounused_weightcache_gather_tf32_routedcompile_b8acc1_r125_5b_ddp4_legacyval.yaml`
+- `configs/train/smoke_grouped_dense_fastlog_nounused_weightcache_gather_tf32_router1_routedcompile_b8acc1_r125_5b_ddp4_legacyval.yaml`
+
+验证命令：
+
+```bash
+CUDA_VISIBLE_DEVICES=0,1,2,3 PYTHONPATH=src /home/dredvpn009/Flash_Storage/anaconda3/envs/brian-sparse-varlen/bin/python -m torch.distributed.run --nproc_per_node=4 scripts/train.py --config configs/train/smoke_grouped_dense_fastlog_nounused_weightcache_gather_tf32_routedcompile_b8acc1_r125_5b_ddp4_legacyval.yaml
+
+CUDA_VISIBLE_DEVICES=0,1,2,3 PYTHONPATH=src /home/dredvpn009/Flash_Storage/anaconda3/envs/brian-sparse-varlen/bin/python -m torch.distributed.run --nproc_per_node=4 scripts/train.py --config configs/train/smoke_grouped_dense_fastlog_nounused_weightcache_gather_tf32_router1_routedcompile_b8acc1_r125_5b_ddp4_legacyval.yaml
+```
+
+验收标准：
+
+- top-1 DDP4 last20 tokens/s > 150k。
+- router1/top-2 DDP4 last20 tokens/s > 150k。
+- 每 rank peak memory 应接近 b8acc2 的单 microbatch footprint，预计显著低于 b16acc1；实测为准。
+
+当前 0/1 GPU 仍被其他实验占用，因此本节只完成配置和测试准备，尚未把四卡吞吐写成结果。
