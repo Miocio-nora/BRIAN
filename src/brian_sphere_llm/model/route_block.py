@@ -45,6 +45,10 @@ class RouteBlock(ModuleBase):
             return_attention_kv=return_attention_kv,
         )
 
+    def forward_selected(self, hidden: torch.Tensor, position: torch.Tensor, query_mask: torch.Tensor) -> torch.Tensor:
+        bias = self._position_bias(position)
+        return self.block.forward_selected(hidden + bias, query_mask)
+
     def _position_bias(self, position: torch.Tensor) -> torch.Tensor:
         if self.position_injection == "direct_add":
             return position.unsqueeze(1) if position.dim() == 2 else position

@@ -89,6 +89,7 @@ class BrianRouteConfig:
     position_to_router: bool = True
     position_to_blocks: bool = True
     location_bias_weight: float = 0.0
+    route_block_execution: str = "full_sequence"
 
     @classmethod
     def from_dict(cls, data: dict[str, Any], *, config_dir: str | Path | None = None) -> "BrianRouteConfig":
@@ -178,6 +179,7 @@ class BrianRouteConfig:
             position_to_router=_bool_value(data.get("position_to_router", True), "position_to_router"),
             position_to_blocks=_bool_value(data.get("position_to_blocks", True), "position_to_blocks"),
             location_bias_weight=_float_value(data.get("location_bias_weight", 0.0), "location_bias_weight", minimum=0.0),
+            route_block_execution=_route_block_execution_value(data.get("route_block_execution", "full_sequence")),
         )
 
 
@@ -203,6 +205,8 @@ class BrianRouteCore(ModuleBase):
                 raise ValueError("Attention Global KV requires at least one retained slot")
             if config.parallel_passing:
                 raise ValueError("Attention Global KV is route-only and does not support parallel_passing yet")
+        if config.route_block_execution not in {"full_sequence", "sparse"}:
+            raise ValueError("route_block_execution must be 'full_sequence' or 'sparse'.")
         backbone = config.base.backbone()
         route_backbone = backbone
         if config.route_block_ffn_multiplier is not None:
@@ -955,6 +959,8 @@ class BrianRouteCore(ModuleBase):
         return torch.where(random_mask, random_actions, selected), random_mask
 
     def _apply_selected_blocks(self, hidden: torch.Tensor, position: torch.Tensor, selected: torch.Tensor) -> torch.Tensor:
+        if selected.dim() == 2 and self._sparse_route_block_execution_enabled():
+            return self._apply_selected_blocks_sparse(hidden, position, selected)
         if selected.dim() == 2:
             next_hidden = hidden.clone()
             block_position = self._block_position(position)
@@ -970,6 +976,28 @@ class BrianRouteCore(ModuleBase):
             mask = selected == action
             if torch.any(mask):
                 next_hidden[mask] = checkpoint_if_enabled(self, block, hidden[mask], block_position[mask])
+        return next_hidden
+
+    def _sparse_route_block_execution_enabled(self) -> bool:
+        return (
+            self.config.route_block_execution == "sparse"
+            and not self.config.global_kv
+            and not self.config.attention_global_kv
+            and not self.config.parallel_passing
+        )
+
+    def _apply_selected_blocks_sparse(
+        self,
+        hidden: torch.Tensor,
+        position: torch.Tensor,
+        selected: torch.Tensor,
+    ) -> torch.Tensor:
+        next_hidden = hidden.clone()
+        block_position = self._block_position(position)
+        for action, block in enumerate(self.route_blocks):
+            mask = selected == action
+            if torch.any(mask):
+                next_hidden[mask] = block.forward_selected(hidden, block_position, mask)
         return next_hidden
 
     def _top_k_for_step(self, step: int) -> int:
@@ -1002,6 +1030,15 @@ class BrianRouteCore(ModuleBase):
         use_weighted_fusion: torch.Tensor,
     ) -> torch.Tensor:
         if selected.dim() == 2:
+            if self._sparse_route_block_execution_enabled():
+                return self._apply_routed_blocks_sparse(
+                    hidden,
+                    position,
+                    selected,
+                    top_actions,
+                    top_weights,
+                    use_weighted_fusion,
+                )
             next_hidden = hidden.clone()
             block_position = self._block_position(position)
             for action, block in enumerate(self.route_blocks):
@@ -1058,6 +1095,57 @@ class BrianRouteCore(ModuleBase):
             fallback_mask = use_weighted_fusion & (weight_sum <= 0)
             if torch.any(fallback_mask):
                 next_hidden[fallback_mask] = self._apply_selected_blocks(hidden, position, selected)[fallback_mask]
+        return next_hidden
+
+    def _apply_routed_blocks_sparse(
+        self,
+        hidden: torch.Tensor,
+        position: torch.Tensor,
+        selected: torch.Tensor,
+        top_actions: torch.Tensor,
+        top_weights: torch.Tensor,
+        use_weighted_fusion: torch.Tensor,
+    ) -> torch.Tensor:
+        next_hidden = hidden.clone()
+        block_position = self._block_position(position)
+        for action, block in enumerate(self.route_blocks):
+            top1_mask = (selected == action) & ~use_weighted_fusion
+            if torch.any(top1_mask):
+                next_hidden[top1_mask] = block.forward_selected(hidden, block_position, top1_mask)
+
+        if torch.any(use_weighted_fusion):
+            accum = torch.zeros_like(hidden)
+            weight_sum = torch.zeros_like(selected, dtype=hidden.dtype)
+            for action, block in enumerate(self.route_blocks):
+                action_mask = torch.zeros_like(selected, dtype=torch.bool)
+                for rank in range(top_actions.size(-1)):
+                    action_mask = action_mask | (use_weighted_fusion & (top_actions[..., rank] == action))
+                if not torch.any(action_mask):
+                    continue
+                action_output = block.forward_selected(hidden, block_position, action_mask)
+                flat_action_mask = action_mask.reshape(-1)
+                local_index = torch.empty_like(selected.reshape(-1), dtype=torch.long)
+                local_index[flat_action_mask] = torch.arange(action_output.size(0), device=hidden.device)
+                flat_accum = accum.reshape(-1, hidden.size(-1))
+                flat_weight_sum = weight_sum.reshape(-1)
+                for rank in range(top_actions.size(-1)):
+                    mask = use_weighted_fusion & (top_actions[..., rank] == action)
+                    if not torch.any(mask):
+                        continue
+                    flat_mask = mask.reshape(-1)
+                    weight = top_weights[..., rank].to(hidden.dtype).reshape(-1)[flat_mask]
+                    flat_accum[flat_mask] = (
+                        flat_accum[flat_mask] + action_output[local_index[flat_mask]] * weight.unsqueeze(-1)
+                    )
+                    flat_weight_sum[flat_mask] = flat_weight_sum[flat_mask] + weight
+            weighted_mask = use_weighted_fusion & (weight_sum > 0)
+            if torch.any(weighted_mask):
+                weighted_hidden = accum / weight_sum.clamp_min(1e-9).unsqueeze(-1)
+                next_hidden = torch.where(weighted_mask.unsqueeze(-1), weighted_hidden, next_hidden)
+            fallback_mask = use_weighted_fusion & (weight_sum <= 0)
+            if torch.any(fallback_mask):
+                fallback_hidden = self._apply_selected_blocks_sparse(hidden, position, selected)
+                next_hidden = torch.where(fallback_mask.unsqueeze(-1), fallback_hidden, next_hidden)
         return next_hidden
 
     def _apply_routed_blocks_with_attention_global(
@@ -1604,6 +1692,7 @@ class BrianRouteCore(ModuleBase):
             "position_to_router": str(self.config.position_to_router),
             "position_to_blocks": str(self.config.position_to_blocks),
             "location_bias_weight": str(self.config.location_bias_weight),
+            "route_block_execution": self.config.route_block_execution,
             "global_kv": str(self.config.global_kv),
             "global_code_dim": self.config.global_code_dim,
             "global_sink_slots": self.config.global_sink_slots,
@@ -1636,6 +1725,13 @@ def _bool_value(value: Any, name: str) -> bool:
         if lowered in {"0", "false", "no", "off", "disabled"}:
             return False
     raise ValueError(f"{name} must be a boolean.")
+
+
+def _route_block_execution_value(value: Any) -> str:
+    execution = str(value)
+    if execution not in {"full_sequence", "sparse"}:
+        raise ValueError("route_block_execution must be 'full_sequence' or 'sparse'.")
+    return execution
 
 
 def _optional_float_value(

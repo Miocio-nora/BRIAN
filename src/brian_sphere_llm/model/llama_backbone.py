@@ -78,6 +78,11 @@ class RotaryEmbedding(ModuleBase):
         sin = self.sin[:, :, :seq_len, :]
         return apply_rotary(q, cos, sin), apply_rotary(k, cos, sin)
 
+    def apply_to_positions(self, x: torch.Tensor, positions: torch.Tensor) -> torch.Tensor:
+        cos = self.cos[0, 0, positions, :].to(device=x.device)
+        sin = self.sin[0, 0, positions, :].to(device=x.device)
+        return apply_rotary(x, cos.unsqueeze(1), sin.unsqueeze(1))
+
 
 def rotate_half(x: torch.Tensor) -> torch.Tensor:
     x1 = x[..., : x.shape[-1] // 2]
@@ -175,6 +180,57 @@ class CausalSelfAttention(ModuleBase):
         if return_attention_kv:
             return output, write_key, write_value, metrics
         return output
+
+    def forward_selected(self, x: torch.Tensor, query_mask: torch.Tensor) -> torch.Tensor:
+        batch, seq_len, dim = x.shape
+        if query_mask.shape != (batch, seq_len):
+            raise ValueError("query_mask must have shape [batch, seq_len].")
+        batch_indices, query_positions = torch.where(query_mask)
+        if batch_indices.numel() == 0:
+            return x.new_empty((0, dim))
+
+        q_weight = self.qkv.weight[:dim, :]
+        kv_weight = self.qkv.weight[dim:, :]
+        q = F.linear(x[query_mask], q_weight)
+        kv = F.linear(x, kv_weight)
+        k, v = kv.chunk(2, dim=-1)
+
+        q = q.view(-1, self.n_heads, self.head_dim)
+        k = k.view(batch, seq_len, self.n_heads, self.head_dim).transpose(1, 2)
+        v = v.view(batch, seq_len, self.n_heads, self.head_dim).transpose(1, 2)
+
+        cos = self.rope.cos[:, :, :seq_len, :].to(device=k.device)
+        sin = self.rope.sin[:, :, :seq_len, :].to(device=k.device)
+        k = apply_rotary(k, cos, sin)
+        q = self.rope.apply_to_positions(q, query_positions)
+
+        selected = q.new_empty((q.size(0), self.n_heads, self.head_dim))
+        key_positions = torch.arange(seq_len, device=x.device)
+        for batch_index_tensor in torch.unique(batch_indices, sorted=True):
+            batch_index = int(batch_index_tensor.item())
+            row_mask = batch_indices == batch_index
+            q_b = q[row_mask].transpose(0, 1).unsqueeze(0)
+            positions_b = query_positions[row_mask]
+            allowed = key_positions.unsqueeze(0) <= positions_b.unsqueeze(1)
+            attn_mask = torch.zeros(
+                1,
+                1,
+                int(positions_b.numel()),
+                seq_len,
+                dtype=q.dtype,
+                device=x.device,
+            ).masked_fill(~allowed.unsqueeze(0).unsqueeze(0), torch.finfo(q.dtype).min)
+            y_b = F.scaled_dot_product_attention(
+                q_b,
+                k[batch_index : batch_index + 1],
+                v[batch_index : batch_index + 1],
+                attn_mask=attn_mask,
+                is_causal=False,
+                dropout_p=self.dropout if self.training else 0.0,
+            )
+            selected[row_mask] = y_b.squeeze(0).transpose(0, 1)
+
+        return self.out(selected.reshape(-1, dim))
 
     def _attention_global_write_tensors(self, k: torch.Tensor, v: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         if self.attention_global_kv_mode == "token_compressed":
@@ -388,6 +444,11 @@ class TransformerBlock(ModuleBase):
         x = x + self.attn(attn_input, attention_global_state)
         x = x + self.ffn(self.ffn_norm(x))
         return x
+
+    def forward_selected(self, x: torch.Tensor, query_mask: torch.Tensor) -> torch.Tensor:
+        attn_input = self.attn_norm(x)
+        selected = x[query_mask] + self.attn.forward_selected(attn_input, query_mask)
+        return selected + self.ffn(self.ffn_norm(selected))
 
 
 def build_causal_lm_loss(logits: torch.Tensor, targets: torch.Tensor, ignore_index: int = -100) -> torch.Tensor:

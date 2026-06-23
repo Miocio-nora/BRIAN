@@ -1,0 +1,44 @@
+extends: corrected_package_a_r125_5b_a0_selected_random_explore_no_location_bias_covfloor_stronglen.yaml
+run_name: corrected_package_a_r125_5b_sparse_A0_selected_random_explore_no_location_bias_covfloor_stronglen_ddp2_legacyval
+model_config: ../model/brian_r125_sphere16_no_location_bias_sparse.yaml
+data_config: ../data/r125_main_5b_balanced.yaml
+batch_size: 4
+gradient_accumulation_steps: 4
+eval_split: val_legacy
+checkpoint_retention:
+  enabled: true
+  interval: 5000
+  keep_last: 20
+  include_optimizer: false
+  include_rng_state: false
+checkpoint_benchmarks:
+  enabled: true
+  interval: 15000
+  output_dir: reports/package_a_benchmarks
+  label: s_sparse_a0_random_explore_no_location_bias_covfloor_stronglen_ddp2_legacyval
+  fail_on_error: false
+  reasoning:
+    enabled: true
+    config: configs/eval/reasoning_eval_s600.yaml
+  public:
+    enabled: true
+    config: configs/eval/public_benchmark_s600.yaml
+post_train_benchmarks:
+  label: s_sparse_a0_random_explore_no_location_bias_covfloor_stronglen_ddp2_legacyval
+wandb:
+  group: corrected_package_a_r125_5b_sparse_ddp2_legacyval
+  tags:
+  - corrected_package_a
+  - r125
+  - 5b
+  - sparse_route_block_execution
+  - balanced_data
+  - legacy_val
+  - ddp2_global_batch32
+  - A0
+  - selected_balance_002
+  - coverage_floor
+  - strong_length
+  - no_location_bias
+  - random_explore
+  - no_route_imitation
