@@ -73,18 +73,18 @@ class BlockPositionTable(ModuleBase):
 
     def by_action(self, action: torch.Tensor) -> torch.Tensor:
         if self.mode == "none":
-            return torch.zeros(action.size(0), self.position_dim, dtype=self.embeddings.dtype, device=action.device)
+            return torch.zeros(*action.shape, self.position_dim, dtype=self.embeddings.dtype, device=action.device)
         return F.normalize(self.embeddings[action], dim=-1)
 
     def weighted(self, probs: torch.Tensor) -> torch.Tensor:
         if self.mode == "none":
-            return torch.zeros(probs.size(0), self.position_dim, dtype=probs.dtype, device=probs.device)
+            return torch.zeros(*probs.shape[:-1], self.position_dim, dtype=probs.dtype, device=probs.device)
         return F.normalize(probs @ self.embeddings, dim=-1)
 
     def location_distance(self, position: torch.Tensor, probs: torch.Tensor) -> torch.Tensor:
         if self.mode == "none":
             return torch.zeros((), dtype=position.dtype, device=position.device)
-        distances = torch.cdist(position.unsqueeze(1), self.embeddings.unsqueeze(0)).squeeze(1).pow(2)
+        distances = (position.unsqueeze(-2) - self.embeddings.to(device=position.device, dtype=position.dtype)).pow(2).sum(dim=-1)
         return (probs * distances).sum(dim=-1).mean()
 
     def input_anchor_loss(self) -> torch.Tensor:
@@ -98,9 +98,9 @@ class BlockPositionTable(ModuleBase):
     def action_distances(self, position: torch.Tensor) -> torch.Tensor:
         if self.mode == "none":
             return torch.zeros(
-                position.size(0),
+                *position.shape[:-1],
                 self.num_actions,
                 dtype=position.dtype,
                 device=position.device,
             )
-        return torch.cdist(position.unsqueeze(1), self.embeddings.unsqueeze(0)).squeeze(1).pow(2)
+        return (position.unsqueeze(-2) - self.embeddings.to(device=position.device, dtype=position.dtype)).pow(2).sum(dim=-1)

@@ -47,5 +47,6 @@ class RouteBlock(ModuleBase):
 
     def _position_bias(self, position: torch.Tensor) -> torch.Tensor:
         if self.position_injection == "direct_add":
-            return position.unsqueeze(1)
-        return self.position_adapter(position).unsqueeze(1)
+            return position.unsqueeze(1) if position.dim() == 2 else position
+        bias = self.position_adapter(position)
+        return bias.unsqueeze(1) if bias.dim() == 2 else bias

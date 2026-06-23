@@ -415,6 +415,23 @@ def main() -> None:
             device_name=str(config.get("device", "auto")),
             max_points=_int_config(config, "max_points", default=2048),
         )
+    elif eval_name == "public_benchmark":
+        from public_benchmark import run_public_benchmark
+
+        run_dir = args.run or config.get("run")
+        if not run_dir:
+            raise SystemExit("public_benchmark requires --run")
+        report = run_public_benchmark(
+            run_dir,
+            output_path=args.output or config.get("output_path"),
+            samples_output_path=config.get("samples_output_path"),
+            checkpoint=str(args.checkpoint or config.get("checkpoint", "checkpoint_latest")),
+            tasks=list(config.get("tasks", ["piqa", "hellaswag", "arc_easy"])),
+            sample_count=_int_arg_or_config(args.sample_count, config, "sample_count", default=50),
+            seed=_int_config(config, "seed", default=1),
+            device_name=str(config.get("device", "auto")),
+            length_normalized=_bool_config(config, "length_normalized", default=True),
+        )
     else:
         if not args.run:
             raise SystemExit("routing eval requires --run")

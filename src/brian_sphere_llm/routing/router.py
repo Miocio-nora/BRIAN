@@ -27,6 +27,12 @@ class LatentRouter(ModuleBase):
         features = torch.cat([pooled, position], dim=-1)
         return self.net[1](self.net[0](features))
 
+    def token_embedding(self, hidden: torch.Tensor, position: torch.Tensor) -> torch.Tensor:
+        if position.dim() == 2:
+            position = position.unsqueeze(1).expand(-1, hidden.size(1), -1)
+        features = torch.cat([hidden, position], dim=-1)
+        return self.net[1](self.net[0](features))
+
     def logits_from_embedding(self, embedding: torch.Tensor) -> torch.Tensor:
         return self.net[2](embedding)
 
@@ -35,3 +41,6 @@ class LatentRouter(ModuleBase):
 
     def forward(self, hidden: torch.Tensor, position: torch.Tensor) -> torch.Tensor:
         return self.logits_from_embedding(self.embedding(hidden, position))
+
+    def token_logits(self, hidden: torch.Tensor, position: torch.Tensor) -> torch.Tensor:
+        return self.logits_from_embedding(self.token_embedding(hidden, position))

@@ -47,8 +47,8 @@ def test_causal_attention_reads_attention_global_kv_prefix() -> None:
     output, key_summary, value_summary, metrics = attention(x, state, return_attention_kv=True)
 
     assert output.shape == x.shape
-    assert key_summary.shape == (2, 4, 4)
-    assert value_summary.shape == (2, 4, 4)
+    assert key_summary.shape == (2, 4, 5, 4)
+    assert value_summary.shape == (2, 4, 5, 4)
     assert "attention_global_kv_last_token_mass" in metrics
     assert "attention_global_kv_sink_last_token_mass" in metrics
     assert metrics["attention_global_kv_logit_bias"].item() == pytest.approx(-2.0)
@@ -119,7 +119,7 @@ def test_brian_attention_global_kv_is_route_only_and_reports_metrics() -> None:
     summary = output["routing_summary"]
     assert summary["attention_global_kv_slots_mean"] >= 1.0
     assert summary["attention_global_kv_slots_max"] <= 3.0
-    assert summary["attention_global_kv_write_count_mean"] == pytest.approx(2.0)
+    assert summary["attention_global_kv_write_count_mean"] == pytest.approx(16.0)
     assert "attention_global_kv_last_token_mass" in summary
     assert model.model_stats()["attention_global_kv"] == "True"
 
@@ -173,3 +173,55 @@ def test_attention_global_kv_rejects_parallel_passing() -> None:
     )
     with pytest.raises(ValueError, match="parallel_passing"):
         BrianRouteCore(cfg)
+
+
+def test_brian_attention_global_kv_is_suffix_invariant() -> None:
+    torch.manual_seed(23)
+    cfg = BrianRouteConfig(
+        base=BaselineConfig(vocab_size=64, context_length=8, layers=4, d_model=32, n_heads=4),
+        pre_blocks=1,
+        route_pool_blocks=2,
+        post_blocks=1,
+        block_position_dim=8,
+        max_route_steps=2,
+        top_k=1,
+        hard_exit=False,
+        attention_global_kv=True,
+        attention_global_sink_slots=1,
+        attention_global_window_slots=2,
+    )
+    model = BrianRouteCore(cfg).eval()
+    input_ids = torch.randint(0, 64, (2, 8))
+    changed = input_ids.clone()
+    changed[:, 4:] = torch.randint(0, 64, (2, 4))
+
+    with torch.no_grad():
+        original_logits = model(input_ids, route_mode="free")["logits"][:, :4]
+        changed_logits = model(changed, route_mode="free")["logits"][:, :4]
+
+    torch.testing.assert_close(original_logits, changed_logits, atol=1e-5, rtol=1e-5)
+
+
+def test_brian_attention_global_kv_full_forward_matches_prefix_forward() -> None:
+    torch.manual_seed(29)
+    cfg = BrianRouteConfig(
+        base=BaselineConfig(vocab_size=64, context_length=8, layers=4, d_model=32, n_heads=4),
+        pre_blocks=1,
+        route_pool_blocks=2,
+        post_blocks=1,
+        block_position_dim=8,
+        max_route_steps=2,
+        top_k=1,
+        hard_exit=False,
+        attention_global_kv=True,
+        attention_global_sink_slots=1,
+        attention_global_window_slots=2,
+    )
+    model = BrianRouteCore(cfg).eval()
+    input_ids = torch.randint(0, 64, (2, 8))
+
+    with torch.no_grad():
+        full_logits = model(input_ids, route_mode="free")["logits"]
+        for length in (2, 4, 8):
+            prefix_logits = model(input_ids[:, :length], route_mode="free")["logits"]
+            torch.testing.assert_close(full_logits[:, :length], prefix_logits, atol=1e-5, rtol=1e-5)

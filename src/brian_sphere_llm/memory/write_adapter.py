@@ -42,12 +42,17 @@ class GlobalWriteAdapter(ModuleBase):
             nn.init.normal_(self.head_delta_down, std=0.02)
             nn.init.zeros_(self.head_delta_up)
 
-    def forward(self, hidden: "torch.Tensor") -> "torch.Tensor":
-        pooled = hidden.mean(dim=1)
-        code = self.proj(pooled)
+    def forward(self, hidden: "torch.Tensor", *, tokenwise: bool = True) -> "torch.Tensor":
+        source = hidden if tokenwise else hidden.mean(dim=1)
+        code = self.proj(source)
         if self.head_delta_rank:
-            heads = pooled.reshape(pooled.size(0), self.n_heads, self.head_dim)
-            delta = torch.einsum("bhd,hdr->bhr", heads, self.head_delta_down)
-            delta = torch.einsum("bhr,hrc->bhc", delta, self.head_delta_up).sum(dim=1)
+            if tokenwise:
+                heads = source.reshape(source.size(0), source.size(1), self.n_heads, self.head_dim)
+                delta = torch.einsum("bthd,hdr->bthr", heads, self.head_delta_down)
+                delta = torch.einsum("bthr,hrc->bthc", delta, self.head_delta_up).sum(dim=2)
+            else:
+                heads = source.reshape(source.size(0), self.n_heads, self.head_dim)
+                delta = torch.einsum("bhd,hdr->bhr", heads, self.head_delta_down)
+                delta = torch.einsum("bhr,hrc->bhc", delta, self.head_delta_up).sum(dim=1)
             code = code + delta / (self.n_heads**0.5)
         return F.normalize(code, dim=-1)

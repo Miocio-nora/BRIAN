@@ -305,7 +305,13 @@ class BrianRouteCore(ModuleBase):
         for block in self.pre_blocks:
             hidden = checkpoint_if_enabled(self, block, hidden)
 
-        position = self.position_table.initial(batch_size, input_ids.device)
+        parallel_active = route_mode == "parallel" or self.config.parallel_passing
+        base_position = self.position_table.initial(batch_size, input_ids.device)
+        position = (
+            base_position
+            if parallel_active
+            else base_position.unsqueeze(1).expand(-1, input_ids.size(1), -1).contiguous()
+        )
         route_info: dict[str, Any] = {
             "route_logits": [],
             "route_probs": [],
@@ -346,7 +352,8 @@ class BrianRouteCore(ModuleBase):
         }
         route_targets = self._targets_for_mode(route_mode, pseudo_policy, input_ids)
         max_steps = len(route_targets) if route_mode in {"fixed", "pseudo"} else self.config.max_route_steps
-        exited = torch.zeros(batch_size, dtype=torch.bool, device=input_ids.device)
+        route_shape = (batch_size,) if parallel_active else (batch_size, input_ids.size(1))
+        exited = torch.zeros(route_shape, dtype=torch.bool, device=input_ids.device)
         global_state = None
         if self.config.global_kv:
             assert self.global_cache is not None and self.global_write is not None
@@ -356,7 +363,7 @@ class BrianRouteCore(ModuleBase):
                 device=input_ids.device,
                 dtype=hidden.dtype,
             )
-            global_state = self.global_cache.write(global_state, self._global_write(hidden))
+            global_state = self.global_cache.write(global_state, self._global_write(hidden, tokenwise=not parallel_active))
         last_global_actions = None
         attention_global_state = None
         if self.config.attention_global_kv:
@@ -367,16 +374,17 @@ class BrianRouteCore(ModuleBase):
                 head_dim=self._attention_global_cache_dim(),
                 device=input_ids.device,
                 dtype=hidden.dtype,
+                sequence_length=None if parallel_active else hidden.size(1),
             )
         router_space_records: list[dict[str, Any]] | None = [] if collect_router_space else None
-        last_internal_action = torch.full((batch_size,), -1, dtype=torch.long, device=input_ids.device)
-        same_internal_run_length = torch.zeros(batch_size, dtype=torch.long, device=input_ids.device)
+        last_internal_action = torch.full(route_shape, -1, dtype=torch.long, device=input_ids.device)
+        same_internal_run_length = torch.zeros(route_shape, dtype=torch.long, device=input_ids.device)
 
-        if route_mode == "parallel" or self.config.parallel_passing:
+        if parallel_active:
             hidden, position, route_info = self._run_parallel_route(hidden, position, route_info, hard_exit, global_state)
             global_state = None
 
-        for step in range(max_steps if route_mode != "parallel" and not self.config.parallel_passing else 0):
+        for step in range(max_steps if not parallel_active else 0):
             if self.config.global_kv and global_state is not None:
                 assert self.global_read is not None
                 hidden, global_metrics = self._global_read(
@@ -393,10 +401,19 @@ class BrianRouteCore(ModuleBase):
                     torch.tensor(float(global_state.slots), device=input_ids.device, dtype=hidden.dtype)
                 )
             router_position = self._router_position(position)
-            router_embedding = self.router.embedding(hidden, router_position) if router_space_records is not None else None
+            token_route = position.dim() == 3
+            router_embedding = (
+                self.router.token_embedding(hidden, router_position)
+                if router_space_records is not None and token_route
+                else self.router.embedding(hidden, router_position)
+                if router_space_records is not None
+                else None
+            )
             raw_logits = (
                 self.router.logits_from_embedding(router_embedding)
                 if router_embedding is not None
+                else self.router.token_logits(hidden, router_position)
+                if token_route
                 else self.router(hidden, router_position)
             )
             logits = self._apply_location_bias(raw_logits, position)
@@ -414,10 +431,12 @@ class BrianRouteCore(ModuleBase):
             has_route_target = route_mode in {"fixed", "pseudo", "scheduled"} and step < len(route_targets)
             if has_route_target:
                 target_action = route_targets[step]
+                if token_route:
+                    target_action = target_action.unsqueeze(1).expand(-1, hidden.size(1))
             else:
-                target_action = torch.full((batch_size,), self.out_action, dtype=torch.long, device=input_ids.device)
+                target_action = torch.full(route_shape, self.out_action, dtype=torch.long, device=input_ids.device)
 
-            use_weighted_fusion = torch.zeros(batch_size, dtype=torch.bool, device=input_ids.device)
+            use_weighted_fusion = torch.zeros(route_shape, dtype=torch.bool, device=input_ids.device)
             if route_mode in {"fixed", "pseudo"}:
                 selected = target_action
             elif route_mode == "scheduled":
@@ -432,7 +451,7 @@ class BrianRouteCore(ModuleBase):
             elif route_mode == "free":
                 selected = self._router_action(logits, routing_options)
                 use_weighted_fusion = torch.full(
-                    (batch_size,),
+                    route_shape,
                     effective_top_k > 1,
                     dtype=torch.bool,
                     device=input_ids.device,
@@ -469,21 +488,35 @@ class BrianRouteCore(ModuleBase):
                 & (selected != self.out_action)
             )
             exit_now = selected == self.out_action
+            record_embedding = self._last_token_view(router_embedding) if router_embedding is not None else None
+            record_raw_logits = self._last_token_view(raw_logits)
+            record_logits = self._last_token_view(logits)
+            record_probs = self._last_token_view(probs)
+            record_selected = self._last_token_view(selected)
+            record_top_actions = self._last_token_view(top_actions)
+            record_top_weights = self._last_token_view(top_weights)
+            record_weighted_fusion = self._last_token_view(use_weighted_fusion)
+            record_random_route_mask = self._last_token_view(random_route_mask)
+            record_self_recur_cap_mask = self._last_token_view(self_recur_cap_mask)
+            record_selected_cap_mask = self._last_token_view(selected_cap_mask)
+            record_exited = self._last_token_view(exited)
+            record_exit_now = self._last_token_view(exit_now)
+            record_target_action = self._last_token_view(target_action)
             if router_space_records is not None and router_embedding is not None:
                 router_space_records.append(
                     {
                         "step": int(step),
-                        "embedding": router_embedding.detach(),
-                        "raw_logits": raw_logits.detach(),
-                        "effective_logits": logits.detach(),
-                        "probs": probs.detach(),
-                        "selected_actions": selected.detach(),
-                        "top_actions": top_actions.detach(),
-                        "top_weights": top_weights.detach(),
-                        "random_route_override": random_route_mask.detach(),
-                        "self_recur_cap_active": self_recur_cap_mask.detach(),
-                        "exited_before": exited.detach(),
-                        "exit_now": exit_now.detach(),
+                        "embedding": record_embedding.detach(),
+                        "raw_logits": record_raw_logits.detach(),
+                        "effective_logits": record_logits.detach(),
+                        "probs": record_probs.detach(),
+                        "selected_actions": record_selected.detach(),
+                        "top_actions": record_top_actions.detach(),
+                        "top_weights": record_top_weights.detach(),
+                        "random_route_override": record_random_route_mask.detach(),
+                        "self_recur_cap_active": record_self_recur_cap_mask.detach(),
+                        "exited_before": record_exited.detach(),
+                        "exit_now": record_exit_now.detach(),
                     }
                 )
             if self.config.attention_global_kv and attention_global_state is not None:
@@ -505,7 +538,10 @@ class BrianRouteCore(ModuleBase):
             position = self._next_position(selected, top_actions, top_weights, use_weighted_fusion)
             if self.config.global_kv and global_state is not None:
                 assert self.global_write is not None and self.global_cache is not None
-                global_state = self.global_cache.write(global_state, self._global_write(hidden, selected))
+                global_state = self.global_cache.write(
+                    global_state,
+                    self._global_write(hidden, selected, tokenwise=position.dim() == 3),
+                )
                 last_global_actions = selected
             if self.config.attention_global_kv and attention_global_state is not None:
                 assert self.attention_global_cache is not None
@@ -524,21 +560,22 @@ class BrianRouteCore(ModuleBase):
                 )
                 route_info["attention_global_kv_write_count"].append(write_valid.to(hidden.dtype).sum())
 
-            route_info["route_logits"].append(logits)
-            route_info["route_probs"].append(probs)
-            route_info["selected_actions"].append(selected)
-            route_info["topk_actions"].append(top_actions)
-            route_info["topk_weights"].append(top_weights)
-            route_info["used_weighted_fusion"].append(use_weighted_fusion)
-            route_info["exit_flags"].append(exit_now)
-            route_info["random_route_override_count"].append(random_route_mask.to(hidden.dtype).sum())
+            route_info["route_logits"].append(record_logits)
+            route_info["route_probs"].append(record_probs)
+            route_info["selected_actions"].append(record_selected)
+            route_info["topk_actions"].append(record_top_actions)
+            route_info["topk_weights"].append(record_top_weights)
+            route_info["used_weighted_fusion"].append(record_weighted_fusion)
+            route_info["exit_flags"].append(record_exit_now)
+            route_info["random_route_override_count"].append(record_random_route_mask.to(hidden.dtype).sum())
             route_info["self_recur_cap_count"].append(
-                (self_recur_cap_mask | selected_cap_mask).to(hidden.dtype).sum()
+                (record_self_recur_cap_mask | record_selected_cap_mask).to(hidden.dtype).sum()
             )
             if has_route_target:
-                route_info["route_targets"].append(target_action)
-            route_info["position_norms"].append(position.norm(dim=-1).mean())
-            route_info["location_distance"].append(self.position_table.location_distance(position, probs))
+                route_info["route_targets"].append(record_target_action)
+            record_position = self._last_token_view(position)
+            route_info["position_norms"].append(record_position.norm(dim=-1).mean())
+            route_info["location_distance"].append(self.position_table.location_distance(record_position, record_probs))
             last_internal_action, same_internal_run_length = self._update_self_recur_state(
                 selected,
                 last_internal_action,
@@ -788,7 +825,7 @@ class BrianRouteCore(ModuleBase):
             branch_exited = flat_exit.reshape(batch_size, branch_count)
             if self.config.global_kv and next_delta_codes is not None:
                 assert self.global_write is not None
-                delta_write = self._global_write(routed, apply_actions).reshape(
+                delta_write = self._global_write(routed, apply_actions, tokenwise=False).reshape(
                     batch_size,
                     branch_count,
                     self.config.global_code_dim,
@@ -864,7 +901,8 @@ class BrianRouteCore(ModuleBase):
             return torch.argmax(logits, dim=-1)
         temperature = _routing_float(routing_options, "router_sampling_temperature", default=1.0, minimum=1e-6)
         probs = F.softmax(logits.float() / temperature, dim=-1)
-        return torch.multinomial(probs, num_samples=1).squeeze(1)
+        flat = probs.reshape(-1, probs.size(-1))
+        return torch.multinomial(flat, num_samples=1).view(*probs.shape[:-1])
 
     def _random_route_probability(self, global_step: int, options: Mapping[str, Any]) -> float:
         if not self.training:
@@ -904,7 +942,7 @@ class BrianRouteCore(ModuleBase):
         random_actions = torch.randint(
             0,
             self.config.route_pool_blocks,
-            (selected.size(0),),
+            selected.shape,
             dtype=torch.long,
             device=selected.device,
         )
@@ -917,6 +955,15 @@ class BrianRouteCore(ModuleBase):
         return torch.where(random_mask, random_actions, selected), random_mask
 
     def _apply_selected_blocks(self, hidden: torch.Tensor, position: torch.Tensor, selected: torch.Tensor) -> torch.Tensor:
+        if selected.dim() == 2:
+            next_hidden = hidden.clone()
+            block_position = self._block_position(position)
+            for action, block in enumerate(self.route_blocks):
+                mask = selected == action
+                if torch.any(mask):
+                    action_output = checkpoint_if_enabled(self, block, hidden, block_position)
+                    next_hidden = torch.where(mask.unsqueeze(-1), action_output, next_hidden)
+            return next_hidden
         next_hidden = hidden.clone()
         block_position = self._block_position(position)
         for action, block in enumerate(self.route_blocks):
@@ -938,6 +985,13 @@ class BrianRouteCore(ModuleBase):
         top_weights = internal_weights / denom
         return top_actions, top_weights
 
+    def _last_token_view(self, tensor: torch.Tensor) -> torch.Tensor:
+        if tensor.dim() >= 3:
+            return tensor[:, -1, ...]
+        if tensor.dim() == 2 and not torch.is_floating_point(tensor):
+            return tensor[:, -1]
+        return tensor
+
     def _apply_routed_blocks(
         self,
         hidden: torch.Tensor,
@@ -947,6 +1001,38 @@ class BrianRouteCore(ModuleBase):
         top_weights: torch.Tensor,
         use_weighted_fusion: torch.Tensor,
     ) -> torch.Tensor:
+        if selected.dim() == 2:
+            next_hidden = hidden.clone()
+            block_position = self._block_position(position)
+            for action, block in enumerate(self.route_blocks):
+                top1_mask = (selected == action) & ~use_weighted_fusion
+                if torch.any(top1_mask):
+                    action_output = checkpoint_if_enabled(self, block, hidden, block_position)
+                    next_hidden = torch.where(top1_mask.unsqueeze(-1), action_output, next_hidden)
+
+            if torch.any(use_weighted_fusion):
+                accum = torch.zeros_like(hidden)
+                weight_sum = torch.zeros_like(selected, dtype=hidden.dtype)
+                for action, block in enumerate(self.route_blocks):
+                    action_output = None
+                    for rank in range(top_actions.size(-1)):
+                        mask = use_weighted_fusion & (top_actions[..., rank] == action)
+                        if not torch.any(mask):
+                            continue
+                        if action_output is None:
+                            action_output = checkpoint_if_enabled(self, block, hidden, block_position)
+                        weight = top_weights[..., rank].to(hidden.dtype) * mask.to(hidden.dtype)
+                        accum = accum + action_output * weight.unsqueeze(-1)
+                        weight_sum = weight_sum + weight
+                weighted_mask = use_weighted_fusion & (weight_sum > 0)
+                if torch.any(weighted_mask):
+                    weighted_hidden = accum / weight_sum.clamp_min(1e-9).unsqueeze(-1)
+                    next_hidden = torch.where(weighted_mask.unsqueeze(-1), weighted_hidden, next_hidden)
+                fallback_mask = use_weighted_fusion & (weight_sum <= 0)
+                if torch.any(fallback_mask):
+                    fallback_hidden = self._apply_selected_blocks(hidden, position, selected)
+                    next_hidden = torch.where(fallback_mask.unsqueeze(-1), fallback_hidden, next_hidden)
+            return next_hidden
         next_hidden = hidden.clone()
         block_position = self._block_position(position)
         for action, block in enumerate(self.route_blocks):
@@ -985,6 +1071,85 @@ class BrianRouteCore(ModuleBase):
         attention_global_state: AttentionGlobalKVState,
         route_info: dict[str, Any],
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        if selected.dim() == 2:
+            next_hidden = hidden.clone()
+            write_key, write_value, write_valid = self._empty_attention_global_write(hidden)
+            block_position = self._block_position(position)
+            for action, block in enumerate(self.route_blocks):
+                top1_mask = (selected == action) & ~use_weighted_fusion
+                if torch.any(top1_mask):
+                    output, key_summary, value_summary, metrics = block(
+                        hidden,
+                        block_position,
+                        attention_global_state,
+                        return_attention_kv=True,
+                    )
+                    key_write = self._attention_global_write_tensor(key_summary).to(write_key.dtype)
+                    value_write = self._attention_global_write_tensor(value_summary).to(write_value.dtype)
+                    token_mask = top1_mask.unsqueeze(1).unsqueeze(2).unsqueeze(-1)
+                    next_hidden = torch.where(top1_mask.unsqueeze(-1), output, next_hidden)
+                    write_key = torch.where(token_mask, key_write, write_key)
+                    write_value = torch.where(token_mask, value_write, write_value)
+                    write_valid = write_valid | top1_mask.unsqueeze(1)
+                    self._append_attention_global_metrics(route_info, metrics)
+
+            if torch.any(use_weighted_fusion):
+                accum = torch.zeros_like(hidden)
+                key_accum = torch.zeros_like(write_key)
+                value_accum = torch.zeros_like(write_value)
+                weight_sum = torch.zeros_like(selected, dtype=hidden.dtype)
+                for action, block in enumerate(self.route_blocks):
+                    action_output = None
+                    key_write = None
+                    value_write = None
+                    for rank in range(top_actions.size(-1)):
+                        mask = use_weighted_fusion & (top_actions[..., rank] == action)
+                        if not torch.any(mask):
+                            continue
+                        if action_output is None:
+                            action_output, key_summary, value_summary, metrics = block(
+                                hidden,
+                                block_position,
+                                attention_global_state,
+                                return_attention_kv=True,
+                            )
+                            key_write = self._attention_global_write_tensor(key_summary).to(key_accum.dtype)
+                            value_write = self._attention_global_write_tensor(value_summary).to(value_accum.dtype)
+                            self._append_attention_global_metrics(route_info, metrics)
+                        weight = top_weights[..., rank].to(hidden.dtype) * mask.to(hidden.dtype)
+                        accum = accum + action_output * weight.unsqueeze(-1)
+                        key_weight = weight.unsqueeze(1).unsqueeze(2).unsqueeze(-1)
+                        assert key_write is not None and value_write is not None
+                        key_accum = key_accum + key_write * key_weight
+                        value_accum = value_accum + value_write * key_weight
+                        weight_sum = weight_sum + weight
+                weighted_mask = use_weighted_fusion & (weight_sum > 0)
+                if torch.any(weighted_mask):
+                    denom = weight_sum.clamp_min(1e-9)
+                    weighted_hidden = accum / denom.unsqueeze(-1)
+                    write_denom = denom.unsqueeze(1).unsqueeze(2).unsqueeze(-1)
+                    weighted_key = key_accum / write_denom
+                    weighted_value = value_accum / write_denom
+                    token_mask = weighted_mask.unsqueeze(1).unsqueeze(2).unsqueeze(-1)
+                    next_hidden = torch.where(weighted_mask.unsqueeze(-1), weighted_hidden, next_hidden)
+                    write_key = torch.where(token_mask, weighted_key, write_key)
+                    write_value = torch.where(token_mask, weighted_value, write_value)
+                    write_valid = write_valid | weighted_mask.unsqueeze(1)
+                fallback_mask = use_weighted_fusion & (weight_sum <= 0)
+                if torch.any(fallback_mask):
+                    selected_hidden, selected_key, selected_value, selected_valid = self._apply_selected_blocks_with_attention_global(
+                        hidden,
+                        position,
+                        selected,
+                        attention_global_state,
+                        route_info,
+                    )
+                    token_mask = fallback_mask.unsqueeze(1).unsqueeze(2).unsqueeze(-1)
+                    next_hidden = torch.where(fallback_mask.unsqueeze(-1), selected_hidden, next_hidden)
+                    write_key = torch.where(token_mask, selected_key, write_key)
+                    write_value = torch.where(token_mask, selected_value, write_value)
+                    write_valid = write_valid | (selected_valid & fallback_mask.unsqueeze(1))
+            return next_hidden, write_key, write_value, write_valid
         next_hidden = hidden.clone()
         write_key, write_value, write_valid = self._empty_attention_global_write(hidden)
         block_position = self._block_position(position)
@@ -1025,9 +1190,9 @@ class BrianRouteCore(ModuleBase):
                     accum[indices] = accum[indices] + action_output * weight.view(-1, 1, 1)
                     write_key_summary = self._attention_global_write_tensor(key_summary).to(key_accum.dtype)
                     write_value_summary = self._attention_global_write_tensor(value_summary).to(value_accum.dtype)
-                    key_accum[indices] = key_accum[indices] + write_key_summary * weight.view(-1, 1, 1, 1)
+                    key_accum[indices] = key_accum[indices] + write_key_summary * weight.view(-1, 1, 1, 1, 1)
                     value_accum[indices] = (
-                        value_accum[indices] + write_value_summary * weight.view(-1, 1, 1, 1)
+                        value_accum[indices] + write_value_summary * weight.view(-1, 1, 1, 1, 1)
                     )
                     weight_sum[indices] = weight_sum[indices] + weight
                     self._append_attention_global_metrics(route_info, metrics)
@@ -1035,8 +1200,8 @@ class BrianRouteCore(ModuleBase):
             if torch.any(weighted_mask):
                 denom = weight_sum[weighted_mask]
                 next_hidden[weighted_mask] = accum[weighted_mask] / denom.view(-1, 1, 1)
-                write_key[weighted_mask] = key_accum[weighted_mask] / denom.view(-1, 1, 1, 1)
-                write_value[weighted_mask] = value_accum[weighted_mask] / denom.view(-1, 1, 1, 1)
+                write_key[weighted_mask] = key_accum[weighted_mask] / denom.view(-1, 1, 1, 1, 1)
+                write_value[weighted_mask] = value_accum[weighted_mask] / denom.view(-1, 1, 1, 1, 1)
                 write_valid[weighted_mask] = True
             fallback_mask = use_weighted_fusion & (weight_sum <= 0)
             if torch.any(fallback_mask):
@@ -1061,6 +1226,28 @@ class BrianRouteCore(ModuleBase):
         attention_global_state: AttentionGlobalKVState,
         route_info: dict[str, Any],
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        if selected.dim() == 2:
+            next_hidden = hidden.clone()
+            write_key, write_value, write_valid = self._empty_attention_global_write(hidden)
+            block_position = self._block_position(position)
+            for action, block in enumerate(self.route_blocks):
+                mask = selected == action
+                if torch.any(mask):
+                    output, key_summary, value_summary, metrics = block(
+                        hidden,
+                        block_position,
+                        attention_global_state,
+                        return_attention_kv=True,
+                    )
+                    key_write = self._attention_global_write_tensor(key_summary).to(write_key.dtype)
+                    value_write = self._attention_global_write_tensor(value_summary).to(write_value.dtype)
+                    token_mask = mask.unsqueeze(1).unsqueeze(2).unsqueeze(-1)
+                    next_hidden = torch.where(mask.unsqueeze(-1), output, next_hidden)
+                    write_key = torch.where(token_mask, key_write, write_key)
+                    write_value = torch.where(token_mask, value_write, write_value)
+                    write_valid = write_valid | mask.unsqueeze(1)
+                    self._append_attention_global_metrics(route_info, metrics)
+            return next_hidden, write_key, write_value, write_valid
         next_hidden = hidden.clone()
         write_key, write_value, write_valid = self._empty_attention_global_write(hidden)
         block_position = self._block_position(position)
@@ -1083,15 +1270,11 @@ class BrianRouteCore(ModuleBase):
 
     def _empty_attention_global_write(self, hidden: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         dim = self._attention_global_cache_dim()
-        if self.config.attention_global_kv_mode == "token_compressed":
-            slots = hidden.size(1)
-        else:
-            slots = 1
-        shape = (hidden.size(0), self.config.base.n_heads, slots, dim)
+        shape = (hidden.size(0), self.config.base.n_heads, 1, hidden.size(1), dim)
         return (
             hidden.new_zeros(shape),
             hidden.new_zeros(shape),
-            torch.zeros(hidden.size(0), slots, dtype=torch.bool, device=hidden.device),
+            torch.zeros(hidden.size(0), 1, hidden.size(1), dtype=torch.bool, device=hidden.device),
         )
 
     def _attention_global_cache_dim(self) -> int:
@@ -1101,10 +1284,12 @@ class BrianRouteCore(ModuleBase):
 
     def _attention_global_write_tensor(self, tensor: torch.Tensor) -> torch.Tensor:
         if tensor.dim() == 3:
-            return tensor.unsqueeze(2)
+            return tensor.unsqueeze(2).unsqueeze(3)
         if tensor.dim() == 4:
+            return tensor.unsqueeze(2)
+        if tensor.dim() == 5:
             return tensor
-        raise ValueError("Attention Global KV writes must be rank 3 or rank 4 tensors.")
+        raise ValueError("Attention Global KV writes must be rank 3, rank 4, or rank 5 tensors.")
 
     def _append_attention_global_metrics(self, route_info: dict[str, Any], metrics: dict[str, torch.Tensor]) -> None:
         for key in [
@@ -1127,12 +1312,12 @@ class BrianRouteCore(ModuleBase):
         position = self.position_table.by_action(selected)
         if torch.any(use_weighted_fusion):
             action_probs = torch.zeros(
-                selected.size(0),
+                *selected.shape,
                 self.config.route_pool_blocks + 1,
                 dtype=top_weights.dtype,
                 device=selected.device,
             )
-            action_probs.scatter_add_(1, top_actions, top_weights)
+            action_probs.scatter_add_(-1, top_actions, top_weights)
             weighted_position = self.position_table.weighted(action_probs)
             position = torch.where(use_weighted_fusion.unsqueeze(-1), weighted_position, position)
         return position
@@ -1200,13 +1385,16 @@ class BrianRouteCore(ModuleBase):
     ) -> tuple[torch.Tensor, torch.Tensor]:
         max_consecutive = self._self_recur_max_consecutive(constraints)
         if max_consecutive <= 0:
-            return logits, torch.zeros(logits.size(0), dtype=torch.bool, device=logits.device)
+            return logits, torch.zeros_like(last_internal_action, dtype=torch.bool)
         capped = (last_internal_action >= 0) & (same_internal_run_length >= max_consecutive)
         if not torch.any(capped):
-            return logits, torch.zeros(logits.size(0), dtype=torch.bool, device=logits.device)
+            return logits, torch.zeros_like(last_internal_action, dtype=torch.bool)
         adjusted = logits.clone()
-        rows = torch.nonzero(capped, as_tuple=False).flatten()
-        adjusted[rows, last_internal_action[rows]] = logits.new_tensor(-1.0e4)
+        action_mask = F.one_hot(
+            last_internal_action.clamp(min=0),
+            num_classes=self.config.route_pool_blocks + 1,
+        ).to(dtype=torch.bool)
+        adjusted = adjusted.masked_fill(capped.unsqueeze(-1) & action_mask, logits.new_tensor(-1.0e4))
         return adjusted, capped
 
     def _enforce_self_recur_cap_on_selected(
@@ -1275,34 +1463,49 @@ class BrianRouteCore(ModuleBase):
         early_penalty = _constraint_float(constraints, "early_exit_logit_penalty", default=0.0, minimum=0.0)
         if early_penalty > 0.0 and step_number < min_exit_step:
             adjusted = adjusted.clone()
-            adjusted[:, self.out_action] = adjusted[:, self.out_action] - early_penalty
+            adjusted[..., self.out_action] = adjusted[..., self.out_action] - early_penalty
 
         ramp_start = _constraint_int(constraints, "exit_ramp_start", default=max_steps, minimum=1)
         ramp_bias = _constraint_float(constraints, "exit_ramp_logit_bias", default=0.0, minimum=0.0)
         if ramp_bias > 0.0 and step_number >= ramp_start:
             progress = (step_number - ramp_start + 1) / max(1, max_steps - ramp_start + 1)
             adjusted = adjusted.clone()
-            adjusted[:, self.out_action] = adjusted[:, self.out_action] + ramp_bias * progress
+            adjusted[..., self.out_action] = adjusted[..., self.out_action] + ramp_bias * progress
 
         final_bias = _constraint_float(constraints, "final_exit_logit_bias", default=0.0, minimum=0.0)
         if final_bias > 0.0 and step_number >= max_steps:
             adjusted = adjusted.clone()
-            adjusted[:, self.out_action] = adjusted[:, self.out_action] + final_bias
+            adjusted[..., self.out_action] = adjusted[..., self.out_action] + final_bias
         return adjusted
 
     def _force_final_exit(self, step: int, max_steps: int, constraints: Mapping[str, Any]) -> bool:
         return _constraint_bool(constraints, "force_final_exit", default=False) and step + 1 >= max_steps
 
-    def _global_write(self, hidden: torch.Tensor, actions: torch.Tensor | None = None) -> torch.Tensor:
+    def _global_write(
+        self,
+        hidden: torch.Tensor,
+        actions: torch.Tensor | None = None,
+        *,
+        tokenwise: bool = False,
+    ) -> torch.Tensor:
         assert self.global_write is not None
         if not isinstance(self.global_write, nn.ModuleList):
-            return self.global_write(hidden)
+            return self.global_write(hidden, tokenwise=tokenwise)
+        if tokenwise:
+            indices = self._global_token_adapter_indices(actions, hidden.shape[:2], hidden.device)
+            codes = hidden.new_empty((hidden.size(0), hidden.size(1), self.config.global_code_dim))
+            for index, adapter in enumerate(self.global_write):
+                mask = indices == index
+                if torch.any(mask):
+                    adapter_codes = adapter(hidden, tokenwise=True)
+                    codes[mask] = adapter_codes[mask]
+            return codes
         indices = self._global_adapter_indices(actions, hidden.size(0), hidden.device)
         codes = hidden.new_empty((hidden.size(0), self.config.global_code_dim))
         for index, adapter in enumerate(self.global_write):
             mask = indices == index
             if torch.any(mask):
-                codes[mask] = adapter(hidden[mask])
+                codes[mask] = adapter(hidden[mask], tokenwise=False)
         return codes
 
     def _global_read(
@@ -1316,6 +1519,24 @@ class BrianRouteCore(ModuleBase):
         assert self.global_read is not None
         if not isinstance(self.global_read, nn.ModuleList):
             return self.global_read(hidden, codes, sink_slots=sink_slots)
+        if codes.dim() == 4:
+            indices = self._global_token_adapter_indices(actions, hidden.shape[:2], hidden.device)
+            updated = hidden.clone()
+            metric_sums: dict[str, torch.Tensor] = {}
+            total = max(1, int(indices.numel()))
+            for index, adapter in enumerate(self.global_read):
+                mask = indices == index
+                if not torch.any(mask):
+                    continue
+                group_hidden, metrics = adapter(hidden, codes, sink_slots=sink_slots)
+                updated[mask] = group_hidden[mask]
+                weight = torch.tensor(float(mask.sum().item()) / float(total), device=hidden.device, dtype=hidden.dtype)
+                for key, value in metrics.items():
+                    value = value.to(device=hidden.device, dtype=hidden.dtype)
+                    if key not in metric_sums:
+                        metric_sums[key] = torch.zeros((), device=hidden.device, dtype=hidden.dtype)
+                    metric_sums[key] = metric_sums[key] + value * weight
+            return updated, metric_sums
         indices = self._global_adapter_indices(actions, hidden.size(0), hidden.device)
         updated = hidden.clone()
         metric_sums: dict[str, torch.Tensor] = {}
@@ -1333,6 +1554,22 @@ class BrianRouteCore(ModuleBase):
                     metric_sums[key] = torch.zeros((), device=hidden.device, dtype=hidden.dtype)
                 metric_sums[key] = metric_sums[key] + value * weight
         return updated, metric_sums
+
+    def _global_token_adapter_indices(
+        self,
+        actions: torch.Tensor | None,
+        shape: torch.Size | tuple[int, int],
+        device: torch.device,
+    ) -> torch.Tensor:
+        batch_size, seq_len = int(shape[0]), int(shape[1])
+        if actions is None:
+            return torch.full((batch_size, seq_len), self.out_action, dtype=torch.long, device=device)
+        indices = actions.to(device=device, dtype=torch.long)
+        if indices.dim() == 1:
+            indices = indices.unsqueeze(1).expand(-1, seq_len)
+        if tuple(indices.shape) != (batch_size, seq_len):
+            raise ValueError("Global adapter token action shape must match [batch, seq].")
+        return indices.clamp(min=0, max=self.out_action)
 
     def _global_adapter_indices(
         self,

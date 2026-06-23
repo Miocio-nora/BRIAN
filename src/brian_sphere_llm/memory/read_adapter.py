@@ -59,6 +59,19 @@ class GlobalReadAdapter(ModuleBase):
                 "global_window_attention_mass": zero,
                 "global_read_gate": torch.sigmoid(self.gate).to(hidden.dtype),
             }
+        if codes.dim() == 3:
+            return self._forward_sequence_codes(hidden, codes, sink_slots=sink_slots)
+        if codes.dim() != 4:
+            raise ValueError("Global read codes must have shape [batch, slots, code] or [batch, slots, seq, code].")
+        return self._forward_token_codes(hidden, codes, sink_slots=sink_slots)
+
+    def _forward_sequence_codes(
+        self,
+        hidden: "torch.Tensor",
+        codes: "torch.Tensor",
+        *,
+        sink_slots: int,
+    ) -> tuple["torch.Tensor", dict[str, "torch.Tensor"]]:
         pooled = hidden.mean(dim=1)
         query = self.query(pooled)
         scale = query.size(-1) ** -0.5
@@ -80,6 +93,45 @@ class GlobalReadAdapter(ModuleBase):
         window_mass = attn[:, sink_count:].sum(dim=-1).mean()
         return updated, {
             "global_attention_mass": attn.sum(dim=-1).mean(),
+            "global_sink_attention_mass": sink_mass,
+            "global_window_attention_mass": window_mass,
+            "global_read_gate": gate,
+        }
+
+    def _forward_token_codes(
+        self,
+        hidden: "torch.Tensor",
+        codes: "torch.Tensor",
+        *,
+        sink_slots: int,
+    ) -> tuple["torch.Tensor", dict[str, "torch.Tensor"]]:
+        query = self.query(hidden)
+        scale = query.size(-1) ** -0.5
+        scores = torch.einsum("btc,bsuc->btsu", query, codes) * scale
+        query_len = hidden.size(1)
+        code_len = codes.size(2)
+        query_pos = torch.arange(query_len, device=hidden.device)
+        code_pos = torch.arange(code_len, device=hidden.device)
+        causal = code_pos.unsqueeze(0) <= query_pos.unsqueeze(1)
+        scores = scores.masked_fill(~causal.view(1, query_len, 1, code_len), torch.finfo(scores.dtype).min)
+        attn = F.softmax(scores.reshape(hidden.size(0), query_len, -1), dim=-1).view_as(scores)
+        read_code = torch.einsum("btsu,bsuc->btc", attn, codes)
+        gate = torch.sigmoid(self.gate).to(hidden.dtype)
+        read_hidden = self.out(read_code)
+        if self.head_delta_rank:
+            delta = torch.einsum("btc,hcr->bthr", read_code, self.head_delta_down)
+            delta = torch.einsum("bthr,hrm->bthm", delta, self.head_delta_up)
+            read_hidden = read_hidden + delta.reshape(read_code.size(0), read_code.size(1), self.d_model)
+        updated = hidden + gate * read_hidden
+        sink_count = max(0, min(int(sink_slots), codes.size(1)))
+        sink_mass = (
+            attn[:, :, :sink_count, :].sum(dim=(-1, -2)).mean()
+            if sink_count
+            else torch.zeros((), device=hidden.device, dtype=attn.dtype)
+        )
+        window_mass = attn[:, :, sink_count:, :].sum(dim=(-1, -2)).mean()
+        return updated, {
+            "global_attention_mass": attn.sum(dim=(-1, -2)).mean(),
             "global_sink_attention_mass": sink_mass,
             "global_window_attention_mass": window_mass,
             "global_read_gate": gate,

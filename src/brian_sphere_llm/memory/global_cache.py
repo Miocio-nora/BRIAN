@@ -34,9 +34,15 @@ class CanonicalGlobalCache:
         return GlobalCacheState(codes=torch.empty(batch_size, 0, code_dim, device=device, dtype=dtype))
 
     def write(self, state: GlobalCacheState, code: "torch.Tensor") -> GlobalCacheState:
-        if code.dim() != 2:
-            raise ValueError("Global cache write code must have shape [batch, code_dim]")
-        appended = torch.cat([state.codes, code.unsqueeze(1)], dim=1)
+        if code.dim() not in {2, 3}:
+            raise ValueError("Global cache write code must have shape [batch, code_dim] or [batch, seq, code_dim]")
+        write = code.unsqueeze(1)
+        codes = state.codes
+        if codes.size(1) == 0 and codes.dim() != write.dim():
+            codes = write[:, :0]
+        if codes.dim() != write.dim():
+            raise ValueError("Global cache write rank does not match cache state")
+        appended = torch.cat([codes, write], dim=1)
         sink = appended[:, : self.sink_slots, :] if self.sink_slots else appended[:, :0, :]
         tail = appended[:, self.sink_slots :, :]
         if self.window_slots:

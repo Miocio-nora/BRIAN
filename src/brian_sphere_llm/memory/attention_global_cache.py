@@ -45,9 +45,16 @@ class CanonicalAttentionGlobalKVCache:
         head_dim: int,
         device: "torch.device",
         dtype: "torch.dtype",
+        sequence_length: int | None = None,
     ) -> AttentionGlobalKVState:
         if torch is None:
             raise ModuleNotFoundError("PyTorch is required for Attention Global KV cache.")
+        if sequence_length is not None:
+            return AttentionGlobalKVState(
+                keys=torch.empty(batch_size, n_heads, 0, sequence_length, head_dim, device=device, dtype=dtype),
+                values=torch.empty(batch_size, n_heads, 0, sequence_length, head_dim, device=device, dtype=dtype),
+                valid=torch.empty(batch_size, 0, sequence_length, device=device, dtype=torch.bool),
+            )
         return AttentionGlobalKVState(
             keys=torch.empty(batch_size, n_heads, 0, head_dim, device=device, dtype=dtype),
             values=torch.empty(batch_size, n_heads, 0, head_dim, device=device, dtype=dtype),
@@ -61,20 +68,35 @@ class CanonicalAttentionGlobalKVCache:
         value: "torch.Tensor",
         valid: "torch.Tensor",
     ) -> AttentionGlobalKVState:
+        state_rank = state.keys.dim()
+        if state_rank not in {4, 5}:
+            raise ValueError("Attention Global KV state must be rank 4 or rank 5.")
         if key.dim() == 3:
             key = key.unsqueeze(2)
         if value.dim() == 3:
             value = value.unsqueeze(2)
+        if state_rank == 5 and key.dim() == 4:
+            key = key.unsqueeze(2)
+        if state_rank == 5 and value.dim() == 4:
+            value = value.unsqueeze(2)
         if valid.dim() == 1:
             valid = valid.unsqueeze(1)
-        if key.dim() != 4 or value.dim() != 4:
-            raise ValueError("Attention Global KV writes must have shape [batch, heads, slots, head_dim]")
+        if state_rank == 5 and valid.dim() == 2:
+            valid = valid.unsqueeze(1)
+        if key.dim() != state_rank or value.dim() != state_rank:
+            raise ValueError(
+                "Attention Global KV writes must match cache rank: "
+                "[batch, heads, slots, head_dim] or [batch, heads, slots, seq, head_dim]"
+            )
         if key.shape != value.shape:
             raise ValueError("Attention Global KV key/value write shapes must match")
-        if key.size(0) != state.keys.size(0) or key.size(1) != state.keys.size(1) or key.size(3) != state.keys.size(3):
+        if key.size(0) != state.keys.size(0) or key.size(1) != state.keys.size(1) or key.size(-1) != state.keys.size(-1):
             raise ValueError("Attention Global KV write shape does not match cache state")
-        if valid.shape != (key.size(0), key.size(2)):
-            raise ValueError("Attention Global KV valid mask must have shape [batch, slots]")
+        if state_rank == 5 and key.size(3) != state.keys.size(3):
+            raise ValueError("Attention Global KV write sequence length does not match cache state")
+        expected_valid = (key.size(0), key.size(2)) if state_rank == 4 else (key.size(0), key.size(2), key.size(3))
+        if valid.shape != expected_valid:
+            raise ValueError(f"Attention Global KV valid mask must have shape {expected_valid}")
         appended = AttentionGlobalKVState(
             keys=torch.cat([state.keys, key], dim=2),
             values=torch.cat([state.values, value], dim=2),
@@ -83,20 +105,20 @@ class CanonicalAttentionGlobalKVCache:
         return self._retain(appended)
 
     def _retain(self, state: AttentionGlobalKVState) -> AttentionGlobalKVState:
-        sink = state.keys[:, :, : self.sink_slots, :] if self.sink_slots else state.keys[:, :, :0, :]
-        sink_values = state.values[:, :, : self.sink_slots, :] if self.sink_slots else state.values[:, :, :0, :]
-        sink_valid = state.valid[:, : self.sink_slots] if self.sink_slots else state.valid[:, :0]
-        tail_keys = state.keys[:, :, self.sink_slots :, :]
-        tail_values = state.values[:, :, self.sink_slots :, :]
-        tail_valid = state.valid[:, self.sink_slots :]
+        sink = state.keys[:, :, : self.sink_slots, ...] if self.sink_slots else state.keys[:, :, :0, ...]
+        sink_values = state.values[:, :, : self.sink_slots, ...] if self.sink_slots else state.values[:, :, :0, ...]
+        sink_valid = state.valid[:, : self.sink_slots, ...] if self.sink_slots else state.valid[:, :0, ...]
+        tail_keys = state.keys[:, :, self.sink_slots :, ...]
+        tail_values = state.values[:, :, self.sink_slots :, ...]
+        tail_valid = state.valid[:, self.sink_slots :, ...]
         if self.window_slots:
-            window = tail_keys[:, :, -self.window_slots :, :]
-            window_values = tail_values[:, :, -self.window_slots :, :]
-            window_valid = tail_valid[:, -self.window_slots :]
+            window = tail_keys[:, :, -self.window_slots :, ...]
+            window_values = tail_values[:, :, -self.window_slots :, ...]
+            window_valid = tail_valid[:, -self.window_slots :, ...]
         else:
-            window = tail_keys[:, :, :0, :]
-            window_values = tail_values[:, :, :0, :]
-            window_valid = tail_valid[:, :0]
+            window = tail_keys[:, :, :0, ...]
+            window_values = tail_values[:, :, :0, ...]
+            window_valid = tail_valid[:, :0, ...]
         return AttentionGlobalKVState(
             keys=torch.cat([sink, window], dim=2),
             values=torch.cat([sink_values, window_values], dim=2),

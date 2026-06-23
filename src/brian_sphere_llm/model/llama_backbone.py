@@ -143,8 +143,14 @@ class CausalSelfAttention(ModuleBase):
         has_global = global_keys is not None and int(global_keys.size(2)) > 0
         if has_global:
             global_k, global_v = self._attention_global_read_tensors(global_keys, global_values, dtype=k.dtype)
-            all_k = torch.cat([global_k, k], dim=2)
-            all_v = torch.cat([global_v, v], dim=2)
+            if global_k.dim() == 5:
+                global_k_for_attention = self._flatten_token_global_kv(global_k)
+                global_v_for_attention = self._flatten_token_global_kv(global_v)
+            else:
+                global_k_for_attention = global_k
+                global_v_for_attention = global_v
+            all_k = torch.cat([global_k_for_attention, k], dim=2)
+            all_v = torch.cat([global_v_for_attention, v], dim=2)
             attn_mask = self._global_prefix_mask(global_valid, seq_len, dtype=q.dtype, device=q.device)
             y = F.scaled_dot_product_attention(
                 q,
@@ -175,7 +181,7 @@ class CausalSelfAttention(ModuleBase):
             assert self.global_key_write is not None
             assert self.global_value_write is not None
             return self.global_key_write(k), self.global_value_write(v)
-        return k.mean(dim=2), v.mean(dim=2)
+        return k, v
 
     def _attention_global_read_tensors(
         self,
@@ -192,6 +198,12 @@ class CausalSelfAttention(ModuleBase):
             return keys, values
         return global_keys.to(dtype=dtype), global_values.to(dtype=dtype)
 
+    def _flatten_token_global_kv(self, tensor: torch.Tensor) -> torch.Tensor:
+        if tensor.dim() != 5:
+            return tensor
+        batch, heads, slots, seq_len, dim = tensor.shape
+        return tensor.reshape(batch, heads, slots * seq_len, dim)
+
     def _global_prefix_mask(
         self,
         global_valid: torch.Tensor,
@@ -200,6 +212,8 @@ class CausalSelfAttention(ModuleBase):
         dtype: torch.dtype,
         device: torch.device,
     ) -> torch.Tensor:
+        if global_valid.dim() == 3:
+            return self._token_global_prefix_mask(global_valid, seq_len, dtype=dtype, device=device)
         slots = int(global_valid.size(1))
         local = torch.ones(seq_len, seq_len, dtype=torch.bool, device=device).tril()
         allowed = torch.cat(
@@ -214,6 +228,37 @@ class CausalSelfAttention(ModuleBase):
             mask[:, :, :, :slots] = self._global_logit_bias(dtype=dtype, device=device)
         return mask.masked_fill(~allowed, torch.finfo(dtype).min)
 
+    def _token_global_prefix_mask(
+        self,
+        global_valid: torch.Tensor,
+        seq_len: int,
+        *,
+        dtype: torch.dtype,
+        device: torch.device,
+    ) -> torch.Tensor:
+        batch = global_valid.size(0)
+        slots = int(global_valid.size(1))
+        global_seq_len = int(global_valid.size(2))
+        local = torch.ones(seq_len, seq_len, dtype=torch.bool, device=device).tril()
+        query_pos = torch.arange(seq_len, device=device)
+        global_pos = torch.arange(global_seq_len, device=device)
+        global_causal = global_pos.unsqueeze(0) <= query_pos.unsqueeze(1)
+        allowed_global = (
+            global_valid.to(device=device, dtype=torch.bool)[:, None, :, :]
+            & global_causal[None, :, None, :]
+        ).reshape(batch, seq_len, slots * global_seq_len)
+        allowed = torch.cat(
+            [
+                allowed_global[:, None, :, :],
+                local[None, None, :, :].expand(batch, 1, -1, -1),
+            ],
+            dim=-1,
+        )
+        mask = torch.zeros(batch, 1, seq_len, slots * global_seq_len + seq_len, dtype=dtype, device=device)
+        if slots:
+            mask[:, :, :, : slots * global_seq_len] = self._global_logit_bias(dtype=dtype, device=device)
+        return mask.masked_fill(~allowed, torch.finfo(dtype).min)
+
     def _global_attention_metrics(
         self,
         q: torch.Tensor,
@@ -226,19 +271,40 @@ class CausalSelfAttention(ModuleBase):
             return self._empty_global_attention_metrics(q)
         with torch.no_grad():
             query = q[:, :, -1:, :].detach()
-            global_scores = torch.matmul(query, global_keys.detach().transpose(-2, -1)) * (self.head_dim**-0.5)
-            global_scores = global_scores + self._global_logit_bias(dtype=global_scores.dtype, device=global_scores.device)
-            invalid = ~global_valid.to(device=global_scores.device, dtype=torch.bool)[:, None, None, :]
-            global_scores = global_scores.masked_fill(invalid, torch.finfo(global_scores.dtype).min)
+            if global_keys.dim() == 5:
+                global_scores = self._token_global_last_query_scores(query, global_keys.detach(), global_valid)
+                global_weights_shape = global_scores.shape
+                flat_global_scores = global_scores.reshape(
+                    global_scores.size(0),
+                    global_scores.size(1),
+                    global_scores.size(2),
+                    -1,
+                )
+            else:
+                global_scores = torch.matmul(query, global_keys.detach().transpose(-2, -1)) * (self.head_dim**-0.5)
+                global_scores = global_scores + self._global_logit_bias(dtype=global_scores.dtype, device=global_scores.device)
+                invalid = ~global_valid.to(device=global_scores.device, dtype=torch.bool)[:, None, None, :]
+                flat_global_scores = global_scores.masked_fill(invalid, torch.finfo(global_scores.dtype).min)
+                global_weights_shape = global_scores.shape
             local_scores = torch.matmul(query, local_k.detach().transpose(-2, -1)) * (self.head_dim**-0.5)
-            weights = torch.softmax(torch.cat([global_scores, local_scores], dim=-1), dim=-1)
-            global_weights = weights[..., :slots]
+            weights = torch.softmax(torch.cat([flat_global_scores, local_scores], dim=-1), dim=-1)
+            global_weights = weights[..., : flat_global_scores.size(-1)].reshape(global_weights_shape)
             sink_slots = int(getattr(self, "attention_global_sink_slots", 0))
             sink_count = max(0, min(sink_slots, slots))
-            sink_mass = global_weights[..., :sink_count].sum(dim=-1).mean() if sink_count else global_weights.new_zeros(())
-            window_mass = global_weights[..., sink_count:].sum(dim=-1).mean()
+            if global_weights.dim() == 5:
+                sink_mass = (
+                    global_weights[:, :, :, :sink_count, :].sum(dim=(-1, -2)).mean()
+                    if sink_count
+                    else global_weights.new_zeros(())
+                )
+                window_mass = global_weights[:, :, :, sink_count:, :].sum(dim=(-1, -2)).mean()
+                total_mass = global_weights.sum(dim=(-1, -2)).mean()
+            else:
+                sink_mass = global_weights[..., :sink_count].sum(dim=-1).mean() if sink_count else global_weights.new_zeros(())
+                window_mass = global_weights[..., sink_count:].sum(dim=-1).mean()
+                total_mass = global_weights.sum(dim=-1).mean()
             return {
-                "attention_global_kv_last_token_mass": global_weights.sum(dim=-1).mean(),
+                "attention_global_kv_last_token_mass": total_mass,
                 "attention_global_kv_sink_last_token_mass": sink_mass,
                 "attention_global_kv_window_last_token_mass": window_mass,
                 "attention_global_kv_logit_bias": self._global_logit_bias(
@@ -246,6 +312,22 @@ class CausalSelfAttention(ModuleBase):
                     device=global_weights.device,
                 ),
             }
+
+    def _token_global_last_query_scores(
+        self,
+        query: torch.Tensor,
+        global_keys: torch.Tensor,
+        global_valid: torch.Tensor,
+    ) -> torch.Tensor:
+        scores = torch.einsum("bhqd,bhsud->bhqsu", query, global_keys) * (self.head_dim**-0.5)
+        scores = scores + self._global_logit_bias(dtype=scores.dtype, device=scores.device)
+        seq_len = global_keys.size(3)
+        valid = global_valid.to(device=scores.device, dtype=torch.bool)[:, None, None, :, :]
+        query_pos = torch.full((1,), seq_len - 1, device=scores.device, dtype=torch.long)
+        global_pos = torch.arange(seq_len, device=scores.device)
+        causal = global_pos.unsqueeze(0) <= query_pos.unsqueeze(1)
+        allowed = valid & causal[None, None, :, None, :]
+        return scores.masked_fill(~allowed, torch.finfo(scores.dtype).min)
 
     def _empty_global_attention_metrics(self, x: torch.Tensor) -> dict[str, torch.Tensor]:
         zero = torch.zeros((), device=x.device, dtype=x.dtype)
