@@ -350,3 +350,102 @@ CUDA bf16 smoke：通过。`top1_fast` 可完成 forward/backward，梯度 finit
 - `top1_fast` 可以保留为安全实验后端。
 - 它不应作为正式训练默认。
 - 若继续追求 Global 训练速度，下一轮应直接实现 grouped-selected/fused path，并以 selected 当前结果作为 baseline；继续微调 top1_fast 没有足够收益。
+
+## 2026-06-24 追加：active-pair grouped-selected B 方案
+
+### 目标
+
+在 `top1_fast` 证明外层 scatter 不是主瓶颈后，继续实现真正的 B 路径：把 pure factorized Attention Global KV 的 top-1 selected route step 按真实 `(expert, batch)` active pair 分组执行，避免原 `selected` 路径中按 action 循环造成的 full-batch padding 浪费。
+
+### 实现
+
+新增配置：
+
+- `attention_global_route_execution: grouped_selected`
+
+新增正式配置：
+
+- `configs/model/brian_r125_sphere16_no_location_bias_attention_global_kv_pure_factorized_grouped_selected.yaml`
+- `configs/train/corrected_attention_global_kv_pure_factorized_grouped_selected_r125_5b_smoke.yaml`
+
+执行条件：
+
+- 只支持 `attention_global_kv_mode: pure_factorized`。
+- 只接管 top-1 route step。
+- 如果当前 step 有 top-2 / weighted fusion，自动回退到默认 `selected` 路径。
+- 默认配置仍为 `selected`，现有资产不受影响。
+
+核心变化：
+
+- 原 `selected`：按 action 循环，每个 action 的 selected-query attention 仍 padded 到 `[batch, max_selected]`。
+- 中间失败版 grouped：padded 到 `[expert, batch, max_selected]`，bs8 显存升到约 136.7GB，训练只有约 12.0k tok/s，已废弃。
+- 当前 active-pair grouped：只为真实非空 `(expert, batch)` pair 建 group，固定路由下 bs8 从 64 个 padded groups 降到 8 个 active groups。
+- Q/out/FFN 权重保持 expert 维度做 grouped einsum，不按 token 展开权重，避免 `N x hidden_dim x d_model` 级别显存爆炸。
+
+语义说明：
+
+- hidden 输出和 write key/value 的 valid payload 与 `selected` 路径等价。
+- write invalid slots 未定义，但由 `write_valid=false` 屏蔽，不进入 cache 语义。
+- `attention_global_kv_*` metrics 在 grouped 路径按 active `(expert,batch)` group 记录；它用于诊断日志，不参与 loss。
+
+### 验证
+
+```bash
+PYTHONPATH=src /home/dredvpn009/Flash_Storage/anaconda3/envs/brian-sphere/bin/python -m pytest tests/test_sparse_route_block_execution.py -q
+PYTHONPATH=src /home/dredvpn009/Flash_Storage/anaconda3/envs/brian-sphere/bin/python -m pytest tests/test_config_inventory.py -q
+PYTHONPATH=src /home/dredvpn009/Flash_Storage/anaconda3/envs/brian-sphere/bin/python -m compileall src/brian_sphere_llm
+```
+
+结果：
+
+```text
+23 passed
+21 passed
+compileall passed
+```
+
+新增测试：
+
+- `test_pure_factorized_attention_global_grouped_selected_matches_selected`
+
+CUDA bf16 backward smoke：
+
+```text
+grouped_selected_active_cuda_backward_ok
+```
+
+### B200 smoke 性能
+
+配置基础：
+
+- sequence length: 2048
+- max steps: 3
+- single GPU: GPU4
+- `weighted_fusion_ratio=0.0`
+- 对照使用同一代码状态下的默认 `selected` 与新 `grouped_selected`
+
+| Mode | Batch | Step 2 | Step 3 | Warmup 后均值 | Train peak memory | Eval speed | Eval peak memory | Val loss |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| selected | 8 | 16,334 tok/s | 17,177 tok/s | 16,756 tok/s | 52.3GB | 25,962 tok/s | 11.1GB | 100.075 |
+| grouped_selected | 8 | 44,836 tok/s | 45,667 tok/s | 45,252 tok/s | 30.2GB | 58,458 tok/s | 11.4GB | 100.090 |
+| selected | 16 | 14,579 tok/s | 14,910 tok/s | 14,744 tok/s | 123.4GB | 23,232 tok/s | 20.2GB | 99.161 |
+| grouped_selected | 16 | 50,780 tok/s | 51,475 tok/s | 51,128 tok/s | 58.4GB | 63,226 tok/s | 20.4GB | 99.166 |
+
+相对提升：
+
+- bs=8 train +170.1%，train peak memory -42.4%，eval +125.2%。
+- bs=16 train +246.8%，train peak memory -52.7%，eval +172.2%。
+
+### 结论
+
+`grouped_selected` 是目前第一个对 pure factorized Attention Global KV 明确有效的 B 加速路径：
+
+- 它同时提升吞吐并降低训练显存。
+- bs16 从 selected 的约 123GB 降到约 58GB，后续正式训练的 batch/并行余量明显更好。
+- 该路径仍是 opt-in，不改变默认 `selected` 行为。
+
+限制：
+
+- 目前只加速 top-1 step；top-2 weighted fusion 仍回退。
+- 后续如果要覆盖 router/top-2 后期训练，需要实现 grouped weighted-fusion scatter，或者在 route schedule 中明确 top-1/global fast path 的使用窗口。
+- 如果继续追求更高速度，下一步应考虑把 active-pair grouped attention/FFN 做 `torch.compile` 或 Triton fused kernel，而不是再回到全 `[expert,batch]` padding。
