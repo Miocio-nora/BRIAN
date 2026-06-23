@@ -1,6 +1,6 @@
 # Sparse Varlen Routing B 方案工作报告
 
-更新时间：2026-06-23 21:36 JST
+更新时间：2026-06-23 23:18 JST
 
 ## 目标
 
@@ -513,3 +513,26 @@ routedcompile 结论：
 - top-1 路径稳定提升：95.8k vs 93.0k，约 +3.0%，同时显存从 ~49.8GB/rank 降到 ~46.7GB/rank。
 - router1/top-2 路径 last20 提升明显：90.9k vs 79.4k，约 +14.4%；但 last50 和 final 波动较大，需要更长 run 判断稳态。
 - 目前最佳 top-1 smoke 距 150k 仍有明显距离；继续优化的主方向仍是减少或融合 `E x B x S x D` expert activation materialization。
+
+## 2026-06-23 Plan Execution Status / Safety Note
+
+本轮按“保证已有资产稳定，在此基础上尝试 B 方案，并充分验收”的原则处理：
+
+- `sparse_varlen` packed-varlen B 方案已经实现并验收，功能正确但吞吐失败。
+- `grouped_dense` 作为后续 PyTorch-level grouped expert B 方向已经实现并验收，当前最佳 top-1 smoke 达到约 95.8k tokens/s，router1/top-2 last20 达到约 90.9k tokens/s。
+- 所有正式保留路径仍通过 `tests/test_sparse_route_block_execution.py` 和 `tests/test_config_inventory.py`。
+- 当前实现通过独立 branch、独立 conda env、独立 smoke output root 隔离；没有改动 global-kv 正式配置和历史 checkpoint。
+
+### Rejected: `max-autotune` Compile Mode
+
+曾尝试在 `grouped_dense` routedcompile 上开启 `torch.compile(mode="max-autotune")`。结果在 step 50 eval 阶段触发 CUDAGraph 输出复用错误：
+
+```text
+RuntimeError: Error: accessing tensor output of CUDAGraphs that has been overwritten by a subsequent run
+```
+
+这个结果说明 `max-autotune` 不能作为默认或推荐实验路径进入主线；相关临时配置和环境开关已从工作树移除。报告保留该负结果，避免后续误把它当作可继承优化。
+
+### Current Decision
+
+当前 B 方案已经达成“可安全运行、可复现、比 full-sequence 有小幅加速”的阶段，但尚未达成 150k tokens/s 级别预期。继续追求大幅加速时，不应再优先堆叠 PyTorch compile/autotune 开关；更合理的下一步是新增独立 fused-kernel prototype，目标是减少 `E x B x S x D` activation materialization，并把 expert GEMM、attention、gather/fusion 的边界继续下沉。
