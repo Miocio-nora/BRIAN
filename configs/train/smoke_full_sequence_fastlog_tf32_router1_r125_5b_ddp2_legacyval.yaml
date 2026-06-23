@@ -1,0 +1,8 @@
+extends: smoke_full_sequence_fastlog_r125_5b_ddp2_legacyval.yaml
+run_name: smoke_full_sequence_fastlog_tf32_router1_r125_5b_ddp2_legacyval
+float32_matmul_precision: high
+routing:
+  schedule:
+  - max_step: 1000
+    router_probability: 1.0
+    lambda_route: 0.0

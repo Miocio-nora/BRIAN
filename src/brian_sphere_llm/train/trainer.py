@@ -95,6 +95,7 @@ def train_from_config(config_path: str | Path) -> Path:
         default=stage_mode != "baseline",
     )
     set_seed(seed)
+    _set_float32_matmul_precision(config)
 
     model_config_path = (config_path.parent / config["model_config"]).resolve()
     data_config_path = (config_path.parent / config["data_config"]).resolve()
@@ -525,6 +526,16 @@ def _routing_summary_due(config: Mapping[str, Any], *, global_step: int) -> bool
 def _set_activation_checkpointing(model: Any, enabled: bool) -> None:
     if hasattr(model, "activation_checkpointing"):
         model.activation_checkpointing = enabled
+
+
+def _set_float32_matmul_precision(config: Mapping[str, Any]) -> None:
+    value = config.get("float32_matmul_precision")
+    if value is None:
+        return
+    precision = str(value)
+    if precision not in {"highest", "high", "medium"}:
+        raise ValueError("float32_matmul_precision must be 'highest', 'high', or 'medium'.")
+    torch.set_float32_matmul_precision(precision)
 
 
 def _wrap_distributed_model(

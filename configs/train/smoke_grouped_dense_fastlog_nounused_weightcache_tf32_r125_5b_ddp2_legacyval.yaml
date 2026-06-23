@@ -1,0 +1,3 @@
+extends: smoke_grouped_dense_fastlog_nounused_weightcache_r125_5b_ddp2_legacyval.yaml
+run_name: smoke_grouped_dense_fastlog_nounused_weightcache_tf32_r125_5b_ddp2_legacyval
+float32_matmul_precision: high

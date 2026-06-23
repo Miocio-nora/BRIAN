@@ -1,0 +1,7 @@
+extends: smoke_grouped_dense_fastlog_nounused_weightcache_gather_tf32_r125_5b_ddp2_legacyval.yaml
+run_name: smoke_grouped_dense_fastlog_nounused_weightcache_gather_tf32_router1_r125_5b_ddp2_legacyval
+routing:
+  schedule:
+  - max_step: 1000
+    router_probability: 1.0
+    lambda_route: 0.0

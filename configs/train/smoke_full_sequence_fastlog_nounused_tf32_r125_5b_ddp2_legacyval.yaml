@@ -1,0 +1,3 @@
+extends: smoke_full_sequence_fastlog_nounused_r125_5b_ddp2_legacyval.yaml
+run_name: smoke_full_sequence_fastlog_nounused_tf32_r125_5b_ddp2_legacyval
+float32_matmul_precision: high

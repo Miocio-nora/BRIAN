@@ -1,6 +1,6 @@
 # Sparse Varlen Routing B 方案工作报告
 
-更新时间：2026-06-23 20:47 JST
+更新时间：2026-06-23 21:24 JST
 
 ## 目标
 
@@ -408,3 +408,85 @@ CUDA_VISIBLE_DEVICES=2,3 PYTHONPATH=src /home/dredvpn009/Flash_Storage/anaconda3
 - `ddp_find_unused_parameters=false` 只带来小幅提升：full-sequence last20 +0.9%，grouped-dense last20 +1.1%。
 - `grouped_dense` 在更公平的 fastlog/nounused 对照下仍低于 `full_sequence`：80.1k vs 88.3k，约慢 9.3%，且显存高约 16GB/rank。
 - 因此当前 B 方案实现正确、资产隔离良好，但没有达到预期加速。后续如果继续追求 route execution 加速，应该转向更底层 fused kernel 或重新定义训练 forward 语义，不能继续依赖 PyTorch op 级别拼装。
+
+## 2026-06-23 Grouped Dense Weight Cache / Gather 优化
+
+### 代码调整
+
+本轮继续优化 `route_block_execution: grouped_dense`，仍不改变 routing 语义和模型参数结构。
+
+新增优化：
+
+- 每次 model forward 只 stack 一次 route-block expert weights，在 16 个 route steps 内复用。
+- `grouped_dense` top-1 输出从逐 action mask/scatter 改为一次 `gather`。
+- top-2 weighted fusion 输出改为向量化 `gather + weighted sum`。
+- 新增 `float32_matmul_precision` train config 选项，默认不设置；smoke 里可显式设为 `high` 以启用 TF32 matmul policy。
+
+新增 smoke 配置：
+
+- `configs/train/smoke_grouped_dense_fastlog_nounused_weightcache_r125_5b_ddp2_legacyval.yaml`
+- `configs/train/smoke_grouped_dense_fastlog_nounused_weightcache_tf32_r125_5b_ddp2_legacyval.yaml`
+- `configs/train/smoke_grouped_dense_fastlog_nounused_weightcache_gather_r125_5b_ddp2_legacyval.yaml`
+- `configs/train/smoke_grouped_dense_fastlog_nounused_weightcache_gather_tf32_r125_5b_ddp2_legacyval.yaml`
+- `configs/train/smoke_full_sequence_fastlog_nounused_tf32_r125_5b_ddp2_legacyval.yaml`
+- `configs/train/smoke_full_sequence_fastlog_tf32_router1_r125_5b_ddp2_legacyval.yaml`
+- `configs/train/smoke_grouped_dense_fastlog_nounused_weightcache_gather_tf32_router1_r125_5b_ddp2_legacyval.yaml`
+
+### 测试
+
+```bash
+/home/dredvpn009/Flash_Storage/anaconda3/envs/brian-sparse-varlen/bin/python -m pytest tests/test_sparse_route_block_execution.py -q
+/home/dredvpn009/Flash_Storage/anaconda3/envs/brian-sparse-varlen/bin/python -m pytest tests/test_config_inventory.py -q
+```
+
+结果：
+
+```text
+16 passed
+21 passed
+```
+
+### Smoke 结果
+
+均使用空 GPU 2/3、`max_steps=100`、`batch_size=4`、`gradient_accumulation_steps=4`、`summary_interval=0`、`ddp_find_unused_parameters=false`。
+
+| Run | Last-20 tokens/s | Last-50 tokens/s | Final tokens/s | Final max memory/rank |
+| --- | ---: | ---: | ---: | ---: |
+| `smoke_full_sequence_fastlog_nounused_r125_5b_ddp2_legacyval` | 88,284.25 | 87,979.70 | 89,385 | ~28.0GB |
+| `smoke_full_sequence_fastlog_nounused_tf32_r125_5b_ddp2_legacyval` | 88,076.85 | 87,568.58 | 89,526 | ~28.0GB |
+| `smoke_grouped_dense_fastlog_nounused_r125_5b_ddp2_legacyval` | 80,093.90 | 80,104.20 | 79,847 | ~44.0GB |
+| `smoke_grouped_dense_fastlog_nounused_weightcache_r125_5b_ddp2_legacyval` | 83,401.50 | 83,573.12 | 83,162 | ~44.3GB |
+| `smoke_grouped_dense_fastlog_nounused_weightcache_tf32_r125_5b_ddp2_legacyval` | 84,154.50 | 84,189.24 | 83,862 | ~44.3GB |
+| `smoke_grouped_dense_fastlog_nounused_weightcache_gather_r125_5b_ddp2_legacyval` | 92,861.35 | 92,878.02 | 92,466 | ~49.8GB |
+| `smoke_grouped_dense_fastlog_nounused_weightcache_gather_tf32_r125_5b_ddp2_legacyval` | 93,026.25 | 93,116.70 | 92,353 | ~49.8GB |
+
+### 结论
+
+- 一次 forward 内复用 stacked expert weights 有效：grouped-dense last20 从 80.1k 提升到 83.4k，约 +4.1%。
+- TF32 policy 对 grouped-dense 有小幅帮助：83.4k 到 84.2k，约 +0.9%；对 full-sequence 没有稳定提升。
+- 向量化 gather/fusion 是本轮关键收益：83.4k 到 92.9k，约 +11.3%。
+- 当前最佳 grouped-dense smoke：93.0k last20，高于 full-sequence TF32 88.1k，约 +5.6%。
+- 代价：训练峰值显存从 full-sequence ~28.0GB/rank 增至 grouped gather ~49.8GB/rank。
+
+当前判断：
+
+- `grouped_dense` 已经从性能负结果推进到小幅正结果；这是目前唯一超过 dense full-sequence baseline 的 PyTorch-level route execution 后端。
+- 这仍不是 150k tokens/s 级别的预期加速；若最终目标仍是大幅加速，需要继续减少 `E x B x S x D` materialization 或转向 fused grouped GEMM/attention kernel。
+- 上表前 100 step 的 schedule 中 `router_probability=0`，因此主要覆盖 top-1/fixed target 路径；top-2 weighted fusion 另见下方 router1 smoke。
+
+### Router1 / Top-2 Weighted Fusion Smoke
+
+为了覆盖 schedule 后期 `router_probability>0` 的路径，新增 `router1` smoke：从 step 1 起强制 `router_probability=1.0`，触发 router/top-2 weighted fusion。
+
+注意：`full_sequence` 在自由路由/top-2 下可能不会每步触达所有 route block 参数，因此不能设置 `ddp_find_unused_parameters=false`。一次错误的 `full_sequence + router1 + nounused` 试跑在 step 51 后 DDP 挂住；正确 baseline 使用 `find_unused_parameters=true`。`grouped_dense` 每步计算全部 experts，因此仍可安全使用 `ddp_find_unused_parameters=false`。
+
+| Run | DDP unused check | Last-20 tokens/s | Last-50 tokens/s | Final tokens/s | Final max memory/rank |
+| --- | --- | ---: | ---: | ---: | ---: |
+| `smoke_full_sequence_fastlog_tf32_router1_r125_5b_ddp2_legacyval` | true | 64,640.70 | 64,599.00 | 64,063 | ~41.1GB |
+| `smoke_grouped_dense_fastlog_nounused_weightcache_gather_tf32_router1_r125_5b_ddp2_legacyval` | false | 79,427.50 | 78,969.18 | 79,853 | ~50.8GB |
+
+router1/top-2 结论：
+
+- grouped gather 在 top-2 weighted fusion 路径上领先更明显：79.4k vs 64.6k，约 +22.9%。
+- `grouped_dense` 的优势来自每 step 一次性计算全部 experts 并向量化 gather/fusion；full-sequence 在自由路由下只能按实际被选 block 逐 action 执行，DDP 还必须开启 unused-parameter 检查。
+- 代价仍是显存：router1 grouped gather 约 50.8GB/rank，full-sequence router1 约 41.1GB/rank。

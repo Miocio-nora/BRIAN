@@ -389,6 +389,9 @@ class BrianRouteCore(ModuleBase):
         router_space_records: list[dict[str, Any]] | None = [] if collect_router_space else None
         last_internal_action = torch.full(route_shape, -1, dtype=torch.long, device=input_ids.device)
         same_internal_run_length = torch.zeros(route_shape, dtype=torch.long, device=input_ids.device)
+        grouped_route_weights = (
+            self._grouped_route_block_weights() if self._grouped_dense_route_block_execution_enabled() else None
+        )
 
         if parallel_active:
             hidden, position, route_info = self._run_parallel_route(hidden, position, route_info, hard_exit, global_state)
@@ -541,7 +544,15 @@ class BrianRouteCore(ModuleBase):
                     route_info,
                 )
             else:
-                hidden = self._apply_routed_blocks(hidden, position, selected, top_actions, top_weights, use_weighted_fusion)
+                hidden = self._apply_routed_blocks(
+                    hidden,
+                    position,
+                    selected,
+                    top_actions,
+                    top_weights,
+                    use_weighted_fusion,
+                    grouped_route_weights=grouped_route_weights,
+                )
                 write_key = write_value = write_valid = None
             if hard_exit:
                 exited = exited | exit_now
@@ -1039,15 +1050,14 @@ class BrianRouteCore(ModuleBase):
         hidden: torch.Tensor,
         position: torch.Tensor,
         selected: torch.Tensor,
+        *,
+        grouped_route_weights: tuple[Any, ...] | None = None,
     ) -> torch.Tensor:
-        next_hidden = hidden.clone()
         block_position = self._block_position(position)
-        action_outputs = self._grouped_route_blocks_forward(hidden, block_position)
-        for action in range(self.config.route_pool_blocks):
-            mask = selected == action
-            if torch.any(mask):
-                next_hidden[mask] = action_outputs[action][mask]
-        return next_hidden
+        action_outputs = self._grouped_route_blocks_forward(hidden, block_position, grouped_route_weights)
+        selected_output = self._gather_grouped_action_outputs(action_outputs, selected)
+        internal = selected != self.out_action
+        return torch.where(internal.unsqueeze(-1), selected_output, hidden)
 
     def _top_k_for_step(self, step: int) -> int:
         value = self.config.top_k if step <= 0 else self.config.later_top_k
@@ -1077,6 +1087,8 @@ class BrianRouteCore(ModuleBase):
         top_actions: torch.Tensor,
         top_weights: torch.Tensor,
         use_weighted_fusion: torch.Tensor,
+        *,
+        grouped_route_weights: tuple[Any, ...] | None = None,
     ) -> torch.Tensor:
         if selected.dim() == 2:
             if self._grouped_dense_route_block_execution_enabled():
@@ -1087,6 +1099,7 @@ class BrianRouteCore(ModuleBase):
                     top_actions,
                     top_weights,
                     use_weighted_fusion,
+                    grouped_route_weights=grouped_route_weights,
                 )
             if self._sparse_route_block_execution_enabled():
                 return self._apply_routed_blocks_sparse(
@@ -1163,74 +1176,108 @@ class BrianRouteCore(ModuleBase):
         top_actions: torch.Tensor,
         top_weights: torch.Tensor,
         use_weighted_fusion: torch.Tensor,
+        *,
+        grouped_route_weights: tuple[Any, ...] | None = None,
     ) -> torch.Tensor:
-        next_hidden = hidden.clone()
         block_position = self._block_position(position)
-        action_outputs = self._grouped_route_blocks_forward(hidden, block_position)
-        for action in range(self.config.route_pool_blocks):
-            top1_mask = (selected == action) & ~use_weighted_fusion
-            if torch.any(top1_mask):
-                next_hidden[top1_mask] = action_outputs[action][top1_mask]
+        action_outputs = self._grouped_route_blocks_forward(hidden, block_position, grouped_route_weights)
+        selected_output = self._gather_grouped_action_outputs(action_outputs, selected)
+        base = torch.where((selected != self.out_action).unsqueeze(-1), selected_output, hidden)
+        if not torch.any(use_weighted_fusion):
+            return base
 
-        if torch.any(use_weighted_fusion):
-            accum = torch.zeros_like(hidden)
-            weight_sum = torch.zeros_like(selected, dtype=hidden.dtype)
-            for action in range(self.config.route_pool_blocks):
-                action_output = action_outputs[action]
-                for rank in range(top_actions.size(-1)):
-                    mask = use_weighted_fusion & (top_actions[..., rank] == action)
-                    if not torch.any(mask):
-                        continue
-                    weight = top_weights[..., rank].to(hidden.dtype) * mask.to(hidden.dtype)
-                    accum = accum + action_output * weight.unsqueeze(-1)
-                    weight_sum = weight_sum + weight
-            weighted_mask = use_weighted_fusion & (weight_sum > 0)
-            if torch.any(weighted_mask):
-                weighted_hidden = accum / weight_sum.clamp_min(1e-9).unsqueeze(-1)
-                next_hidden = torch.where(weighted_mask.unsqueeze(-1), weighted_hidden, next_hidden)
-            fallback_mask = use_weighted_fusion & (weight_sum <= 0)
-            if torch.any(fallback_mask):
-                fallback_hidden = self._apply_selected_blocks_grouped_dense(hidden, position, selected)
-                next_hidden = torch.where(fallback_mask.unsqueeze(-1), fallback_hidden, next_hidden)
-        return next_hidden
+        top_outputs = self._gather_grouped_topk_outputs(action_outputs, top_actions)
+        internal = top_actions != self.out_action
+        weights = top_weights.to(hidden.dtype) * internal.to(hidden.dtype)
+        weight_sum = weights.sum(dim=-1)
+        weighted_hidden = (top_outputs * weights.unsqueeze(-1)).sum(dim=-2) / weight_sum.clamp_min(1e-9).unsqueeze(-1)
+        weighted_mask = use_weighted_fusion & (weight_sum > 0)
+        return torch.where(weighted_mask.unsqueeze(-1), weighted_hidden, base)
 
-    def _grouped_route_blocks_forward(self, hidden: torch.Tensor, block_position: torch.Tensor) -> torch.Tensor:
+    def _gather_grouped_action_outputs(self, action_outputs: torch.Tensor, actions: torch.Tensor) -> torch.Tensor:
+        outputs_by_token = action_outputs.permute(1, 2, 0, 3)
+        safe_actions = actions.clamp(min=0, max=self.config.route_pool_blocks - 1)
+        gather_index = safe_actions.unsqueeze(-1).unsqueeze(-1).expand(*safe_actions.shape, 1, action_outputs.size(-1))
+        return outputs_by_token.gather(dim=2, index=gather_index).squeeze(2)
+
+    def _gather_grouped_topk_outputs(self, action_outputs: torch.Tensor, top_actions: torch.Tensor) -> torch.Tensor:
+        outputs_by_token = action_outputs.permute(1, 2, 0, 3)
+        safe_actions = top_actions.clamp(min=0, max=self.config.route_pool_blocks - 1)
+        gather_index = safe_actions.unsqueeze(-1).expand(*safe_actions.shape, action_outputs.size(-1))
+        return outputs_by_token.gather(dim=2, index=gather_index)
+
+    def _grouped_route_blocks_forward(
+        self,
+        hidden: torch.Tensor,
+        block_position: torch.Tensor,
+        grouped_route_weights: tuple[Any, ...] | None = None,
+    ) -> torch.Tensor:
         if hidden.is_cuda:
             if self._compiled_grouped_route_blocks_forward is None:
                 self._compiled_grouped_route_blocks_forward = torch.compile(
                     self._grouped_route_blocks_forward_eager,
                     dynamic=False,
                 )
-            return self._compiled_grouped_route_blocks_forward(hidden, block_position)
-        return self._grouped_route_blocks_forward_eager(hidden, block_position)
+            return self._compiled_grouped_route_blocks_forward(hidden, block_position, grouped_route_weights)
+        return self._grouped_route_blocks_forward_eager(hidden, block_position, grouped_route_weights)
 
-    def _grouped_route_blocks_forward_eager(
-        self,
-        hidden: torch.Tensor,
-        block_position: torch.Tensor,
-    ) -> torch.Tensor:
+    def _grouped_route_block_weights(self) -> tuple[Any, ...]:
         if not self.route_blocks:
-            return hidden.new_empty((0, *hidden.shape))
+            return tuple()
         first = self.route_blocks[0]
         if any(block.position_injection != first.position_injection for block in self.route_blocks):
             raise ValueError("grouped_dense requires route blocks to share position injection mode.")
         if any(float(block.block.attn.dropout) != 0.0 for block in self.route_blocks):
             raise ValueError("grouped_dense route block execution currently requires attention dropout == 0.")
+        adapter_weight = (
+            None
+            if first.position_injection == "direct_add"
+            else torch.stack([block.position_adapter.weight for block in self.route_blocks])
+        )
+        return (
+            adapter_weight,
+            torch.stack([block.block.attn_norm.weight for block in self.route_blocks]),
+            torch.stack([block.block.attn.qkv.weight for block in self.route_blocks]),
+            torch.stack([block.block.attn.out.weight for block in self.route_blocks]),
+            torch.stack([block.block.ffn_norm.weight for block in self.route_blocks]),
+            torch.stack([block.block.ffn.w1.weight for block in self.route_blocks]),
+            torch.stack([block.block.ffn.w2.weight for block in self.route_blocks]),
+            torch.stack([block.block.ffn.w3.weight for block in self.route_blocks]),
+        )
+
+    def _grouped_route_blocks_forward_eager(
+        self,
+        hidden: torch.Tensor,
+        block_position: torch.Tensor,
+        grouped_route_weights: tuple[Any, ...] | None = None,
+    ) -> torch.Tensor:
+        if not self.route_blocks:
+            return hidden.new_empty((0, *hidden.shape))
+        first = self.route_blocks[0]
+        weights = grouped_route_weights if grouped_route_weights is not None else self._grouped_route_block_weights()
+        (
+            adapter_weight,
+            attn_norm_weight,
+            qkv_weight,
+            out_weight,
+            ffn_norm_weight,
+            w1,
+            w2,
+            w3,
+        ) = weights
         num_blocks = len(self.route_blocks)
         batch, seq_len, dim = hidden.shape
         if first.position_injection == "direct_add":
             bias = block_position.unsqueeze(0).expand(num_blocks, -1, -1, -1)
         else:
-            adapter_weight = torch.stack([block.position_adapter.weight for block in self.route_blocks])
+            if adapter_weight is None:
+                raise ValueError("grouped_dense adapter weights are missing.")
             bias = torch.einsum("bsp,edp->ebsd", block_position, adapter_weight)
         x = hidden.unsqueeze(0) + bias
 
-        attn_norm_weight = torch.stack([block.block.attn_norm.weight for block in self.route_blocks]).view(
-            num_blocks, 1, 1, dim
-        )
+        attn_norm_weight = attn_norm_weight.view(num_blocks, 1, 1, dim)
         attn_norm_eps = first.block.attn_norm.eps
         attn_input = attn_norm_weight * torch.rsqrt(x.pow(2).mean(dim=-1, keepdim=True) + attn_norm_eps) * x
-        qkv_weight = torch.stack([block.block.attn.qkv.weight for block in self.route_blocks])
         qkv = torch.einsum("ebsd,eod->ebso", attn_input, qkv_weight)
         q, k, v = qkv.chunk(3, dim=-1)
         n_heads = first.block.attn.n_heads
@@ -1248,17 +1295,11 @@ class BrianRouteCore(ModuleBase):
         y = F.scaled_dot_product_attention(q, k, v, is_causal=True, dropout_p=0.0)
         y = y.reshape(num_blocks, batch, n_heads, seq_len, head_dim).permute(0, 1, 3, 2, 4)
         y = y.reshape(num_blocks, batch, seq_len, dim)
-        out_weight = torch.stack([block.block.attn.out.weight for block in self.route_blocks])
         x = x + torch.einsum("ebsd,eod->ebso", y, out_weight)
 
-        ffn_norm_weight = torch.stack([block.block.ffn_norm.weight for block in self.route_blocks]).view(
-            num_blocks, 1, 1, dim
-        )
+        ffn_norm_weight = ffn_norm_weight.view(num_blocks, 1, 1, dim)
         ffn_norm_eps = first.block.ffn_norm.eps
         ffn_input = ffn_norm_weight * torch.rsqrt(x.pow(2).mean(dim=-1, keepdim=True) + ffn_norm_eps) * x
-        w1 = torch.stack([block.block.ffn.w1.weight for block in self.route_blocks])
-        w2 = torch.stack([block.block.ffn.w2.weight for block in self.route_blocks])
-        w3 = torch.stack([block.block.ffn.w3.weight for block in self.route_blocks])
         gate = torch.einsum("ebsd,ehd->ebsh", ffn_input, w1)
         up = torch.einsum("ebsd,ehd->ebsh", ffn_input, w2)
         ffn_hidden = F.silu(gate) * up
