@@ -154,7 +154,7 @@ def train_from_config(config_path: str | Path) -> Path:
     )
     val_loader = build_dataloader(
         tokenized_dir=tokenized_dir,
-        split="val",
+        split=str(config.get("eval_split", "val")),
         batch_size=batch_size,
         shuffle=False,
     )
@@ -1164,7 +1164,7 @@ def evaluate(
     summary_accumulator: dict[str, list[float]] = {}
     token_count = 0
     batch_count = 0
-    max_batches = min(8, len(val_loader))
+    max_batches = min(_int_config(config, "eval_max_batches", default=8, minimum=1), len(val_loader))
     if device.type == "cuda":
         torch.cuda.reset_peak_memory_stats(device)
     _synchronize_if_cuda(device)

@@ -1,0 +1,27 @@
+extends: corrected_attention_global_kv_token_compressed_r125_5b_balanced_slow_noise.yaml
+run_name: corrected_attention_global_kv_token_compressed_r125_5b_balanced_slow_noise_ddp2_legacyval
+batch_size: 16
+eval_split: val_legacy
+checkpoint_benchmarks:
+  label: s_balanced_attention_global_kv_token_compressed_slow_noise_ddp2_legacyval
+post_train_benchmarks:
+  label: s_balanced_attention_global_kv_token_compressed_slow_noise_ddp2_legacyval
+wandb:
+  group: corrected_attention_global_kv_token_compressed_r125_5b_balanced_ddp2_legacyval
+  tags:
+  - corrected_package_a
+  - attention_global_kv
+  - token_compressed_attention_global_kv
+  - r125
+  - 5b
+  - balanced_data
+  - legacy_val
+  - ddp2_global_batch32
+  - slow_noise
+  - random_route_override
+  - self_recur_cap
+  - selected_balance_002
+  - coverage_floor
+  - strong_length
+  - no_location_bias
+  - no_route_imitation
