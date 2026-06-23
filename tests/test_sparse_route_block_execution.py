@@ -304,6 +304,212 @@ def test_latest_attention_global_kv_cache_preserves_invalid_tokens() -> None:
     assert torch.allclose(state.values[0, 0, 0], torch.tensor([[11.0, 11.0], [18.0, 18.0], [13.0, 13.0]]))
 
 
+def _pure_factorized_cfg() -> BrianRouteConfig:
+    return BrianRouteConfig(
+        base=BaselineConfig(vocab_size=64, context_length=8, layers=5, d_model=64, n_heads=4),
+        pre_blocks=1,
+        route_pool_blocks=3,
+        post_blocks=1,
+        block_position_dim=8,
+        max_route_steps=2,
+        attention_global_kv=True,
+        attention_global_kv_mode="pure_factorized",
+        attention_global_code_dim=12,
+        attention_global_sink_slots=0,
+        attention_global_window_slots=0,
+        attention_global_logit_bias_init=-2.0,
+    )
+
+
+def _pure_factorized_state(model: BrianRouteCore, batch_size: int, seq_len: int):
+    assert model.attention_global_cache is not None
+    state = model.attention_global_cache.empty(
+        batch_size=batch_size,
+        n_heads=model._attention_global_cache_heads(),
+        head_dim=model._attention_global_cache_dim(),
+        device=torch.device("cpu"),
+        dtype=torch.float32,
+        sequence_length=seq_len,
+    )
+    key = torch.randn(batch_size, 1, 1, seq_len, model._attention_global_cache_dim())
+    value = torch.randn_like(key)
+    valid = torch.ones(batch_size, 1, seq_len, dtype=torch.bool)
+    return model.attention_global_cache.write(state, key, value, valid)
+
+
+def _attention_global_route_info() -> dict[str, list[torch.Tensor]]:
+    return {
+        "attention_global_kv_logit_bias": [],
+        "attention_global_kv_last_token_mass": [],
+        "attention_global_kv_sink_last_token_mass": [],
+        "attention_global_kv_window_last_token_mass": [],
+    }
+
+
+def _pure_factorized_full_sequence_reference(
+    model: BrianRouteCore,
+    hidden: torch.Tensor,
+    position: torch.Tensor,
+    selected: torch.Tensor,
+    top_actions: torch.Tensor,
+    top_weights: torch.Tensor,
+    use_weighted_fusion: torch.Tensor,
+    attention_global_state,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    next_hidden = hidden.clone()
+    write_key, write_value, write_valid = model._empty_attention_global_write(hidden)
+    block_position = model._block_position(position)
+    for action, block in enumerate(model.route_blocks):
+        top1_mask = (selected == action) & ~use_weighted_fusion
+        if torch.any(top1_mask):
+            output, key_summary, value_summary, _ = block(
+                hidden,
+                block_position,
+                attention_global_state,
+                return_attention_kv=True,
+            )
+            key_write = model._attention_global_write_tensor(key_summary).to(write_key.dtype)
+            value_write = model._attention_global_write_tensor(value_summary).to(write_value.dtype)
+            token_mask = top1_mask.unsqueeze(1).unsqueeze(2).unsqueeze(-1)
+            next_hidden = torch.where(top1_mask.unsqueeze(-1), output, next_hidden)
+            write_key = torch.where(token_mask, key_write, write_key)
+            write_value = torch.where(token_mask, value_write, write_value)
+            write_valid = write_valid | top1_mask.unsqueeze(1)
+
+    if torch.any(use_weighted_fusion):
+        accum = torch.zeros_like(hidden)
+        key_accum = torch.zeros_like(write_key)
+        value_accum = torch.zeros_like(write_value)
+        weight_sum = torch.zeros_like(selected, dtype=hidden.dtype)
+        for action, block in enumerate(model.route_blocks):
+            action_output = None
+            key_write = None
+            value_write = None
+            for rank in range(top_actions.size(-1)):
+                mask = use_weighted_fusion & (top_actions[..., rank] == action)
+                if not torch.any(mask):
+                    continue
+                if action_output is None:
+                    action_output, key_summary, value_summary, _ = block(
+                        hidden,
+                        block_position,
+                        attention_global_state,
+                        return_attention_kv=True,
+                    )
+                    key_write = model._attention_global_write_tensor(key_summary).to(key_accum.dtype)
+                    value_write = model._attention_global_write_tensor(value_summary).to(value_accum.dtype)
+                weight = top_weights[..., rank].to(hidden.dtype) * mask.to(hidden.dtype)
+                accum = accum + action_output * weight.unsqueeze(-1)
+                key_weight = weight.unsqueeze(1).unsqueeze(2).unsqueeze(-1)
+                assert key_write is not None and value_write is not None
+                key_accum = key_accum + key_write * key_weight
+                value_accum = value_accum + value_write * key_weight
+                weight_sum = weight_sum + weight
+        weighted_mask = use_weighted_fusion & (weight_sum > 0)
+        if torch.any(weighted_mask):
+            denom = weight_sum.clamp_min(1e-9)
+            weighted_hidden = accum / denom.unsqueeze(-1)
+            write_denom = denom.unsqueeze(1).unsqueeze(2).unsqueeze(-1)
+            weighted_key = key_accum / write_denom
+            weighted_value = value_accum / write_denom
+            token_mask = weighted_mask.unsqueeze(1).unsqueeze(2).unsqueeze(-1)
+            next_hidden = torch.where(weighted_mask.unsqueeze(-1), weighted_hidden, next_hidden)
+            write_key = torch.where(token_mask, weighted_key, write_key)
+            write_value = torch.where(token_mask, weighted_value, write_value)
+            write_valid = write_valid | weighted_mask.unsqueeze(1)
+    return next_hidden, write_key, write_value, write_valid
+
+
+def test_pure_factorized_attention_global_selected_matches_full_sequence_reference() -> None:
+    torch.manual_seed(43)
+    model = BrianRouteCore(_pure_factorized_cfg()).eval()
+    hidden = torch.randn(2, 6, 64)
+    position = _position(model, 2, 6)
+    state = _pure_factorized_state(model, 2, 6)
+    selected = torch.tensor(
+        [
+            [0, 1, 2, model.out_action, 0, 1],
+            [2, 0, model.out_action, 1, 2, 0],
+        ],
+        dtype=torch.long,
+    )
+    top_actions = selected.unsqueeze(-1)
+    top_weights = torch.ones(*selected.shape, 1)
+    use_weighted_fusion = torch.zeros_like(selected, dtype=torch.bool)
+
+    with torch.no_grad():
+        expected = _pure_factorized_full_sequence_reference(
+            model, hidden, position, selected, top_actions, top_weights, use_weighted_fusion, state
+        )
+        actual = model._apply_routed_blocks_with_attention_global(
+            hidden,
+            position,
+            selected,
+            top_actions,
+            top_weights,
+            use_weighted_fusion,
+            state,
+            _attention_global_route_info(),
+        )
+
+    for actual_tensor, expected_tensor in zip(actual, expected):
+        assert torch.allclose(actual_tensor, expected_tensor, atol=1e-5, rtol=1e-5)
+
+
+def test_pure_factorized_attention_global_selected_matches_full_sequence_weighted_fusion() -> None:
+    torch.manual_seed(47)
+    model = BrianRouteCore(_pure_factorized_cfg()).eval()
+    hidden = torch.randn(2, 6, 64)
+    position = _position(model, 2, 6)
+    state = _pure_factorized_state(model, 2, 6)
+    selected = torch.tensor(
+        [
+            [0, 1, 2, 0, 1, 2],
+            [2, 0, 1, 2, 0, 1],
+        ],
+        dtype=torch.long,
+    )
+    top_actions = torch.tensor(
+        [
+            [[0, 1], [1, 2], [2, 0], [0, model.out_action], [1, 0], [2, 1]],
+            [[2, 1], [0, 2], [1, model.out_action], [2, 0], [0, 1], [1, 2]],
+        ],
+        dtype=torch.long,
+    )
+    top_weights = torch.tensor(
+        [
+            [[0.7, 0.3], [0.6, 0.4], [0.5, 0.5], [1.0, 0.0], [0.8, 0.2], [0.55, 0.45]],
+            [[0.65, 0.35], [0.9, 0.1], [1.0, 0.0], [0.75, 0.25], [0.6, 0.4], [0.5, 0.5]],
+        ],
+        dtype=hidden.dtype,
+    )
+    use_weighted_fusion = torch.tensor(
+        [
+            [True, False, True, True, False, True],
+            [True, True, True, False, True, False],
+        ],
+        dtype=torch.bool,
+    )
+
+    with torch.no_grad():
+        expected = _pure_factorized_full_sequence_reference(
+            model, hidden, position, selected, top_actions, top_weights, use_weighted_fusion, state
+        )
+        actual = model._apply_routed_blocks_with_attention_global(
+            hidden,
+            position,
+            selected,
+            top_actions,
+            top_weights,
+            use_weighted_fusion,
+            state,
+            _attention_global_route_info(),
+        )
+
+    for actual_tensor, expected_tensor in zip(actual, expected):
+        assert torch.allclose(actual_tensor, expected_tensor, atol=1e-5, rtol=1e-5)
+
+
 def test_summarize_routing_false_keeps_loss_fields_without_diagnostics() -> None:
     torch.manual_seed(39)
     cfg = BrianRouteConfig(

@@ -54,6 +54,23 @@ class RouteBlock(ModuleBase):
         bias = self._position_bias(position)
         return self.block.forward_selected_varlen(hidden + bias, query_mask)
 
+    def forward_selected_attention_global(
+        self,
+        hidden: torch.Tensor,
+        position: torch.Tensor,
+        query_mask: torch.Tensor,
+        attention_global_state: object | None = None,
+        *,
+        return_attention_kv: bool = False,
+    ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor, torch.Tensor, dict[str, torch.Tensor]]:
+        bias = self._position_bias(position)
+        return self.block.forward_selected_attention_global(
+            hidden + bias,
+            query_mask,
+            attention_global_state,
+            return_attention_kv=return_attention_kv,
+        )
+
     def forward_selected_dense(
         self,
         hidden: torch.Tensor,

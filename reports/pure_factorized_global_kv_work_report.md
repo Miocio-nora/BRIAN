@@ -1,6 +1,6 @@
 # Pure Factorized Global KV 工作报告
 
-更新时间：2026-06-24 01:58 JST
+更新时间：2026-06-24 02:27 JST
 
 ## 目标
 
@@ -139,3 +139,93 @@ CUDA_VISIBLE_DEVICES=4 PYTHONPATH=src /home/dredvpn009/Flash_Storage/anaconda3/e
 2. 加一个 short-run 1k/5k 配置，先看 loss 是否能下降、global mass 是否健康。
 3. 如果 full/incremental mismatch 明显，再决定是否改 chunkwise/token-scan training。
 4. 如果 loss 能下降，再做 public S600 checkpoint sweep，避免只看 val loss。
+
+## 2026-06-24 追加：selected-query 执行优化
+
+### 动机
+
+初版 pure factorized global 在 tokenwise routing 下仍然沿用 attention global 的 full-sequence block 执行：
+
+- 某个 block 只要被任意 token 选中，就对完整 `[B, S]` sequence 计算 attention/FFN。
+- 之后再用 token mask 取出 routed token 的输出和 write KV。
+- 这和非 global sparse 优化前的问题一致，会保留大量对 loss 没贡献的 activation。
+
+实测初版：
+
+| Batch | Result | Train speed after warmup | Train peak memory |
+| --- | --- | ---: | ---: |
+| 1 | pass | ~20.5k tokens/s | ~5.2GB |
+| 8 | pass | ~17.6k tokens/s | ~90-93GB |
+| 16 | OOM | n/a | B200 183GB 打满 |
+
+### 实现
+
+新增 pure factorized 专用 selected-query path：
+
+- `CausalSelfAttention.forward_selected_attention_global`
+- `TransformerBlock.forward_selected_attention_global`
+- `RouteBlock.forward_selected_attention_global`
+- `BrianRouteCore._apply_routed_blocks_with_pure_factorized_attention_global_selected`
+
+语义保持：
+
+- Q/attention/FFN 只对当前 block 实际 routed token 计算。
+- 当前 step 的 compressed key/value code 仍对完整 sequence 计算，作为 selected query 的 causal KV pool。
+- previous latest global pool 的 causal mask 保持不变。
+- top-1 与 top-2 weighted fusion 均走 selected path。
+- `attention_global_kv_last_token_mass` 仍按旧 full-sequence 口径计算 last-token metric，但只做轻量 metric 计算，不回退到 full attention。
+
+### 等价性验证
+
+新增测试：
+
+- `test_pure_factorized_attention_global_selected_matches_full_sequence_reference`
+- `test_pure_factorized_attention_global_selected_matches_full_sequence_weighted_fusion`
+
+验证内容：
+
+- 同一权重、同一 hidden/position、同一 attention global state 下，新 selected-query path 与旧 full-sequence reference 的 `hidden/write_key/write_value/write_valid` 逐项 `allclose(atol=1e-5, rtol=1e-5)`。
+- 覆盖 top-1 和 top-2 weighted fusion。
+
+额外验证：
+
+```bash
+PYTHONPATH=src /home/dredvpn009/Flash_Storage/anaconda3/envs/brian-sphere/bin/python -m pytest tests/test_sparse_route_block_execution.py -q
+PYTHONPATH=src /home/dredvpn009/Flash_Storage/anaconda3/envs/brian-sphere/bin/python -m pytest tests/test_config_inventory.py -q
+PYTHONPATH=src /home/dredvpn009/Flash_Storage/anaconda3/envs/brian-sphere/bin/python -m compileall -q src/brian_sphere_llm/model
+```
+
+结果：
+
+```text
+21 passed
+21 passed
+compileall passed
+```
+
+CUDA bf16 backward smoke：
+
+```text
+pure_factorized_cuda_backward_ok
+```
+
+### B200 smoke 性能
+
+配置基础：
+
+- `configs/train/corrected_attention_global_kv_pure_factorized_r125_5b_smoke.yaml`
+- sequence length: 2048
+- max steps: 3
+- single GPU: GPU4
+- route mode: 当前 smoke 下 `weighted_fusion_ratio=0.0`，因此主要测 top-1 tokenwise routing。
+
+| Batch | Result | Step 2 | Step 3 | Warmup 后均值 | Train peak memory | Eval speed | Eval peak memory |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 8 | pass | 16,298 tok/s | 17,167 tok/s | 16,733 tok/s | 53.6GB | 25,931 tok/s | 11.4GB |
+| 16 | pass | 14,586 tok/s | 14,954 tok/s | 14,770 tok/s | 126.4GB | 23,245 tok/s | 20.6GB |
+
+结论：
+
+- 显存优化有效：bs=8 从约 90-93GB 降到约 52-54GB；bs=16 从 OOM 变为可运行，峰值约 126GB。
+- 速度没有明显改善：selected-query 减少了无用 activation 和 mask 尺寸，但引入 per-block gather/scatter/index_add，小 batch/短 smoke 下吞吐仍在 15-17k tokens/s 区间。
+- 当前版本可以作为 bs=16 的可训练原型；若要进一步提速，下一步应优先做 route-step/block 级 compile 或 activation checkpointing/自定义 fused scatter，而不是再改变 global KV 语义。

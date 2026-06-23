@@ -311,6 +311,104 @@ class CausalSelfAttention(ModuleBase):
             return output, current_key_code.unsqueeze(1), current_value_code.unsqueeze(1), metrics
         return output
 
+    def forward_selected_attention_global(
+        self,
+        x: torch.Tensor,
+        query_mask: torch.Tensor,
+        attention_global_state: Any | None = None,
+        *,
+        return_attention_kv: bool = False,
+    ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor, torch.Tensor, dict[str, torch.Tensor]]:
+        if self.attention_global_kv_mode != "pure_factorized":
+            raise ValueError("selected attention global execution currently supports only pure_factorized mode.")
+        batch, seq_len, dim = x.shape
+        if query_mask.shape != (batch, seq_len):
+            raise ValueError("query_mask must have shape [batch, seq_len].")
+        batch_indices, query_positions = torch.where(query_mask)
+        if batch_indices.numel() == 0:
+            empty = x.new_empty((0, dim))
+            if return_attention_kv:
+                empty_code = x.new_empty((0, self.attention_global_code_dim))
+                return empty, empty_code, empty_code, self._empty_global_attention_metrics(x)
+            return empty
+
+        assert self.global_key_write is not None
+        assert self.global_value_write is not None
+        assert self.global_key_head_read is not None
+        assert self.global_value_head_read is not None
+
+        q_weight = self.qkv.weight[:dim, :]
+        q = F.linear(x[query_mask], q_weight)
+        q = q.view(-1, self.n_heads, self.head_dim)
+        q_code = torch.einsum("nhd,hdc->nhc", q, self.global_key_head_read.to(dtype=q.dtype))
+
+        current_key_code = self.global_key_write(x)
+        current_value_code = self.global_value_write(x)
+        global_keys = getattr(attention_global_state, "keys", None)
+        global_values = getattr(attention_global_state, "values", None)
+        global_valid = getattr(attention_global_state, "valid", None)
+
+        counts = query_mask.sum(dim=1)
+        max_selected = int(counts.max().item())
+        offsets = torch.repeat_interleave(torch.cumsum(counts, dim=0) - counts, counts)
+        local_indices = torch.arange(q_code.size(0), device=x.device) - offsets
+
+        q_code_padded = q_code.new_zeros((batch, max_selected, self.n_heads, self.attention_global_code_dim))
+        query_positions_padded = torch.zeros(batch, max_selected, dtype=torch.long, device=x.device)
+        query_valid = torch.zeros(batch, max_selected, dtype=torch.bool, device=x.device)
+        q_code_padded[batch_indices, local_indices] = q_code
+        query_positions_padded[batch_indices, local_indices] = query_positions
+        query_valid[batch_indices, local_indices] = True
+
+        previous_key_code, previous_value_code, previous_allowed = self._pure_factorized_previous_pool_for_positions(
+            global_keys,
+            global_values,
+            global_valid,
+            query_positions_padded,
+            batch=batch,
+            dtype=x.dtype,
+            device=x.device,
+        )
+        key_positions = torch.arange(seq_len, device=x.device)
+        current_allowed = key_positions.view(1, 1, seq_len) <= query_positions_padded.unsqueeze(-1)
+        key_code = torch.cat([previous_key_code, current_key_code], dim=1)
+        value_code = torch.cat([previous_value_code, current_value_code], dim=1)
+        allowed = torch.cat([previous_allowed, current_allowed], dim=-1)
+
+        previous_key_count = previous_key_code.size(1)
+        attn_mask = torch.zeros(batch, 1, max_selected, key_code.size(1), dtype=q_code_padded.dtype, device=x.device)
+        if previous_key_count:
+            attn_mask[..., :previous_key_count] = self._global_logit_bias(dtype=q_code_padded.dtype, device=x.device)
+        attn_mask = attn_mask.masked_fill(~allowed[:, None, :, :], torch.finfo(q_code_padded.dtype).min)
+        key_for_attention = key_code[:, None, :, :].expand(-1, self.n_heads, -1, -1)
+        value_for_attention = value_code[:, None, :, :].expand(-1, self.n_heads, -1, -1)
+        value_code_out = F.scaled_dot_product_attention(
+            q_code_padded.transpose(1, 2),
+            key_for_attention,
+            value_for_attention,
+            attn_mask=attn_mask,
+            is_causal=False,
+            dropout_p=self.dropout if self.training else 0.0,
+            scale=self.attention_global_code_dim**-0.5,
+        )
+        selected_code = value_code_out.transpose(1, 2)[query_valid].to(dtype=q_code.dtype)
+        y = torch.einsum("nhc,hcd->nhd", selected_code, self.global_value_head_read.to(dtype=selected_code.dtype))
+        output = self.out(y.reshape(-1, dim))
+
+        selected_key_code = current_key_code[query_mask]
+        selected_value_code = current_value_code[query_mask]
+        if return_attention_kv:
+            metrics = self._pure_factorized_metrics_for_last_token(
+                x,
+                q_weight,
+                current_key_code,
+                global_keys,
+                global_values,
+                global_valid,
+            )
+            return output, selected_key_code, selected_value_code, metrics
+        return output
+
     def _pure_factorized_previous_pool(
         self,
         global_keys: torch.Tensor | None,
@@ -342,6 +440,39 @@ class CausalSelfAttention(ModuleBase):
         allowed = (valid[:, None, :, :] & causal[None, :, None, :]).reshape(batch, seq_len, slots * global_seq_len)
         return key_code, value_code, allowed
 
+    def _pure_factorized_previous_pool_for_positions(
+        self,
+        global_keys: torch.Tensor | None,
+        global_values: torch.Tensor | None,
+        global_valid: torch.Tensor | None,
+        query_positions: torch.Tensor,
+        *,
+        batch: int,
+        dtype: torch.dtype,
+        device: torch.device,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        query_len = int(query_positions.size(1))
+        if global_keys is None or global_values is None or global_valid is None or int(global_keys.size(2)) == 0:
+            return (
+                torch.empty(batch, 0, self.attention_global_code_dim, device=device, dtype=dtype),
+                torch.empty(batch, 0, self.attention_global_code_dim, device=device, dtype=dtype),
+                torch.empty(batch, query_len, 0, device=device, dtype=torch.bool),
+            )
+        if global_keys.dim() != 5 or global_values.dim() != 5:
+            raise ValueError("pure_factorized Attention Global KV requires token-shaped rank-5 cache state.")
+        batch_size, heads, slots, global_seq_len, code_dim = global_keys.shape
+        if batch_size != batch:
+            raise ValueError("pure_factorized global pool batch size does not match current hidden batch.")
+        if heads != 1:
+            raise ValueError("pure_factorized global pool stores shared headless key/value codes.")
+        key_code = global_keys.to(device=device, dtype=dtype).reshape(batch, slots * global_seq_len, code_dim)
+        value_code = global_values.to(device=device, dtype=dtype).reshape(batch, slots * global_seq_len, code_dim)
+        valid = global_valid.to(device=device, dtype=torch.bool)
+        global_pos = torch.arange(global_seq_len, device=device)
+        causal = global_pos.view(1, 1, 1, global_seq_len) <= query_positions.view(batch, query_len, 1, 1)
+        allowed = (valid[:, None, :, :] & causal).reshape(batch, query_len, slots * global_seq_len)
+        return key_code, value_code, allowed
+
     def _pure_factorized_metrics(
         self,
         q_code: torch.Tensor,
@@ -352,15 +483,68 @@ class CausalSelfAttention(ModuleBase):
     ) -> dict[str, torch.Tensor]:
         if previous_key_count <= 0:
             return self._empty_global_attention_metrics(x)
+        return self._pure_factorized_last_token_metrics(
+            q_code[:, :, -1, :],
+            key_code,
+            allowed[:, -1, :],
+            previous_key_count,
+            x,
+        )
+
+    def _pure_factorized_metrics_for_last_token(
+        self,
+        x: torch.Tensor,
+        q_weight: torch.Tensor,
+        current_key_code: torch.Tensor,
+        global_keys: torch.Tensor | None,
+        global_values: torch.Tensor | None,
+        global_valid: torch.Tensor | None,
+    ) -> dict[str, torch.Tensor]:
+        batch, seq_len, dim = x.shape
+        if global_keys is None or global_values is None or global_valid is None or int(global_keys.size(2)) == 0:
+            return self._empty_global_attention_metrics(x)
         with torch.no_grad():
-            scores = torch.einsum("bhc,bkc->bhk", q_code[:, :, -1, :], key_code) * (
-                self.attention_global_code_dim**-0.5
+            q_last = F.linear(x[:, -1, :], q_weight)
+            q_last = q_last.view(batch, self.n_heads, self.head_dim)
+            q_last_code = torch.einsum("bhd,hdc->bhc", q_last, self.global_key_head_read.to(dtype=q_last.dtype))
+            last_positions = torch.full((batch, 1), seq_len - 1, dtype=torch.long, device=x.device)
+            previous_key_code, _, previous_allowed = self._pure_factorized_previous_pool_for_positions(
+                global_keys,
+                global_values,
+                global_valid,
+                last_positions,
+                batch=batch,
+                dtype=x.dtype,
+                device=x.device,
             )
+            key_code = torch.cat([previous_key_code, current_key_code], dim=1)
+            current_allowed = torch.ones(batch, 1, seq_len, dtype=torch.bool, device=x.device)
+            allowed_last = torch.cat([previous_allowed, current_allowed], dim=-1).squeeze(1)
+            return self._pure_factorized_last_token_metrics(
+                q_last_code,
+                key_code,
+                allowed_last,
+                previous_key_code.size(1),
+                x,
+            )
+
+    def _pure_factorized_last_token_metrics(
+        self,
+        q_last: torch.Tensor,
+        key_code: torch.Tensor,
+        allowed_last: torch.Tensor,
+        previous_key_count: int,
+        x: torch.Tensor,
+    ) -> dict[str, torch.Tensor]:
+        if previous_key_count <= 0:
+            return self._empty_global_attention_metrics(x)
+        with torch.no_grad():
+            scores = torch.einsum("bhc,bkc->bhk", q_last, key_code) * (self.attention_global_code_dim**-0.5)
             scores[:, :, :previous_key_count] = scores[:, :, :previous_key_count] + self._global_logit_bias(
                 dtype=scores.dtype,
                 device=scores.device,
             )
-            scores = scores.masked_fill(~allowed[:, None, -1, :], torch.finfo(scores.dtype).min)
+            scores = scores.masked_fill(~allowed_last[:, None, :], torch.finfo(scores.dtype).min)
             weights = torch.softmax(scores, dim=-1)
             global_weights = weights[..., :previous_key_count]
             total_mass = global_weights.sum(dim=-1).mean()
@@ -696,6 +880,32 @@ class TransformerBlock(ModuleBase):
     def forward_selected_varlen(self, x: torch.Tensor, query_mask: torch.Tensor) -> torch.Tensor:
         attn_input = self.attn_norm(x)
         selected = x[query_mask] + self.attn.forward_selected_varlen(attn_input, query_mask)
+        return selected + self.ffn(self.ffn_norm(selected))
+
+    def forward_selected_attention_global(
+        self,
+        x: torch.Tensor,
+        query_mask: torch.Tensor,
+        attention_global_state: Any | None = None,
+        *,
+        return_attention_kv: bool = False,
+    ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor, torch.Tensor, dict[str, torch.Tensor]]:
+        attn_input = self.attn_norm(x)
+        if return_attention_kv:
+            attn_out, key_summary, value_summary, metrics = self.attn.forward_selected_attention_global(
+                attn_input,
+                query_mask,
+                attention_global_state,
+                return_attention_kv=True,
+            )
+            selected = x[query_mask] + attn_out
+            selected = selected + self.ffn(self.ffn_norm(selected))
+            return selected, key_summary, value_summary, metrics
+        selected = x[query_mask] + self.attn.forward_selected_attention_global(
+            attn_input,
+            query_mask,
+            attention_global_state,
+        )
         return selected + self.ffn(self.ffn_norm(selected))
 
 

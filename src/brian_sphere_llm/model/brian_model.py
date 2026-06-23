@@ -1479,6 +1479,17 @@ class BrianRouteCore(ModuleBase):
         attention_global_state: AttentionGlobalKVState,
         route_info: dict[str, Any],
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        if selected.dim() == 2 and self.config.attention_global_kv_mode == "pure_factorized":
+            return self._apply_routed_blocks_with_pure_factorized_attention_global_selected(
+                hidden,
+                position,
+                selected,
+                top_actions,
+                top_weights,
+                use_weighted_fusion,
+                attention_global_state,
+                route_info,
+            )
         if selected.dim() == 2:
             next_hidden = hidden.clone()
             write_key, write_value, write_valid = self._empty_attention_global_write(hidden)
@@ -1624,6 +1635,104 @@ class BrianRouteCore(ModuleBase):
                 write_key[fallback_mask] = selected_key[fallback_mask]
                 write_value[fallback_mask] = selected_value[fallback_mask]
                 write_valid[fallback_mask] = selected_valid[fallback_mask]
+        return next_hidden, write_key, write_value, write_valid
+
+    def _apply_routed_blocks_with_pure_factorized_attention_global_selected(
+        self,
+        hidden: torch.Tensor,
+        position: torch.Tensor,
+        selected: torch.Tensor,
+        top_actions: torch.Tensor,
+        top_weights: torch.Tensor,
+        use_weighted_fusion: torch.Tensor,
+        attention_global_state: AttentionGlobalKVState,
+        route_info: dict[str, Any],
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        next_hidden = hidden.clone()
+        write_key, write_value, write_valid = self._empty_attention_global_write(hidden)
+        block_position = self._block_position(position)
+        flat_next = next_hidden.reshape(-1, hidden.size(-1))
+        flat_write_key = write_key[:, 0, 0].reshape(-1, write_key.size(-1))
+        flat_write_value = write_value[:, 0, 0].reshape(-1, write_value.size(-1))
+        flat_write_valid = write_valid[:, 0].reshape(-1)
+
+        def apply_action_mask(action: int, mask: torch.Tensor) -> None:
+            flat_mask = mask.reshape(-1)
+            if not torch.any(flat_mask):
+                return
+            indices = torch.nonzero(flat_mask, as_tuple=False).flatten()
+            output, key_summary, value_summary, metrics = self.route_blocks[action].forward_selected_attention_global(
+                hidden,
+                block_position,
+                mask,
+                attention_global_state,
+                return_attention_kv=True,
+            )
+            flat_next[indices] = output
+            flat_write_key[indices] = key_summary.to(flat_write_key.dtype)
+            flat_write_value[indices] = value_summary.to(flat_write_value.dtype)
+            flat_write_valid[indices] = True
+            self._append_attention_global_metrics(route_info, metrics)
+
+        for action in range(len(self.route_blocks)):
+            apply_action_mask(action, (selected == action) & ~use_weighted_fusion)
+
+        if torch.any(use_weighted_fusion):
+            flat_size = hidden.size(0) * hidden.size(1)
+            accum = hidden.new_zeros((flat_size, hidden.size(-1)))
+            key_accum = write_key.new_zeros((flat_size, write_key.size(-1)))
+            value_accum = write_value.new_zeros((flat_size, write_value.size(-1)))
+            weight_sum = hidden.new_zeros((flat_size,))
+            flat_top_weights = top_weights.reshape(flat_size, top_weights.size(-1))
+            flat_use_weighted = use_weighted_fusion.reshape(-1)
+
+            for action, block in enumerate(self.route_blocks):
+                action_rank_mask = (top_actions == action) & use_weighted_fusion.unsqueeze(-1)
+                action_query_mask = action_rank_mask.any(dim=-1)
+                if not torch.any(action_query_mask):
+                    continue
+                action_indices = torch.nonzero(action_query_mask.reshape(-1), as_tuple=False).flatten()
+                output, key_summary, value_summary, metrics = block.forward_selected_attention_global(
+                    hidden,
+                    block_position,
+                    action_query_mask,
+                    attention_global_state,
+                    return_attention_kv=True,
+                )
+                self._append_attention_global_metrics(route_info, metrics)
+                flat_action_rank_mask = action_rank_mask.reshape(flat_size, action_rank_mask.size(-1))
+                for rank in range(top_actions.size(-1)):
+                    selected_for_rank = flat_action_rank_mask[action_indices, rank]
+                    if not torch.any(selected_for_rank):
+                        continue
+                    rank_indices = action_indices[selected_for_rank]
+                    weight = flat_top_weights[rank_indices, rank].to(hidden.dtype)
+                    accum.index_add_(0, rank_indices, output[selected_for_rank] * weight.unsqueeze(-1))
+                    key_accum.index_add_(
+                        0,
+                        rank_indices,
+                        key_summary[selected_for_rank].to(key_accum.dtype) * weight.to(key_accum.dtype).unsqueeze(-1),
+                    )
+                    value_accum.index_add_(
+                        0,
+                        rank_indices,
+                        value_summary[selected_for_rank].to(value_accum.dtype)
+                        * weight.to(value_accum.dtype).unsqueeze(-1),
+                    )
+                    weight_sum.index_add_(0, rank_indices, weight)
+
+            weighted_mask = flat_use_weighted & (weight_sum > 0)
+            if torch.any(weighted_mask):
+                denom = weight_sum[weighted_mask].clamp_min(1e-9)
+                flat_next[weighted_mask] = accum[weighted_mask] / denom.unsqueeze(-1)
+                flat_write_key[weighted_mask] = key_accum[weighted_mask] / denom.to(key_accum.dtype).unsqueeze(-1)
+                flat_write_value[weighted_mask] = value_accum[weighted_mask] / denom.to(value_accum.dtype).unsqueeze(-1)
+                flat_write_valid[weighted_mask] = True
+
+            fallback_mask = use_weighted_fusion & (weight_sum.reshape_as(use_weighted_fusion) <= 0)
+            for action in range(len(self.route_blocks)):
+                apply_action_mask(action, fallback_mask & (selected == action))
+
         return next_hidden, write_key, write_value, write_valid
 
     def _apply_selected_blocks_with_attention_global(
