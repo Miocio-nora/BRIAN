@@ -92,6 +92,33 @@ def test_sparse_route_block_execution_matches_full_sequence_weighted_fusion() ->
     assert torch.allclose(actual, expected, atol=1e-5, rtol=1e-5)
 
 
+def test_sparse_route_block_execution_supports_bf16_autocast() -> None:
+    if not torch.cuda.is_available():
+        pytest.skip("CUDA autocast coverage requires CUDA.")
+    torch.manual_seed(23)
+    _, sparse = _paired_models()
+    sparse = sparse.cuda()
+    hidden = torch.randn(2, 6, 24, device="cuda")
+    position = _position(sparse, 2, 6).cuda()
+    selected = torch.tensor(
+        [
+            [0, 1, 2, sparse.out_action, 0, 1],
+            [2, 0, sparse.out_action, 1, 2, 0],
+        ],
+        dtype=torch.long,
+        device="cuda",
+    )
+    top_actions = selected.unsqueeze(-1)
+    top_weights = torch.ones(*selected.shape, 1, device="cuda")
+    use_weighted_fusion = torch.zeros_like(selected, dtype=torch.bool)
+
+    with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+        actual = sparse._apply_routed_blocks(hidden, position, selected, top_actions, top_weights, use_weighted_fusion)
+
+    assert actual.shape == hidden.shape
+    assert torch.isfinite(actual).all()
+
+
 def test_sparse_route_block_execution_config_stats_and_validation() -> None:
     cfg = BrianRouteConfig.from_dict(
         {

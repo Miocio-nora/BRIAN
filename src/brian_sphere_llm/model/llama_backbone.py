@@ -228,7 +228,7 @@ class CausalSelfAttention(ModuleBase):
                 is_causal=False,
                 dropout_p=self.dropout if self.training else 0.0,
             )
-            selected[row_mask] = y_b.squeeze(0).transpose(0, 1)
+            selected[row_mask] = y_b.squeeze(0).transpose(0, 1).to(dtype=selected.dtype)
 
         return self.out(selected.reshape(-1, dim))
 
