@@ -1,0 +1,4 @@
+extends: smoke_full_sequence_r125_5b_ddp2_legacyval.yaml
+run_name: smoke_full_sequence_fastlog_r125_5b_ddp2_legacyval
+routing:
+  summary_interval: 0

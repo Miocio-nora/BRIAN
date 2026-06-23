@@ -1,6 +1,6 @@
 # Sparse Varlen Routing B 方案工作报告
 
-更新时间：2026-06-23 20:16 JST
+更新时间：2026-06-23 20:47 JST
 
 ## 目标
 
@@ -356,3 +356,55 @@ CUDA_VISIBLE_DEVICES=2,3 PYTHONPATH=src /home/dredvpn009/Flash_Storage/anaconda3
 - PyTorch 级别的 selected/varlen/grouped 组合都没有超过 dense full-sequence baseline。
 - 预期加速若仍要实现，需要更底层的 fused Triton/CUDA kernel，目标是同时融合 expert GEMM、selected attention、scatter/fusion，而不是用多个 PyTorch op 拼装。
 - 当前分支保留 `sparse_varlen` 和 `grouped_dense` 作为可复现实验后端和负结果依据。
+
+## 2026-06-23 Training Summary / DDP Overhead 检查
+
+### 代码调整
+
+新增训练期 routing summary 开关：
+
+- `BrianRouteCore.forward(..., summarize_routing=True)`
+- train config `routing.summary_interval`
+- 默认 `summary_interval: 1`，保持旧行为。
+- `summary_interval: 0` 只关闭训练 forward 的 routing summary；eval 仍保留 summary，用于验证和报告。
+
+新增 smoke 配置：
+
+- `configs/train/smoke_full_sequence_fastlog_r125_5b_ddp2_legacyval.yaml`
+- `configs/train/smoke_grouped_dense_fastlog_r125_5b_ddp2_legacyval.yaml`
+- `configs/train/smoke_full_sequence_fastlog_nounused_r125_5b_ddp2_legacyval.yaml`
+- `configs/train/smoke_grouped_dense_fastlog_nounused_r125_5b_ddp2_legacyval.yaml`
+
+`nounused` 版本额外设置 `ddp_find_unused_parameters: false`。这只用于 `full_sequence` / `grouped_dense` 的性能 smoke，因为这两条路径每步都会触达所有 route block 参数；不推广到真正 sparse/free collapse 风险路径。
+
+### 测试
+
+```bash
+/home/dredvpn009/Flash_Storage/anaconda3/envs/brian-sparse-varlen/bin/python -m pytest tests/test_sparse_route_block_execution.py -q
+/home/dredvpn009/Flash_Storage/anaconda3/envs/brian-sparse-varlen/bin/python -m pytest tests/test_config_inventory.py -q
+```
+
+结果：
+
+```text
+16 passed
+21 passed
+```
+
+### Fastlog / Nounused Smoke
+
+均使用空 GPU 2/3、`max_steps=100`、`wandb.enabled=false`、`checkpoint_benchmarks.enabled=false`。
+
+| Run | Summary interval | DDP unused check | Last-20 tokens/s | Last-50 tokens/s | Final tokens/s | Final max memory/rank |
+| --- | ---: | --- | ---: | ---: | ---: | ---: |
+| `smoke_full_sequence_fastlog_r125_5b_ddp2_legacyval` | 0 | true | 87,527.55 | 87,569.12 | 89,055 | ~27.9GB |
+| `smoke_full_sequence_fastlog_nounused_r125_5b_ddp2_legacyval` | 0 | false | 88,284.25 | 87,979.70 | 89,385 | ~28.0GB |
+| `smoke_grouped_dense_fastlog_r125_5b_ddp2_legacyval` | 0 | true | 79,231.45 | 79,043.04 | 79,065 | ~44.0GB |
+| `smoke_grouped_dense_fastlog_nounused_r125_5b_ddp2_legacyval` | 0 | false | 80,093.90 | 80,104.20 | 79,847 | ~44.0GB |
+
+### 结论
+
+- 每步 routing summary 不是主要吞吐瓶颈：关掉后 full-sequence 仍约 87.5k，与之前空卡约 87.0k 基本一致。
+- `ddp_find_unused_parameters=false` 只带来小幅提升：full-sequence last20 +0.9%，grouped-dense last20 +1.1%。
+- `grouped_dense` 在更公平的 fastlog/nounused 对照下仍低于 `full_sequence`：80.1k vs 88.3k，约慢 9.3%，且显存高约 16GB/rank。
+- 因此当前 B 方案实现正确、资产隔离良好，但没有达到预期加速。后续如果继续追求 route execution 加速，应该转向更底层 fused kernel 或重新定义训练 forward 语义，不能继续依赖 PyTorch op 级别拼装。

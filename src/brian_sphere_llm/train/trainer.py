@@ -275,6 +275,7 @@ def train_from_config(config_path: str | Path) -> Path:
                         route_mode=stage_mode,
                         global_step=step,
                         collect_router_space=collect_router_space and should_sync_gradients,
+                        summarize_routing=_routing_summary_due(config, global_step=step),
                     )
                     loss = outputs["loss"]
                     scaled_loss = loss / gradient_accumulation_steps
@@ -467,6 +468,7 @@ def _forward_for_stage(
     route_mode: str,
     global_step: int,
     collect_router_space: bool = False,
+    summarize_routing: bool = True,
 ) -> dict:
     if route_mode == "baseline":
         return model(batch, targets=batch)
@@ -499,10 +501,25 @@ def _forward_for_stage(
         router_probability=router_probability,
         global_step=global_step,
         collect_router_space=collect_router_space,
+        summarize_routing=summarize_routing,
     )
     if schedule_values:
         outputs["schedule_values"] = schedule_values
     return outputs
+
+
+def _routing_summary_due(config: Mapping[str, Any], *, global_step: int) -> bool:
+    routing_cfg = _mapping_config(config, "routing")
+    raw_interval = routing_cfg.get("summary_interval", 1)
+    try:
+        interval = int(raw_interval)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("routing.summary_interval must be an integer.") from exc
+    if interval < 0:
+        raise ValueError("routing.summary_interval must be >= 0.")
+    if interval == 0:
+        return False
+    return global_step % interval == 0
 
 
 def _set_activation_checkpointing(model: Any, enabled: bool) -> None:

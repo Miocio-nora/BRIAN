@@ -1,0 +1,4 @@
+extends: smoke_grouped_dense_r125_5b_ddp2_legacyval.yaml
+run_name: smoke_grouped_dense_fastlog_r125_5b_ddp2_legacyval
+routing:
+  summary_interval: 0

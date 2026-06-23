@@ -304,6 +304,7 @@ class BrianRouteCore(ModuleBase):
         router_probability: float | None = None,
         global_step: int = 0,
         collect_router_space: bool = False,
+        summarize_routing: bool = True,
     ) -> dict[str, Any]:
         loss_weights = _loss_weights_mapping(loss_weights)
         routing_constraints = _routing_constraints_mapping(routing_constraints)
@@ -616,12 +617,13 @@ class BrianRouteCore(ModuleBase):
         output: dict[str, Any] = {
             "logits": logits,
             "route_info": route_info,
-            "routing_summary": summarize_routes(
+        }
+        if summarize_routing:
+            output["routing_summary"] = summarize_routes(
                 route_info,
                 self.config.route_pool_blocks,
                 include_path_counts=log_path_counts,
-            ),
-        }
+            )
         if router_space_records is not None:
             output["router_space"] = {
                 "records": router_space_records,
