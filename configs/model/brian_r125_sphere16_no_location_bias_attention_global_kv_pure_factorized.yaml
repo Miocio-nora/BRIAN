@@ -1,0 +1,7 @@
+extends: brian_r125_sphere16_no_location_bias_attention_global_kv.yaml
+model_name: brian_r125_sphere16_no_location_bias_attention_global_kv_pure_factorized
+attention_global_kv_mode: pure_factorized
+attention_global_code_dim: 32
+attention_global_sink_slots: 0
+attention_global_window_slots: 0
+attention_global_logit_bias_init: -2.0

@@ -6,6 +6,7 @@ torch = pytest.importorskip("torch")
 
 from brian_sphere_llm.model.baseline import BaselineConfig
 from brian_sphere_llm.model.brian_model import BrianRouteConfig, BrianRouteCore
+from brian_sphere_llm.memory.attention_global_cache import CanonicalAttentionGlobalKVCache
 
 
 def _paired_models(route_block_execution: str = "sparse") -> tuple[BrianRouteCore, BrianRouteCore]:
@@ -246,6 +247,63 @@ def test_sparse_varlen_route_block_execution_is_suffix_invariant() -> None:
     assert torch.allclose(logits_a[:, : prefix.size(1)], logits_b[:, : prefix.size(1)], atol=1e-5, rtol=1e-5)
 
 
+def test_pure_factorized_attention_global_kv_is_suffix_invariant_and_shares_writers() -> None:
+    torch.manual_seed(41)
+    cfg = BrianRouteConfig(
+        base=BaselineConfig(vocab_size=64, context_length=8, layers=5, d_model=64, n_heads=4),
+        pre_blocks=1,
+        route_pool_blocks=3,
+        post_blocks=1,
+        block_position_dim=8,
+        max_route_steps=2,
+        attention_global_kv=True,
+        attention_global_kv_mode="pure_factorized",
+        attention_global_code_dim=12,
+        attention_global_sink_slots=0,
+        attention_global_window_slots=0,
+        attention_global_logit_bias_init=-2.0,
+    )
+    model = BrianRouteCore(cfg).eval()
+    assert model.route_blocks[0].block.attn.global_key_write is model.route_blocks[1].block.attn.global_key_write
+    assert model.route_blocks[0].block.attn.global_value_write is model.route_blocks[2].block.attn.global_value_write
+
+    prefix = torch.tensor([[3, 7, 11, 13]], dtype=torch.long)
+    suffix_a = torch.tensor([[17, 19, 23, 29]], dtype=torch.long)
+    suffix_b = torch.tensor([[31, 37, 41, 43]], dtype=torch.long)
+
+    with torch.no_grad():
+        logits_a = model(torch.cat([prefix, suffix_a], dim=1))["logits"]
+        logits_b = model(torch.cat([prefix, suffix_b], dim=1))["logits"]
+
+    assert torch.allclose(logits_a[:, : prefix.size(1)], logits_b[:, : prefix.size(1)], atol=1e-5, rtol=1e-5)
+
+
+def test_latest_attention_global_kv_cache_preserves_invalid_tokens() -> None:
+    cache = CanonicalAttentionGlobalKVCache(0, 0, latest_token_only=True)
+    state = cache.empty(
+        batch_size=1,
+        n_heads=1,
+        head_dim=2,
+        device=torch.device("cpu"),
+        dtype=torch.float32,
+        sequence_length=3,
+    )
+    first_key = torch.tensor([[[[[1.0, 1.0], [2.0, 2.0], [3.0, 3.0]]]]])
+    first_value = first_key + 10.0
+    first_valid = torch.tensor([[[True, True, True]]])
+    state = cache.write(state, first_key, first_value, first_valid)
+
+    second_key = torch.tensor([[[[[9.0, 9.0], [8.0, 8.0], [7.0, 7.0]]]]])
+    second_value = second_key + 10.0
+    second_valid = torch.tensor([[[False, True, False]]])
+    state = cache.write(state, second_key, second_value, second_valid)
+
+    assert state.slots == 1
+    assert torch.equal(state.valid, first_valid)
+    assert torch.allclose(state.keys[0, 0, 0], torch.tensor([[1.0, 1.0], [8.0, 8.0], [3.0, 3.0]]))
+    assert torch.allclose(state.values[0, 0, 0], torch.tensor([[11.0, 11.0], [18.0, 18.0], [13.0, 13.0]]))
+
+
 def test_summarize_routing_false_keeps_loss_fields_without_diagnostics() -> None:
     torch.manual_seed(39)
     cfg = BrianRouteConfig(
@@ -330,6 +388,25 @@ def test_sparse_route_block_execution_config_stats_and_validation() -> None:
 
     assert cfg.route_block_execution == "grouped_dense"
     assert model.model_stats()["route_block_execution"] == "grouped_dense"
+    cfg = BrianRouteConfig.from_dict(
+        {
+            "base": {"vocab_size": 64, "context_length": 6, "layers": 4, "d_model": 64, "n_heads": 4},
+            "pre_blocks": 1,
+            "route_pool_blocks": 2,
+            "post_blocks": 1,
+            "block_position_dim": 8,
+            "max_route_steps": 2,
+            "attention_global_kv": True,
+            "attention_global_kv_mode": "pure_factorized",
+            "attention_global_code_dim": 12,
+            "attention_global_sink_slots": 0,
+            "attention_global_window_slots": 0,
+        }
+    )
+    model = BrianRouteCore(cfg)
+
+    assert cfg.attention_global_kv_mode == "pure_factorized"
+    assert model.model_stats()["attention_global_kv_mode"] == "pure_factorized"
     with pytest.raises(ValueError, match="route_block_execution"):
         BrianRouteConfig.from_dict(
             {

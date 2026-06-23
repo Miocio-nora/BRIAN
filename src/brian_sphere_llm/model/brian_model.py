@@ -201,11 +201,14 @@ class BrianRouteCore(ModuleBase):
         if config.attention_global_kv:
             if config.attention_global_kv_scope != "route":
                 raise ValueError("attention_global_kv_scope currently supports only 'route'")
-            if config.attention_global_kv_mode not in {"summary", "token_compressed"}:
+            if config.attention_global_kv_mode not in {"summary", "token_compressed", "pure_factorized"}:
                 raise ValueError(f"Unknown attention_global_kv_mode: {config.attention_global_kv_mode}")
             if config.attention_global_tokens_per_write != 1:
                 raise ValueError("attention_global_tokens_per_write currently supports only 1")
-            if config.attention_global_sink_slots + config.attention_global_window_slots <= 0:
+            if (
+                config.attention_global_kv_mode != "pure_factorized"
+                and config.attention_global_sink_slots + config.attention_global_window_slots <= 0
+            ):
                 raise ValueError("Attention Global KV requires at least one retained slot")
             if config.parallel_passing:
                 raise ValueError("Attention Global KV is route-only and does not support parallel_passing yet")
@@ -233,6 +236,8 @@ class BrianRouteCore(ModuleBase):
                 for _ in range(config.route_pool_blocks)
             ]
         )
+        if config.attention_global_kv and config.attention_global_kv_mode == "pure_factorized":
+            self._tie_pure_factorized_global_writers()
         self.exit_block = ExitBlock(config.base.d_model, config.block_position_dim, config.block_position_injection)
         self.post_blocks = nn.ModuleList([TransformerBlock(backbone) for _ in range(config.post_blocks)])
         self.position_table = BlockPositionTable(
@@ -279,6 +284,7 @@ class BrianRouteCore(ModuleBase):
             self.attention_global_cache = CanonicalAttentionGlobalKVCache(
                 config.attention_global_sink_slots,
                 config.attention_global_window_slots,
+                latest_token_only=config.attention_global_kv_mode == "pure_factorized",
             )
         else:
             self.attention_global_cache = None
@@ -381,7 +387,7 @@ class BrianRouteCore(ModuleBase):
             assert self.attention_global_cache is not None
             attention_global_state = self.attention_global_cache.empty(
                 batch_size=batch_size,
-                n_heads=self.config.base.n_heads,
+                n_heads=self._attention_global_cache_heads(),
                 head_dim=self._attention_global_cache_dim(),
                 device=input_ids.device,
                 dtype=hidden.dtype,
@@ -1672,17 +1678,29 @@ class BrianRouteCore(ModuleBase):
 
     def _empty_attention_global_write(self, hidden: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         dim = self._attention_global_cache_dim()
-        shape = (hidden.size(0), self.config.base.n_heads, 1, hidden.size(1), dim)
+        shape = (hidden.size(0), self._attention_global_cache_heads(), 1, hidden.size(1), dim)
         return (
             hidden.new_zeros(shape),
             hidden.new_zeros(shape),
             torch.zeros(hidden.size(0), 1, hidden.size(1), dtype=torch.bool, device=hidden.device),
         )
 
+    def _attention_global_cache_heads(self) -> int:
+        if self.config.attention_global_kv_mode == "pure_factorized":
+            return 1
+        return self.config.base.n_heads
+
     def _attention_global_cache_dim(self) -> int:
-        if self.config.attention_global_kv_mode == "token_compressed":
+        if self.config.attention_global_kv_mode in {"token_compressed", "pure_factorized"}:
             return int(self.config.attention_global_code_dim or (self.config.base.d_model // self.config.base.n_heads))
         return self.config.base.d_model // self.config.base.n_heads
+
+    def _tie_pure_factorized_global_writers(self) -> None:
+        if len(self.route_blocks) <= 1:
+            return
+        source = self.route_blocks[0].block.attn
+        for block in self.route_blocks[1:]:
+            block.block.attn.tie_pure_factorized_writers_from(source)
 
     def _attention_global_write_tensor(self, tensor: torch.Tensor) -> torch.Tensor:
         if tensor.dim() == 3:

@@ -27,15 +27,21 @@ class AttentionGlobalKVState:
 
 
 class CanonicalAttentionGlobalKVCache:
-    """Per-forward attention-level K/V cache with sink + sliding-window retention."""
+    """Per-forward attention-level K/V cache.
 
-    def __init__(self, sink_slots: int, window_slots: int) -> None:
+    The default mode appends slots and retains sink + sliding-window slots.  The
+    latest-token mode keeps a single slot per sequence position and overwrites
+    only positions marked valid by the current write.
+    """
+
+    def __init__(self, sink_slots: int, window_slots: int, *, latest_token_only: bool = False) -> None:
         if sink_slots < 0 or window_slots < 0:
             raise ValueError("sink_slots and window_slots must be non-negative")
-        if sink_slots + window_slots <= 0:
+        if sink_slots + window_slots <= 0 and not latest_token_only:
             raise ValueError("Attention Global KV cache requires at least one retained slot")
         self.sink_slots = sink_slots
         self.window_slots = window_slots
+        self.latest_token_only = latest_token_only
 
     def empty(
         self,
@@ -97,12 +103,34 @@ class CanonicalAttentionGlobalKVCache:
         expected_valid = (key.size(0), key.size(2)) if state_rank == 4 else (key.size(0), key.size(2), key.size(3))
         if valid.shape != expected_valid:
             raise ValueError(f"Attention Global KV valid mask must have shape {expected_valid}")
+        if self.latest_token_only:
+            return self._write_latest(state, key, value, valid.to(dtype=torch.bool, device=state.valid.device))
         appended = AttentionGlobalKVState(
             keys=torch.cat([state.keys, key], dim=2),
             values=torch.cat([state.values, value], dim=2),
             valid=torch.cat([state.valid, valid.to(dtype=torch.bool, device=state.valid.device)], dim=1),
         )
         return self._retain(appended)
+
+    def _write_latest(
+        self,
+        state: AttentionGlobalKVState,
+        key: "torch.Tensor",
+        value: "torch.Tensor",
+        valid: "torch.Tensor",
+    ) -> AttentionGlobalKVState:
+        if state.keys.dim() != 5:
+            raise ValueError("latest-token Attention Global KV requires token-shaped rank-5 cache state.")
+        if key.size(2) != 1 or value.size(2) != 1 or valid.size(1) != 1:
+            raise ValueError("latest-token Attention Global KV writes exactly one slot.")
+        if state.keys.size(2) == 0:
+            return AttentionGlobalKVState(keys=key, values=value, valid=valid)
+        keep = ~valid[:, :, None, :, None]
+        return AttentionGlobalKVState(
+            keys=torch.where(keep, state.keys, key),
+            values=torch.where(keep, state.values, value),
+            valid=state.valid | valid,
+        )
 
     def _retain(self, state: AttentionGlobalKVState) -> AttentionGlobalKVState:
         sink = state.keys[:, :, : self.sink_slots, ...] if self.sink_slots else state.keys[:, :, :0, ...]
