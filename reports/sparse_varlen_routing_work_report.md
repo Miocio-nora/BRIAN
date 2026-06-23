@@ -1,6 +1,6 @@
 # Sparse Varlen Routing B 方案工作报告
 
-更新时间：2026-06-23 23:18 JST
+更新时间：2026-06-23 23:45 JST
 
 ## 目标
 
@@ -536,3 +536,40 @@ RuntimeError: Error: accessing tensor output of CUDAGraphs that has been overwri
 ### Current Decision
 
 当前 B 方案已经达成“可安全运行、可复现、比 full-sequence 有小幅加速”的阶段，但尚未达成 150k tokens/s 级别预期。继续追求大幅加速时，不应再优先堆叠 PyTorch compile/autotune 开关；更合理的下一步是新增独立 fused-kernel prototype，目标是减少 `E x B x S x D` activation materialization，并把 expert GEMM、attention、gather/fusion 的边界继续下沉。
+
+## 2026-06-23 B200 Microbatch Scaling
+
+上一节的最佳 grouped-dense routedcompile 使用 `batch_size=4, gradient_accumulation_steps=4`，虽然 global batch 是 32，但每个 optimizer step 有 4 个 microbatches/rank。B200 显存明显未被用满，因此测试保持 global batch 32 不变，把 microbatch 放大、accumulation 减少。
+
+新增正收益配置：
+
+- `configs/train/smoke_grouped_dense_fastlog_nounused_weightcache_gather_tf32_routedcompile_b8acc2_r125_5b_ddp2_legacyval.yaml`
+- `configs/train/smoke_grouped_dense_fastlog_nounused_weightcache_gather_tf32_routedcompile_b16acc1_r125_5b_ddp2_legacyval.yaml`
+- `configs/train/smoke_grouped_dense_fastlog_nounused_weightcache_gather_tf32_router1_routedcompile_b16acc1_r125_5b_ddp2_legacyval.yaml`
+
+top-1 / scheduled target path：
+
+| Run | Batch/Accum | Effective batch | Last-20 tokens/s | Last-50 tokens/s | Final tokens/s | Step time last20 | Peak memory/rank |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| grouped routedcompile | 4/4 | 32 | 95,803.05 | 96,052.32 | 95,056 | 0.6841s | ~46.7GB |
+| grouped routedcompile b8acc2 | 8/2 | 32 | 112,267.00 | 112,326.12 | 112,843 | 0.5838s | ~88.0GB |
+| grouped routedcompile b16acc1 | 16/1 | 32 | 121,582.75 | 121,900.78 | 122,015 | 0.5390s | ~170.0GB |
+
+router1 / top-2 weighted fusion path：
+
+| Run | Batch/Accum | Effective batch | Last-20 tokens/s | Last-50 tokens/s | Final tokens/s | Step time last20 | Peak memory/rank |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| grouped routedcompile router1 | 4/4 | 32 | 90,850.30 | 85,987.16 | 81,686 | 0.7289s | ~47.4GB |
+| grouped routedcompile router1 b16acc1 | 16/1 | 32 | 105,242.75 | 104,468.28 | 100,292 | 0.6236s | ~173.0GB |
+
+结论：
+
+- batch scaling 是本轮最有效的非 kernel 优化：top-1 从 95.8k 提到 121.6k，约 +26.9%；router1/top-2 从 90.9k 提到 105.2k，约 +15.8%。
+- `b16acc1` 已接近 B200 单卡显存上限，继续在 2 卡上靠 batch 放大逼近 150k 的空间很小。
+- `b8acc2` 是更稳妥的 B200 配置，显存约 88GB/rank；`b16acc1` 是吞吐优先配置，显存约 170GB/rank。
+- 即便使用 b16acc1，2 卡总吞吐仍未达到 150k gate；若不改变 kernel/activation materialization，下一步只能靠 4 卡总吞吐或 fused kernel 继续推进。
+
+负结果：
+
+- `hybrid grouped_mm` 只在 standalone QKV microbench 有小幅收益，完整 top-1 smoke 为 95.68k last20，低于当前 einsum/routedcompile 95.80k；未进入主线实现。
+- `ddp_static_graph + gradient_as_bucket_view` 在 b16acc1 上无实质收益：121.54k last20 vs 121.58k；训练器保留可选 DDP 开关，但不推荐作为当前性能路径。

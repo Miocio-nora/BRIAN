@@ -94,6 +94,8 @@ def train_from_config(config_path: str | Path) -> Path:
         "ddp_find_unused_parameters",
         default=stage_mode != "baseline",
     )
+    ddp_static_graph = _bool_config(config, "ddp_static_graph", default=False)
+    ddp_gradient_as_bucket_view = _bool_config(config, "ddp_gradient_as_bucket_view", default=False)
     set_seed(seed)
     _set_float32_matmul_precision(config)
 
@@ -126,6 +128,8 @@ def train_from_config(config_path: str | Path) -> Path:
             "rank": dist_utils.rank(),
             "local_rank": dist_utils.local_rank(),
             "find_unused_parameters": ddp_find_unused_parameters,
+            "static_graph": ddp_static_graph,
+            "gradient_as_bucket_view": ddp_gradient_as_bucket_view,
         },
     }
     if is_main_process:
@@ -210,6 +214,8 @@ def train_from_config(config_path: str | Path) -> Path:
         device,
         distributed=distributed,
         find_unused_parameters=ddp_find_unused_parameters,
+        static_graph=ddp_static_graph,
+        gradient_as_bucket_view=ddp_gradient_as_bucket_view,
     )
 
     train_log = JsonlLogger(run_dir / "train_log.jsonl") if is_main_process else None
@@ -544,6 +550,8 @@ def _wrap_distributed_model(
     *,
     distributed: bool,
     find_unused_parameters: bool,
+    static_graph: bool,
+    gradient_as_bucket_view: bool,
 ) -> Any:
     if not distributed:
         return model
@@ -556,8 +564,15 @@ def _wrap_distributed_model(
             device_ids=[device_index],
             output_device=device_index,
             find_unused_parameters=find_unused_parameters,
+            static_graph=static_graph,
+            gradient_as_bucket_view=gradient_as_bucket_view,
         )
-    return DistributedDataParallel(model, find_unused_parameters=find_unused_parameters)
+    return DistributedDataParallel(
+        model,
+        find_unused_parameters=find_unused_parameters,
+        static_graph=static_graph,
+        gradient_as_bucket_view=gradient_as_bucket_view,
+    )
 
 
 def _init_wandb(
