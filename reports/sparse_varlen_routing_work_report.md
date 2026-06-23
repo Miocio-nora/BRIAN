@@ -1,6 +1,6 @@
 # Sparse Varlen Routing B 方案工作报告
 
-更新时间：2026-06-23 22:29 JST
+更新时间：2026-06-23 22:36 JST
 
 ## 目标
 
@@ -638,4 +638,14 @@ b16acc1 对照：
 | b16acc1 before | 121,582.75 | 121,900.78 | 122,015 | ~170.0GB |
 | b16acc1 fast route-info | 121,610.80 | 122,041.92 | 121,827 | ~169.7GB |
 
-结论：这是合理的训练路径清理，但吞吐收益很小，不是接近 150k 的关键路径。当前 gate 仍需要 DDP4 实测或 fused kernel。
+随后继续清理 0 权重辅助 loss：当 loss weight 为 0 时，不再计算对应 raw component。当前 smoke 中 `route` schedule lambda 为 0，`balance=0`，`transition_diversity=0`，因此可以跳过 route imitation、balance、transition diversity 的计算。日志里这些 0 权重 component 现在记录为 0，表示对 total loss 的贡献为 0，而不是 raw diagnostic value。
+
+fastloss 对照：
+
+| Run | Last-20 tokens/s | Last-50 tokens/s | Final tokens/s | Peak memory/rank |
+| --- | ---: | ---: | ---: | ---: |
+| b16acc1 before | 121,582.75 | 121,900.78 | 122,015 | ~170.0GB |
+| b16acc1 fast route-info | 121,610.80 | 122,041.92 | 121,827 | ~169.7GB |
+| b16acc1 fast route-info + zero-weight loss skip | 122,046.75 | 122,396.20 | 121,973 | ~169.7GB |
+
+结论：训练路径清理有小幅正收益，约 +0.4% last20；仍不是接近 150k 的关键路径。当前 gate 仍需要 DDP4 实测或 fused kernel。

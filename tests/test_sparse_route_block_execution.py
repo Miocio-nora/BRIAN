@@ -278,6 +278,10 @@ def test_summarize_routing_false_keeps_loss_fields_without_diagnostics() -> None
     assert route_info["topk_actions"] == []
     assert route_info["topk_weights"] == []
     assert route_info["position_norms"] == []
+    components = output["loss_components"]
+    for name, value in components.items():
+        if name != "lm_loss":
+            assert value.item() == 0.0
 
 
 def test_sparse_route_block_execution_config_stats_and_validation() -> None:

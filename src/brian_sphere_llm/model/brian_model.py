@@ -657,32 +657,6 @@ class BrianRouteCore(ModuleBase):
             }
         if targets is not None:
             lm = build_causal_lm_loss(logits, targets)
-            route = route_imitation_loss(route_info["route_logits"], route_info["route_targets"]).to(lm.device)
-            balance = block_balance_loss(route_info["route_probs"], self.config.route_pool_blocks).to(lm.device)
-            cost = route_cost_loss(route_info["route_probs"], self.config.route_pool_blocks).to(lm.device)
-            loc = location_loss(route_info["location_distance"]).to(lm.device)
-            selected_balance = selected_block_balance_loss(
-                route_info["route_probs"],
-                route_info["selected_actions"],
-                self.config.route_pool_blocks,
-            ).to(lm.device)
-            coverage_floor = block_coverage_floor_loss(
-                route_info["route_probs"],
-                route_info["selected_actions"],
-                self.config.route_pool_blocks,
-                floor=_coverage_floor_min(routing_constraints),
-            ).to(lm.device)
-            transition_diversity = transition_diversity_loss(
-                route_info["route_probs"],
-                route_info["selected_actions"],
-                self.config.route_pool_blocks,
-            ).to(lm.device)
-            exit_boundary = exit_boundary_loss(
-                route_info["route_probs"],
-                self.config.route_pool_blocks,
-                {**routing_constraints, "max_route_steps": max_steps},
-            ).to(lm.device)
-            input_anchor = self.position_table.input_anchor_loss().to(lm.device)
             route_weight = _loss_weight(loss_weights, "route")
             balance_weight = _loss_weight(loss_weights, "balance")
             cost_weight = _loss_weight(loss_weights, "cost")
@@ -692,6 +666,61 @@ class BrianRouteCore(ModuleBase):
             transition_diversity_weight = _loss_weight(loss_weights, "transition_diversity")
             exit_boundary_weight = _loss_weight(loss_weights, "exit_boundary")
             input_anchor_weight = _loss_weight(loss_weights, "input_anchor")
+            zero = _zero_loss_like(lm)
+            route = (
+                route_imitation_loss(route_info["route_logits"], route_info["route_targets"]).to(lm.device)
+                if route_weight > 0.0
+                else zero
+            )
+            balance = (
+                block_balance_loss(route_info["route_probs"], self.config.route_pool_blocks).to(lm.device)
+                if balance_weight > 0.0
+                else zero
+            )
+            cost = (
+                route_cost_loss(route_info["route_probs"], self.config.route_pool_blocks).to(lm.device)
+                if cost_weight > 0.0
+                else zero
+            )
+            loc = location_loss(route_info["location_distance"]).to(lm.device) if location_weight > 0.0 else zero
+            selected_balance = (
+                selected_block_balance_loss(
+                    route_info["route_probs"],
+                    route_info["selected_actions"],
+                    self.config.route_pool_blocks,
+                ).to(lm.device)
+                if selected_balance_weight > 0.0
+                else zero
+            )
+            coverage_floor = (
+                block_coverage_floor_loss(
+                    route_info["route_probs"],
+                    route_info["selected_actions"],
+                    self.config.route_pool_blocks,
+                    floor=_coverage_floor_min(routing_constraints),
+                ).to(lm.device)
+                if coverage_floor_weight > 0.0
+                else zero
+            )
+            transition_diversity = (
+                transition_diversity_loss(
+                    route_info["route_probs"],
+                    route_info["selected_actions"],
+                    self.config.route_pool_blocks,
+                ).to(lm.device)
+                if transition_diversity_weight > 0.0
+                else zero
+            )
+            exit_boundary = (
+                exit_boundary_loss(
+                    route_info["route_probs"],
+                    self.config.route_pool_blocks,
+                    {**routing_constraints, "max_route_steps": max_steps},
+                ).to(lm.device)
+                if exit_boundary_weight > 0.0
+                else zero
+            )
+            input_anchor = self.position_table.input_anchor_loss().to(lm.device) if input_anchor_weight > 0.0 else zero
             total = (
                 lm
                 + route_weight * route
@@ -2078,6 +2107,10 @@ def _routing_options_mapping(routing_options: Mapping[str, Any] | None) -> Mappi
 
 def _loss_weight(loss_weights: Mapping[str, Any], key: str) -> float:
     return _float_value(loss_weights.get(key, 0.0), f"loss_weights.{key}", minimum=0.0)
+
+
+def _zero_loss_like(reference: torch.Tensor) -> torch.Tensor:
+    return reference.new_zeros(())
 
 
 def _coverage_floor_min(routing_constraints: Mapping[str, Any]) -> float:
