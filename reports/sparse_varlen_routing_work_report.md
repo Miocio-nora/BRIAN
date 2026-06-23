@@ -251,3 +251,108 @@ Correctness 已经比较充分：Flex reference、dense fallback、CUDA bf16/bac
 - 目标是把 16 route steps * 8 route blocks 的碎片化执行降到少量 grouped kernels。
 
 当前提交可作为 correctness-safe 原型和性能负结果记录；尚不能标记为“达到预期加速”。
+
+## 2026-06-23 Grouped Expert Execution 追加检查
+
+### 实现
+
+新增显式实验后端：
+
+- `route_block_execution: grouped_dense`
+- model config：`configs/model/brian_r125_sphere16_no_location_bias_grouped_dense.yaml`
+- smoke config：`configs/train/smoke_grouped_dense_r125_5b_ddp2_legacyval.yaml`
+
+该后端在一个 route step 内将 8 个 route block 作为 expert 维度一起执行：
+
+- position adapter、RMSNorm、QKV、attention out、FFN linear 使用 stacked expert weights。
+- attention 把 expert 维度并入 batch，一次调用 SDPA。
+- CUDA 下使用 `torch.compile(dynamic=False)` 编译 grouped route-block forward。
+- top-1/top-2 fusion 语义保持和 `full_sequence` 一致。
+- 不支持 global/attention_global/parallel_passing/activation_checkpointing 路径。
+
+### Correctness
+
+```bash
+/home/dredvpn009/Flash_Storage/anaconda3/envs/brian-sparse-varlen/bin/python -m pytest tests/test_sparse_route_block_execution.py -q
+/home/dredvpn009/Flash_Storage/anaconda3/envs/brian-sparse-varlen/bin/python -m pytest tests/test_config_inventory.py -q
+```
+
+结果：
+
+```text
+16 passed
+21 passed
+```
+
+新增覆盖：
+
+- `grouped_dense` top-1 allclose。
+- `grouped_dense` top-2 weighted fusion allclose。
+- `grouped_dense` CUDA bf16/backward finite。
+- config/model_stats validation。
+
+### Microbenchmark
+
+单 route step、8 route blocks、`B=4,S=2048,D=768,H=12`：
+
+| Path | Forward mean | Backward mean | 结论 |
+| --- | ---: | ---: | --- |
+| loop 8 dense blocks | 6.47 ms | 17.09 ms | 当前 full_sequence 的基本形态 |
+| grouped 8 dense experts | 5.46 ms | 14.91 ms | eager 有 12-16% 改善 |
+| compiled grouped 8 dense experts | 2.07 ms | 7.38 ms | microbench 很强 |
+
+但接入完整训练后，没有复现 microbench 的大幅优势。
+
+### DDP Smoke
+
+空 GPU 2/3 上执行：
+
+```bash
+CUDA_VISIBLE_DEVICES=2,3 PYTHONPATH=src /home/dredvpn009/Flash_Storage/anaconda3/envs/brian-sparse-varlen/bin/python -m torch.distributed.run --nproc_per_node=2 scripts/train.py --config configs/train/smoke_grouped_dense_r125_5b_ddp2_legacyval.yaml
+```
+
+结果：
+
+| Run | Steps | Mean tokens/s | Last-20 tokens/s | Final tokens/s | Max memory/rank |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `smoke_grouped_dense_r125_5b_ddp2_legacyval` | 100 | ~79.7k last-50 | ~79.6k | ~79.8k | ~44GB |
+
+同一空卡窗口重跑 full sequence：
+
+| Run | Steps | Mean tokens/s | Last-20 tokens/s | Final tokens/s | Max memory/rank |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `smoke_full_sequence_r125_5b_ddp2_legacyval` | 100 | 86.0k all-step | 87.0k | 87.9k | ~28GB |
+
+结论：
+
+- `grouped_dense` 正确，但完整训练吞吐低于 `full_sequence`。
+- 它的显存明显更高，因为每个 route step materialize `E x B x S x D` expert activations。
+- microbench 的 compiled grouped 优势没有转化为 end-to-end 优势，主要被 route scatter/fusion、compile graph 边界、显存带宽和更大的 activation footprint 抵消。
+
+### Grouped Sparse-Padded Prototype
+
+还测试了未接入代码的 grouped sparse-padded 原型：把 8 个 block 的 selected-Q attention 合成一次 batched SDPA，K/V 仍 full sequence。
+
+单 step 结果：
+
+| Path | Forward mean | Backward mean |
+| --- | ---: | ---: |
+| loop sparse A over 8 blocks | 10.73 ms | 23.45 ms |
+| loop dense 8 blocks + select | 7.62 ms | 20.89 ms |
+| grouped sparse-padded | 8.67 ms | 29.12 ms |
+
+结论：
+
+- grouped sparse-padded forward 仍慢于 dense-select。
+- backward 明显更差。
+- padding/scatter/gather 和更复杂反传图抵消了 selected-Q 的理论 FLOPs 节省。
+
+### Current State
+
+本轮把 grouped expert execution 做到了 correctness-safe 的实验后端，但它没有达到预期加速，也不应作为默认正式训练路径。
+
+截至目前的可靠判断：
+
+- PyTorch 级别的 selected/varlen/grouped 组合都没有超过 dense full-sequence baseline。
+- 预期加速若仍要实现，需要更底层的 fused Triton/CUDA kernel，目标是同时融合 expert GEMM、selected attention、scatter/fusion，而不是用多个 PyTorch op 拼装。
+- 当前分支保留 `sparse_varlen` 和 `grouped_dense` 作为可复现实验后端和负结果依据。

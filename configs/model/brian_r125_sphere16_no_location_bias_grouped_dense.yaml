@@ -1,0 +1,3 @@
+extends: brian_r125_sphere16_no_location_bias.yaml
+model_name: brian_r125_sphere16_no_location_bias_grouped_dense
+route_block_execution: grouped_dense

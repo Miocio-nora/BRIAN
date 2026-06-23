@@ -30,7 +30,7 @@ def _position(model: BrianRouteCore, batch_size: int, seq_len: int) -> torch.Ten
     return base.unsqueeze(1).expand(-1, seq_len, -1).contiguous()
 
 
-@pytest.mark.parametrize("route_block_execution", ["sparse", "sparse_varlen"])
+@pytest.mark.parametrize("route_block_execution", ["sparse", "sparse_varlen", "grouped_dense"])
 def test_sparse_route_block_execution_matches_full_sequence_top1(route_block_execution: str) -> None:
     torch.manual_seed(11)
     full, sparse = _paired_models(route_block_execution)
@@ -54,7 +54,7 @@ def test_sparse_route_block_execution_matches_full_sequence_top1(route_block_exe
     assert torch.allclose(actual, expected, atol=1e-5, rtol=1e-5)
 
 
-@pytest.mark.parametrize("route_block_execution", ["sparse", "sparse_varlen"])
+@pytest.mark.parametrize("route_block_execution", ["sparse", "sparse_varlen", "grouped_dense"])
 def test_sparse_route_block_execution_handles_empty_batch_rows_for_action(route_block_execution: str) -> None:
     torch.manual_seed(13)
     full, sparse = _paired_models(route_block_execution)
@@ -79,7 +79,7 @@ def test_sparse_route_block_execution_handles_empty_batch_rows_for_action(route_
     assert torch.allclose(actual, expected, atol=1e-5, rtol=1e-5)
 
 
-@pytest.mark.parametrize("route_block_execution", ["sparse", "sparse_varlen"])
+@pytest.mark.parametrize("route_block_execution", ["sparse", "sparse_varlen", "grouped_dense"])
 def test_sparse_route_block_execution_matches_full_sequence_weighted_fusion(route_block_execution: str) -> None:
     torch.manual_seed(17)
     full, sparse = _paired_models(route_block_execution)
@@ -174,6 +174,31 @@ def test_sparse_varlen_route_block_execution_cuda_backward() -> None:
     assert torch.isfinite(grad).all()
 
 
+def test_grouped_dense_route_block_execution_cuda_backward() -> None:
+    if not torch.cuda.is_available():
+        pytest.skip("CUDA backward coverage requires CUDA.")
+    torch.manual_seed(33)
+    cfg = BrianRouteConfig(
+        base=BaselineConfig(vocab_size=64, context_length=8, layers=5, d_model=64, n_heads=4),
+        pre_blocks=1,
+        route_pool_blocks=3,
+        post_blocks=1,
+        block_position_dim=8,
+        max_route_steps=2,
+        route_block_execution="grouped_dense",
+    )
+    model = BrianRouteCore(cfg).cuda().train()
+    input_ids = torch.randint(0, 64, (2, 8), device="cuda")
+
+    with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+        loss = model(input_ids)["logits"].float().mean()
+    loss.backward()
+
+    grad = model.route_blocks[0].block.attn.qkv.weight.grad
+    assert grad is not None
+    assert torch.isfinite(grad).all()
+
+
 def test_sparse_varlen_dense_backend_matches_full_sequence_top1(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("BRIAN_SPARSE_VARLEN_BACKEND", "dense")
     torch.manual_seed(37)
@@ -252,6 +277,21 @@ def test_sparse_route_block_execution_config_stats_and_validation() -> None:
 
     assert cfg.route_block_execution == "sparse_varlen"
     assert model.model_stats()["route_block_execution"] == "sparse_varlen"
+    cfg = BrianRouteConfig.from_dict(
+        {
+            "base": {"vocab_size": 64, "context_length": 6, "layers": 4, "d_model": 64, "n_heads": 4},
+            "pre_blocks": 1,
+            "route_pool_blocks": 2,
+            "post_blocks": 1,
+            "block_position_dim": 8,
+            "max_route_steps": 2,
+            "route_block_execution": "grouped_dense",
+        }
+    )
+    model = BrianRouteCore(cfg)
+
+    assert cfg.route_block_execution == "grouped_dense"
+    assert model.model_stats()["route_block_execution"] == "grouped_dense"
     with pytest.raises(ValueError, match="route_block_execution"):
         BrianRouteConfig.from_dict(
             {
