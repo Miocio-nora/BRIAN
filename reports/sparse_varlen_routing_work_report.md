@@ -1,6 +1,6 @@
 # Sparse Varlen Routing B 方案工作报告
 
-更新时间：2026-06-23 22:36 JST
+更新时间：2026-06-23 22:52 JST
 
 ## 目标
 
@@ -600,7 +600,24 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 PYTHONPATH=src /home/dredvpn009/Flash_Storage/anaco
 - router1/top-2 DDP4 last20 tokens/s > 150k。
 - 每 rank peak memory 应接近 b8acc2 的单 microbatch footprint，预计显著低于 b16acc1；实测为准。
 
-当前 0/1 GPU 仍被其他实验占用，因此本节只完成配置和测试准备，尚未把四卡吞吐写成结果。
+### DDP4 Validation Result
+
+0-3 GPU 释放后，已按上面两条命令完成 DDP4 smoke。输出目录仍在 `tmp/runs_sparse_varlen_smoke`，`max_steps=100`，`wandb.enabled=false`，effective batch 保持 32。
+
+| Run | World size | Local batch / accum | Effective batch | Last-20 tokens/s | Last-50 tokens/s | Final tokens/s | Peak memory/rank |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| DDP2 full-sequence top-1 baseline | 2 | 16 / 1 | 32 | 88,076.85 | 87,568.58 | 89,526 | ~31.2GB |
+| DDP2 grouped routedcompile top-1 | 2 | 16 / 1 | 32 | 121,582.75 | 121,900.78 | 122,015 | ~170.0GB |
+| DDP4 grouped routedcompile top-1 | 4 | 8 / 1 | 32 | 221,529.05 | 218,062.06 | 223,786 | ~87.8GB |
+| DDP2 grouped routedcompile router1/top-2 | 2 | 16 / 1 | 32 | 105,242.75 | 104,468.28 | 100,292 | ~173.5GB |
+| DDP4 grouped routedcompile router1/top-2 | 4 | 8 / 1 | 32 | 188,647.10 | 191,070.42 | 182,677 | ~88.8GB |
+
+DDP4 结论：
+
+- top-1 DDP4 last20 为 221.5k，超过 150k gate。
+- router1/top-2 DDP4 last20 为 188.6k，超过 150k gate。
+- 四卡保持 effective batch 32 后，显存从 DDP2 b16acc1 的 ~170GB/rank 降到 ~88GB/rank，说明 `world_size=4,batch=8,accum=1` 是 B200 上更稳的吞吐配置。
+- 这次结果证明当前 `grouped_dense + routedcompile + weight cache + vectorized gather/fusion + fast route-info + zero-weight loss skip` 在非 Global route-core 路径上已经达到预期加速门槛。后续大规模训练仍应继续监控真实训练 loss/benchmark，但 route execution 性能 gate 已通过。
 
 ## 2026-06-23 Training Route Info Fast Path
 
@@ -648,4 +665,28 @@ fastloss 对照：
 | b16acc1 fast route-info | 121,610.80 | 122,041.92 | 121,827 | ~169.7GB |
 | b16acc1 fast route-info + zero-weight loss skip | 122,046.75 | 122,396.20 | 121,973 | ~169.7GB |
 
-结论：训练路径清理有小幅正收益，约 +0.4% last20；仍不是接近 150k 的关键路径。当前 gate 仍需要 DDP4 实测或 fused kernel。
+结论：训练路径清理有小幅正收益，约 +0.4% last20；不是接近 150k 的关键路径。DDP4 实测已补齐并通过 150k gate，见上方 DDP4 Validation Result。
+
+## 2026-06-23 Final Correctness Recheck
+
+DDP4 结果写入前，用当前 `brian-sphere` 环境重新跑了核心测试：
+
+```bash
+PYTHONPATH=src /home/dredvpn009/Flash_Storage/anaconda3/envs/brian-sphere/bin/python -m pytest tests/test_sparse_route_block_execution.py -q
+PYTHONPATH=src /home/dredvpn009/Flash_Storage/anaconda3/envs/brian-sphere/bin/python -m pytest tests/test_config_inventory.py -q
+PYTHONPATH=src /home/dredvpn009/Flash_Storage/anaconda3/envs/brian-sphere/bin/python -m compileall -q src scripts
+```
+
+结果：
+
+```text
+17 passed
+21 passed
+compileall passed
+```
+
+最终状态：
+
+- Correctness：通过 route execution 等价、CUDA bf16/backward、suffix invariance、DDP eval consistency、DDP train smoke，以及当前完整单测回归。
+- 性能：DDP4 top-1 和 router1/top-2 都超过 150k tokens/s。
+- 推荐使用路径：非 Global 性能训练优先使用 `grouped_dense` routedcompile DDP4 b8acc1 配置；`sparse_varlen` Flex 后端保留为 correctness reference，不作为性能路径。
