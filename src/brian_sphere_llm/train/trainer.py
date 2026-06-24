@@ -259,6 +259,11 @@ def train_from_config(config_path: str | Path) -> Path:
         routing_summary: dict[str, Any] = {}
         routing_numeric_values: dict[str, list[float]] = {}
         router_space_payload: dict[str, Any] | None = None
+        summarize_routing = _routing_summary_due(config, global_step=step) or _visualization_due(
+            route_path_visualization,
+            step=step,
+            max_steps=max_steps,
+        )
         collect_router_space = is_main_process and _visualization_due(
             router_space_visualization,
             step=step,
@@ -282,7 +287,7 @@ def train_from_config(config_path: str | Path) -> Path:
                         route_mode=stage_mode,
                         global_step=step,
                         collect_router_space=collect_router_space and should_sync_gradients,
-                        summarize_routing=_routing_summary_due(config, global_step=step),
+                        summarize_routing=summarize_routing,
                     )
                     loss = outputs["loss"]
                     scaled_loss = loss / gradient_accumulation_steps
@@ -848,6 +853,17 @@ def _maybe_log_route_path_visualization(
         JsonlLogger(run_dir / "route_path_visualization_errors.jsonl").write(error)
         _wandb_log_visualization_error(wandb_run, error)
         return None
+    if not _route_path_visualization_has_paths(html_path):
+        error = {
+            "step": step,
+            "error_type": "EmptyRoutePathVisualization",
+            "error": "route path visualization had no path data; skipped W&B upload.",
+            "html_path": str(html_path),
+            "json_path": str(html_path.with_suffix(".json")),
+        }
+        JsonlLogger(run_dir / "route_path_visualization_errors.jsonl").write(error)
+        _wandb_log_visualization_error(wandb_run, error)
+        return html_path
     if config.get("upload_to_wandb"):
         _wandb_log_html(
             wandb_run,
@@ -856,6 +872,18 @@ def _maybe_log_route_path_visualization(
             step=step,
         )
     return html_path
+
+
+def _route_path_visualization_has_paths(html_path: Path) -> bool:
+    sidecar_path = html_path.with_suffix(".json")
+    try:
+        report = json.loads(sidecar_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    checks = report.get("checks")
+    if not isinstance(checks, Mapping):
+        return False
+    return checks.get("paths_present") is True
 
 
 def _maybe_log_router_space_visualization(
@@ -1150,6 +1178,12 @@ def _accumulate_routing_summary(
     if not isinstance(summary, Mapping):
         return
     for key, value in summary.items():
+        if key == "route_path_counts" and isinstance(value, list):
+            last_values[key] = _merge_route_path_counts(last_values.get(key), value)
+            continue
+        if key == "route_transition_counts" and isinstance(value, list):
+            last_values[key] = _merge_route_transition_counts(last_values.get(key), value)
+            continue
         number = _metric_number(value)
         if number is None:
             last_values[str(key)] = value
@@ -1162,6 +1196,51 @@ def _finalize_routing_summary(last_values: dict[str, Any], numeric_values: dict[
     for key, values in numeric_values.items():
         summary[key] = _mean(values)
     return summary
+
+
+def _merge_route_path_counts(existing: Any, new: list[Any]) -> list[dict[str, Any]]:
+    counts: dict[tuple[int, ...], int] = {}
+    for source in (existing, new):
+        if not isinstance(source, list):
+            continue
+        for item in source:
+            if not isinstance(item, Mapping):
+                continue
+            actions_raw = item.get("actions")
+            if not isinstance(actions_raw, list):
+                continue
+            try:
+                actions = tuple(int(value) for value in actions_raw)
+                count = int(item.get("count", 0))
+            except (TypeError, ValueError):
+                continue
+            if actions and count > 0:
+                counts[actions] = counts.get(actions, 0) + count
+    return [
+        {"actions": list(actions), "count": int(count)}
+        for actions, count in sorted(counts.items(), key=lambda item: (-item[1], item[0]))
+    ]
+
+
+def _merge_route_transition_counts(existing: Any, new: list[Any]) -> list[dict[str, int]]:
+    counts: dict[tuple[int, int], int] = {}
+    for source in (existing, new):
+        if not isinstance(source, list):
+            continue
+        for item in source:
+            if not isinstance(item, Mapping):
+                continue
+            try:
+                transition = (int(item["source"]), int(item["target"]))
+                count = int(item.get("count", 0))
+            except (KeyError, TypeError, ValueError):
+                continue
+            if count > 0:
+                counts[transition] = counts.get(transition, 0) + count
+    return [
+        {"source": int(source), "target": int(target), "count": int(count)}
+        for (source, target), count in sorted(counts.items(), key=lambda item: (-item[1], item[0]))
+    ]
 
 
 def _metric_number(value: Any) -> float | None:

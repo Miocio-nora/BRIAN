@@ -28,7 +28,10 @@ from brian_sphere_llm.train.trainer import (
     _model_stats,
     _next_train_batch,
     _restore_dataloader_position,
+    _accumulate_routing_summary,
+    _finalize_routing_summary,
     _route_path_visualization_config,
+    _route_path_visualization_has_paths,
     _router_space_visualization_config,
     _schedule_values,
     _set_sampler_epoch,
@@ -262,6 +265,65 @@ def test_route_path_visualization_config_uses_save_interval_default() -> None:
     assert config["top_paths"] == 12
     assert config["upload_to_wandb"] is True
     assert config["output_dir"] == "route_path_visualizations"
+
+
+def test_route_path_visualization_has_paths_reads_sidecar(tmp_path: Path) -> None:
+    html_path = tmp_path / "route_paths.html"
+    html_path.with_suffix(".json").write_text(
+        json.dumps({"checks": {"paths_present": True}}),
+        encoding="utf-8",
+    )
+
+    assert _route_path_visualization_has_paths(html_path) is True
+
+    html_path.with_suffix(".json").write_text(
+        json.dumps({"checks": {"paths_present": False}}),
+        encoding="utf-8",
+    )
+
+    assert _route_path_visualization_has_paths(html_path) is False
+
+
+def test_route_path_counts_merge_across_microbatches() -> None:
+    last_values: dict[str, object] = {}
+    numeric_values: dict[str, list[float]] = {}
+
+    _accumulate_routing_summary(
+        last_values,
+        numeric_values,
+        {
+            "route_path_counts": [{"actions": [0, 1, 8], "count": 2}],
+            "route_transition_counts": [{"source": 0, "target": 1, "count": 2}],
+            "route_path_count": 1,
+        },
+    )
+    _accumulate_routing_summary(
+        last_values,
+        numeric_values,
+        {
+            "route_path_counts": [
+                {"actions": [0, 1, 8], "count": 1},
+                {"actions": [2, 3, 8], "count": 4},
+            ],
+            "route_transition_counts": [
+                {"source": 0, "target": 1, "count": 1},
+                {"source": 2, "target": 3, "count": 4},
+            ],
+            "route_path_count": 2,
+        },
+    )
+
+    summary = _finalize_routing_summary(last_values, numeric_values)
+
+    assert summary["route_path_count"] == pytest.approx(1.5)
+    assert summary["route_path_counts"] == [
+        {"actions": [2, 3, 8], "count": 4},
+        {"actions": [0, 1, 8], "count": 3},
+    ]
+    assert summary["route_transition_counts"] == [
+        {"source": 2, "target": 3, "count": 4},
+        {"source": 0, "target": 1, "count": 3},
+    ]
 
 
 def test_router_space_visualization_config_uses_save_interval_default() -> None:
@@ -502,6 +564,8 @@ def test_wrap_distributed_model_passes_find_unused_parameters(monkeypatch: pytes
         torch.device("cpu"),
         distributed=True,
         find_unused_parameters=True,
+        static_graph=False,
+        gradient_as_bucket_view=False,
     )
 
     assert wrapped.module is model
