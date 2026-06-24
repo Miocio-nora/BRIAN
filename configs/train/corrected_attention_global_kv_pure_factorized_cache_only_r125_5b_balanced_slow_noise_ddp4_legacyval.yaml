@@ -1,0 +1,30 @@
+extends: corrected_attention_global_kv_r125_5b_balanced_slow_noise.yaml
+run_name: corrected_attention_global_kv_pure_factorized_cache_only_r125_5b_balanced_slow_noise_ddp4_legacyval
+model_config: ../model/brian_r125_sphere16_no_location_bias_attention_global_kv_pure_factorized_cache_only.yaml
+batch_size: 4
+gradient_accumulation_steps: 2
+eval_split: val_legacy
+checkpoint_benchmarks:
+  label: s_balanced_attention_global_kv_pure_factorized_cache_only_ddp4_legacyval
+post_train_benchmarks:
+  label: s_balanced_attention_global_kv_pure_factorized_cache_only_ddp4_legacyval
+wandb:
+  group: corrected_attention_global_kv_r125_5b_balanced_ddp4_legacyval
+  tags:
+  - corrected_package_a
+  - attention_global_kv
+  - pure_factorized
+  - cache_only
+  - r125
+  - 5b
+  - balanced_data
+  - legacy_val
+  - ddp4_global_batch32
+  - slow_noise
+  - random_route_override
+  - self_recur_cap
+  - selected_balance_002
+  - coverage_floor
+  - strong_length
+  - no_location_bias
+  - no_route_imitation
