@@ -449,3 +449,117 @@ grouped_selected_active_cuda_backward_ok
 - 目前只加速 top-1 step；top-2 weighted fusion 仍回退。
 - 后续如果要覆盖 router/top-2 后期训练，需要实现 grouped weighted-fusion scatter，或者在 route schedule 中明确 top-1/global fast path 的使用窗口。
 - 如果继续追求更高速度，下一步应考虑把 active-pair grouped attention/FFN 做 `torch.compile` 或 Triton fused kernel，而不是再回到全 `[expert,batch]` padding。
+
+## 2026-06-24 追加：cache-only true Global KV 语义
+
+### 动机
+
+前一版 `grouped_selected` 虽然已经加速明显，但它仍然在每个 active `(expert,batch)` group 内现算 current full-sequence K/V，并把：
+
+```text
+previous cache + current sequence K/V
+```
+
+一起作为 attention 的 read pool。
+
+这不符合我们现在确认的目标语义。新的目标是：
+
+```text
+route step t 只读 cache_{t-1}
+route step t 计算 routed block 输出
+route step t 结束后只更新 selected token，得到 cache_t
+```
+
+也就是说 Global KV 必须是真 cache，而不是每个 step 临时拼一个 current full-sequence pool。
+
+### 实现
+
+新增配置：
+
+- `attention_global_route_execution: cache_only`
+
+新增正式配置：
+
+- `configs/model/brian_r125_sphere16_no_location_bias_attention_global_kv_pure_factorized_cache_only.yaml`
+- `configs/train/corrected_attention_global_kv_pure_factorized_cache_only_r125_5b_smoke.yaml`
+
+新语义：
+
+- routing loop 前：用 shared A writer 对 pre-route hidden 初始化一次 full-sequence latest-token cache。
+- route step t：block query 只 attend `cache_{t-1}`。
+- route step t 结束：只对本 step routed selected token 的 updated hidden 计算 shared A code，并写回 latest-token cache。
+- 不再在 active group 内生成 current full-sequence K/V。
+- A writer 不经过 block-specific position adapter / block RMSNorm；block 差异保留在 Q/read/out/FFN 侧。
+
+当前限制：
+
+- `cache_only` 当前只支持 top-1，因此配置强制 `top_k: 1` 和 `later_top_k: 1`。
+- top-2 weighted fusion 的 cache-only 版本需要后续单独实现。
+
+### 验证
+
+```bash
+PYTHONPATH=src /home/dredvpn009/Flash_Storage/anaconda3/envs/brian-sphere/bin/python -m pytest tests/test_sparse_route_block_execution.py -q
+PYTHONPATH=src /home/dredvpn009/Flash_Storage/anaconda3/envs/brian-sphere/bin/python -m pytest tests/test_config_inventory.py -q
+PYTHONPATH=src /home/dredvpn009/Flash_Storage/anaconda3/envs/brian-sphere/bin/python -m compileall src/brian_sphere_llm
+```
+
+结果：
+
+```text
+24 passed
+21 passed
+compileall passed
+```
+
+新增语义测试：
+
+- `test_pure_factorized_attention_global_cache_only_ignores_current_unselected_hidden`
+
+该测试固定 cache，修改当前 step 中未 selected token 的 hidden，验证 selected token 输出和 write payload 不变，从而证明 cache-only path 不读取 current full-sequence K/V。
+
+CUDA bf16 backward smoke：
+
+```text
+cache_only_cuda_backward_ok
+```
+
+### B200 smoke 性能
+
+配置基础：
+
+- sequence length: 2048
+- max steps: 3
+- single GPU: GPU4
+- batch 8 / 16
+- 对照使用同一代码状态下的 `selected`、`grouped_selected`、`cache_only`
+
+| Mode | Batch | Step 2 | Step 3 | Warmup 后均值 | Train peak memory | Eval speed | Eval peak memory | Val loss |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| selected | 8 | 16,304 tok/s | 17,048 tok/s | 16,676 tok/s | 52.3GB | 25,570 tok/s | 11.1GB | 100.096 |
+| grouped_selected | 8 | 43,479 tok/s | 45,663 tok/s | 44,571 tok/s | 30.2GB | 58,152 tok/s | 11.4GB | 100.087 |
+| cache_only | 8 | 58,191 tok/s | 64,854 tok/s | 61,522 tok/s | 28.6GB | 78,438 tok/s | 11.4GB | 101.024 |
+| selected | 16 | 13,507 tok/s | 14,970 tok/s | 14,238 tok/s | 123.4GB | 23,274 tok/s | 20.2GB | 99.172 |
+| grouped_selected | 16 | 51,709 tok/s | 52,185 tok/s | 51,947 tok/s | 58.4GB | 63,979 tok/s | 20.4GB | 99.169 |
+| cache_only | 16 | 75,951 tok/s | 77,278 tok/s | 76,614 tok/s | 55.3GB | 86,606 tok/s | 20.4GB | 99.788 |
+
+相对 `selected`：
+
+- bs=8：train +268.9%，train peak memory -45.3%，eval +206.8%。
+- bs=16：train +438.1%，train peak memory -55.2%，eval +272.1%。
+
+相对 `grouped_selected`：
+
+- bs=8：train +38.0%，train peak memory -5.2%，eval +34.9%。
+- bs=16：train +47.5%，train peak memory -5.3%，eval +35.4%。
+
+### 结论
+
+`cache_only` 达到了这轮预期：
+
+- 语义上符合 true Global KV：step 内只读旧 cache，step 末更新 cache。
+- 速度上明显超过 `grouped_selected`。
+- 显存进一步下降，bs16 训练峰值约 55.3GB。
+- 这是目前最适合作为下一轮 Global KV 正式训练的实现。
+
+需要注意：`cache_only` 是语义变化，因此不能直接与旧 `selected/grouped_selected` 的 validation loss 数值逐项等价比较。它更接近原始构想，但需要后续通过长训和 benchmark 判断能力曲线。

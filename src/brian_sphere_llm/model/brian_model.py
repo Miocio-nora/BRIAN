@@ -207,15 +207,25 @@ class BrianRouteCore(ModuleBase):
                 raise ValueError(f"Unknown attention_global_kv_mode: {config.attention_global_kv_mode}")
             if config.attention_global_tokens_per_write != 1:
                 raise ValueError("attention_global_tokens_per_write currently supports only 1")
-            if config.attention_global_route_execution not in {"selected", "top1_fast", "grouped_selected"}:
+            if config.attention_global_route_execution not in {
+                "selected",
+                "top1_fast",
+                "grouped_selected",
+                "cache_only",
+            }:
                 raise ValueError(
-                    "attention_global_route_execution must be 'selected', 'top1_fast', or 'grouped_selected'."
+                    "attention_global_route_execution must be 'selected', 'top1_fast', "
+                    "'grouped_selected', or 'cache_only'."
                 )
             if (
                 config.attention_global_route_execution != "selected"
                 and config.attention_global_kv_mode != "pure_factorized"
             ):
                 raise ValueError("attention_global_route_execution fast paths currently require pure_factorized mode.")
+            if config.attention_global_route_execution == "cache_only" and (
+                config.top_k != 1 or config.later_top_k != 1
+            ):
+                raise ValueError("cache_only attention global execution currently requires top_k=later_top_k=1.")
             if (
                 config.attention_global_kv_mode != "pure_factorized"
                 and config.attention_global_sink_slots + config.attention_global_window_slots <= 0
@@ -404,6 +414,14 @@ class BrianRouteCore(ModuleBase):
                 dtype=hidden.dtype,
                 sequence_length=None if parallel_active else hidden.size(1),
             )
+            if self._cache_only_attention_global_route_execution_enabled() and not parallel_active:
+                init_key, init_value, init_valid = self._pure_factorized_shared_global_write(hidden)
+                attention_global_state = self.attention_global_cache.write(
+                    attention_global_state,
+                    init_key,
+                    init_value,
+                    init_valid,
+                )
         router_space_records: list[dict[str, Any]] | None = [] if collect_router_space else None
         record_route_diagnostics = summarize_routing or collect_router_space
         last_internal_action = torch.full(route_shape, -1, dtype=torch.long, device=input_ids.device)
@@ -1084,11 +1102,19 @@ class BrianRouteCore(ModuleBase):
 
     def _grouped_attention_global_route_execution_enabled(self) -> bool:
         return (
-            self.config.attention_global_route_execution == "grouped_selected"
+            self.config.attention_global_route_execution in {"grouped_selected", "cache_only"}
             and self.config.attention_global_kv
             and self.config.attention_global_kv_mode == "pure_factorized"
             and not self.config.parallel_passing
             and not self.activation_checkpointing
+        )
+
+    def _cache_only_attention_global_route_execution_enabled(self) -> bool:
+        return (
+            self.config.attention_global_route_execution == "cache_only"
+            and self.config.attention_global_kv
+            and self.config.attention_global_kv_mode == "pure_factorized"
+            and not self.config.parallel_passing
         )
 
     def _forward_sparse_route_block(
@@ -1552,6 +1578,17 @@ class BrianRouteCore(ModuleBase):
         weighted_fusion_possible: bool = True,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         if selected.dim() == 2 and self.config.attention_global_kv_mode == "pure_factorized":
+            if self.config.attention_global_route_execution == "cache_only":
+                if weighted_fusion_possible:
+                    raise ValueError("cache_only attention global execution currently supports top-1 routing only.")
+                return self._apply_routed_blocks_with_pure_factorized_attention_global_cache_only(
+                    hidden,
+                    position,
+                    selected,
+                    attention_global_state,
+                    route_info,
+                    grouped_attention_global_weights,
+                )
             if (
                 self.config.attention_global_route_execution == "grouped_selected"
                 and not weighted_fusion_possible
@@ -1730,6 +1767,169 @@ class BrianRouteCore(ModuleBase):
                 write_key[fallback_mask] = selected_key[fallback_mask]
                 write_value[fallback_mask] = selected_value[fallback_mask]
                 write_valid[fallback_mask] = selected_valid[fallback_mask]
+        return next_hidden, write_key, write_value, write_valid
+
+    def _apply_routed_blocks_with_pure_factorized_attention_global_cache_only(
+        self,
+        hidden: torch.Tensor,
+        position: torch.Tensor,
+        selected: torch.Tensor,
+        attention_global_state: AttentionGlobalKVState,
+        route_info: dict[str, Any],
+        grouped_attention_global_weights: tuple[Any, ...] | None,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        del route_info
+        weights = (
+            grouped_attention_global_weights
+            if grouped_attention_global_weights is not None
+            else self._grouped_pure_factorized_attention_global_weights()
+        )
+        if not weights:
+            return hidden, *self._empty_attention_global_write(hidden)
+        first = self.route_blocks[0]
+        (
+            adapter_weight,
+            attn_norm_weight,
+            q_weight,
+            out_weight,
+            ffn_norm_weight,
+            w1,
+            w2,
+            w3,
+            global_key_write_weight,
+            global_value_write_weight,
+            global_key_head_read,
+            global_value_head_read,
+            global_logit_bias,
+        ) = weights
+        num_blocks = len(self.route_blocks)
+        batch, seq_len, dim = hidden.shape
+        code_dim = self._attention_global_cache_dim()
+        action_ids = torch.arange(num_blocks, device=selected.device).view(num_blocks, 1, 1)
+        query_mask = selected.unsqueeze(0) == action_ids
+        expert_indices, batch_indices, query_positions = torch.where(query_mask)
+        next_hidden = hidden.clone()
+        write_key = hidden.new_empty((batch, self._attention_global_cache_heads(), 1, seq_len, code_dim))
+        write_value = hidden.new_empty((batch, self._attention_global_cache_heads(), 1, seq_len, code_dim))
+        write_valid = torch.zeros(batch, 1, seq_len, dtype=torch.bool, device=hidden.device)
+        if expert_indices.numel() == 0:
+            return next_hidden, write_key, write_value, write_valid
+
+        counts = query_mask.sum(dim=-1)
+        group_experts, group_batches = torch.where(counts > 0)
+        active_counts = counts[group_experts, group_batches]
+        group_count = int(active_counts.numel())
+        max_selected = int(active_counts.max().item())
+        offsets = torch.repeat_interleave(torch.cumsum(active_counts, dim=0) - active_counts, active_counts)
+        local_indices = torch.arange(expert_indices.numel(), device=hidden.device) - offsets
+        group_lookup = torch.full((num_blocks * batch,), -1, dtype=torch.long, device=hidden.device)
+        group_lookup[group_experts * batch + group_batches] = torch.arange(group_count, device=hidden.device)
+        token_group_indices = group_lookup[expert_indices * batch + batch_indices]
+
+        selected_hidden_padded = hidden.new_zeros((group_count, max_selected, dim))
+        selected_position_padded = position.new_zeros((group_count, max_selected, position.size(-1)))
+        query_positions_padded = torch.zeros(group_count, max_selected, dtype=torch.long, device=hidden.device)
+        query_valid = torch.zeros(group_count, max_selected, dtype=torch.bool, device=hidden.device)
+        block_position = self._block_position(position)
+        selected_hidden_padded[token_group_indices, local_indices] = hidden[batch_indices, query_positions]
+        selected_position_padded[token_group_indices, local_indices] = block_position[batch_indices, query_positions]
+        query_positions_padded[token_group_indices, local_indices] = query_positions
+        query_valid[token_group_indices, local_indices] = True
+
+        if first.position_injection == "direct_add":
+            bias = selected_position_padded
+        else:
+            if adapter_weight is None:
+                raise ValueError("cache_only adapter weights are missing.")
+            bias = torch.einsum("gqp,gdp->gqd", selected_position_padded, adapter_weight[group_experts])
+        x = selected_hidden_padded + bias
+
+        attn_norm_eps = first.block.attn_norm.eps
+        attn_input = (
+            attn_norm_weight[group_experts].view(group_count, 1, dim).to(dtype=x.dtype)
+            * torch.rsqrt(x.pow(2).mean(dim=-1, keepdim=True) + attn_norm_eps)
+            * x
+        )
+        n_heads = first.block.attn.n_heads
+        head_dim = first.block.attn.head_dim
+        q = torch.einsum("gqd,god->gqo", attn_input, q_weight[group_experts].to(dtype=attn_input.dtype))
+        q = q.view(group_count, max_selected, n_heads, head_dim)
+        q_code = torch.einsum(
+            "gqhd,ghdc->gqhc",
+            q,
+            global_key_head_read[group_experts].to(dtype=q.dtype),
+        )
+
+        key_code, value_code, allowed = self._grouped_pure_factorized_previous_pool_for_positions(
+            attention_global_state,
+            group_batches,
+            query_positions_padded,
+            dtype=hidden.dtype,
+            device=hidden.device,
+        )
+        if key_code.size(1) == 0:
+            attn_out = x.new_zeros((group_count, max_selected, dim))
+        else:
+            attn_mask = torch.zeros(
+                group_count,
+                1,
+                max_selected,
+                key_code.size(1),
+                dtype=q_code.dtype,
+                device=hidden.device,
+            )
+            attn_mask = attn_mask + global_logit_bias.to(dtype=q_code.dtype, device=hidden.device)[group_experts].view(
+                group_count,
+                1,
+                1,
+                1,
+            )
+            attn_mask = attn_mask.masked_fill(~allowed[:, None, :, :], torch.finfo(q_code.dtype).min)
+            value_code_out = F.scaled_dot_product_attention(
+                q_code.permute(0, 2, 1, 3),
+                key_code[:, None, :, :].expand(-1, n_heads, -1, -1),
+                value_code[:, None, :, :].expand(-1, n_heads, -1, -1),
+                attn_mask=attn_mask,
+                is_causal=False,
+                dropout_p=first.block.attn.dropout if self.training else 0.0,
+                scale=code_dim**-0.5,
+            )
+            selected_code = value_code_out.permute(0, 2, 1, 3).to(dtype=q.dtype)
+            y = torch.einsum(
+                "gqhc,ghcd->gqhd",
+                selected_code,
+                global_value_head_read[group_experts].to(dtype=selected_code.dtype),
+            ).reshape(group_count, max_selected, dim)
+            attn_out = torch.einsum("gqd,god->gqo", y, out_weight[group_experts].to(dtype=y.dtype))
+
+        selected_hidden = x + attn_out
+        ffn_norm_eps = first.block.ffn_norm.eps
+        ffn_input = (
+            ffn_norm_weight[group_experts].view(group_count, 1, dim).to(dtype=selected_hidden.dtype)
+            * torch.rsqrt(selected_hidden.pow(2).mean(dim=-1, keepdim=True) + ffn_norm_eps)
+            * selected_hidden
+        )
+        gate = torch.einsum("gqd,ghd->gqh", ffn_input, w1[group_experts].to(dtype=ffn_input.dtype))
+        up = torch.einsum("gqd,ghd->gqh", ffn_input, w2[group_experts].to(dtype=ffn_input.dtype))
+        ffn_hidden = F.silu(gate) * up
+        output_padded = selected_hidden + torch.einsum(
+            "gqh,gdh->gqd",
+            ffn_hidden,
+            w3[group_experts].to(dtype=ffn_hidden.dtype),
+        )
+        output = output_padded[query_valid]
+
+        write_payload_key = F.linear(output, global_key_write_weight.to(dtype=output.dtype))
+        write_payload_value = F.linear(output, global_value_write_weight.to(dtype=output.dtype))
+        flat_indices = batch_indices * seq_len + query_positions
+        flat_next = next_hidden.reshape(-1, dim)
+        flat_write_key = write_key[:, 0, 0].reshape(-1, code_dim)
+        flat_write_value = write_value[:, 0, 0].reshape(-1, code_dim)
+        flat_write_valid = write_valid[:, 0].reshape(-1)
+        flat_next.index_copy_(0, flat_indices, output)
+        flat_write_key.index_copy_(0, flat_indices, write_payload_key.to(flat_write_key.dtype))
+        flat_write_value.index_copy_(0, flat_indices, write_payload_value.to(flat_write_value.dtype))
+        flat_write_valid.index_fill_(0, flat_indices, True)
         return next_hidden, write_key, write_value, write_valid
 
     def _apply_routed_blocks_with_pure_factorized_attention_global_grouped_selected(
@@ -2195,6 +2395,24 @@ class BrianRouteCore(ModuleBase):
             hidden.new_zeros(shape),
             torch.zeros(hidden.size(0), 1, hidden.size(1), dtype=torch.bool, device=hidden.device),
         )
+
+    def _pure_factorized_shared_global_write(
+        self,
+        hidden: torch.Tensor,
+        valid: torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        if not self.route_blocks:
+            raise ValueError("pure_factorized shared global write requires at least one route block.")
+        attn = self.route_blocks[0].block.attn
+        if attn.global_key_write is None or attn.global_value_write is None:
+            raise ValueError("pure_factorized shared global writers are missing.")
+        key = attn.global_key_write(hidden).unsqueeze(1).unsqueeze(2)
+        value = attn.global_value_write(hidden).unsqueeze(1).unsqueeze(2)
+        if valid is None:
+            valid = torch.ones(hidden.size(0), 1, hidden.size(1), dtype=torch.bool, device=hidden.device)
+        elif valid.dim() == 2:
+            valid = valid.unsqueeze(1)
+        return key, value, valid.to(device=hidden.device, dtype=torch.bool)
 
     def _attention_global_cache_heads(self) -> int:
         if self.config.attention_global_kv_mode == "pure_factorized":
