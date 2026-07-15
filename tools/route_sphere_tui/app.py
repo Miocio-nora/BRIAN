@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from textual.app import App, ComposeResult
-from textual.containers import Horizontal, Vertical
+from textual.containers import Grid, Horizontal
 from textual.events import Resize
 
 from tools.route_sphere_tui.source import DemoSource, EventSource, ReplaySource, TelemetrySource
@@ -20,8 +20,8 @@ from tools.route_sphere_tui.widgets import (
 )
 
 TERMINAL_CELL_HEIGHT_TO_WIDTH = 2.0
-MIN_LEFT_PANE_WIDTH = 32
-SPHERE_VERTICAL_MARGIN = 2
+MIN_LEFT_PANE_WIDTH = 48
+SPHERE_VERTICAL_MARGIN = 1
 
 
 class RouteSphereApp(App[None]):
@@ -43,35 +43,36 @@ class RouteSphereApp(App[None]):
         padding: 1 2;
         background: #181818;
         border-right: solid #343434;
+        grid-size: 2 4;
+        grid-columns: 1fr 1fr;
+        grid-rows: 3 6 1fr 4;
+        grid-gutter: 1 1;
     }
 
     #header {
-        height: 3;
-        margin-bottom: 1;
+        column-span: 2;
+        height: 100%;
     }
 
     #progress {
-        height: 4;
-        margin-bottom: 1;
+        height: 100%;
     }
 
     #metrics {
-        height: 5;
-        margin-bottom: 1;
-        padding: 0 1;
+        height: 100%;
+        padding: 0;
         background: #181818;
     }
 
     .chart {
-        height: 1fr;
-        min-height: 6;
-        margin-top: 1;
+        height: 100%;
+        min-height: 4;
         background: #181818;
     }
 
     #health {
-        height: 4;
-        margin-top: 1;
+        column-span: 2;
+        height: 100%;
     }
 
     #sphere {
@@ -96,7 +97,7 @@ class RouteSphereApp(App[None]):
 
     def compose(self) -> ComposeResult:
         with Horizontal(id="body"):
-            with Vertical(id="left"):
+            with Grid(id="left"):
                 yield TrainingHeader(id="header")
                 yield TrainingProgress(id="progress")
                 yield MetricGrid(id="metrics")

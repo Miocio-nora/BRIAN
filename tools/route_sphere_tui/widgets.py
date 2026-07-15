@@ -54,14 +54,19 @@ class TrainingProgress(StateWidget):
         filled = min(bar_width, int(round(bar_width * state.progress)))
         output = Text()
         output.append(f"STEP  {state.step:,} / {state.max_steps:,}", Style(color=_color(INK), bold=True))
-        output.append(f"   {state.progress * 100:5.1f}%", Style(color=_color(BRIGHT), bold=True))
+        if self.size.width < 24:
+            output.append("\n")
+            output.append(f"{state.progress * 100:.1f}%", Style(color=_color(BRIGHT), bold=True))
+        else:
+            output.append(f"   {state.progress * 100:5.1f}%", Style(color=_color(BRIGHT), bold=True))
         output.append("\n")
         output.append("━" * filled, Style(color=_color(BRIGHT), bold=True))
         output.append("━" * (bar_width - filled), Style(color=_color(DIM)))
         output.append("\n")
         output.append("ETA  ", Style(color=_color(MUTED)))
         output.append(format_duration(state.eta_seconds), Style(color=_color(INK)))
-        output.append("    STEP  ", Style(color=_color(MUTED)))
+        output.append("\n" if self.size.width < 34 else "    ")
+        output.append("STEP  ", Style(color=_color(MUTED)))
         output.append(
             f"{state.metrics.get('train_step_time_seconds', 0.0):.2f}s"
             if state.metrics.get("train_step_time_seconds") is not None
@@ -77,7 +82,6 @@ class MetricGrid(StateWidget):
         table = Table.grid(expand=True, padding=(0, 1))
         table.add_column(ratio=1)
         table.add_column(ratio=1)
-        table.add_column(ratio=1)
         loss = state.metrics.get("loss")
         validation = state.eval_metrics.get("validation_loss")
         lr = state.metrics.get("learning_rate")
@@ -86,10 +90,12 @@ class MetricGrid(StateWidget):
         table.add_row(
             _metric("LOSS", compact_number(loss, decimals=4), BRIGHT),
             _metric("VAL", compact_number(validation, decimals=4), MID),
-            _metric("LR", compact_number(lr), INK),
         )
         table.add_row(
+            _metric("LR", compact_number(lr), INK),
             _metric("TOK / S", compact_number(throughput, decimals=1), INK),
+        )
+        table.add_row(
             _metric("GPU PEAK", _memory(memory), INK),
             _metric("WORLD", str(state.world_size), MUTED),
         )
@@ -115,7 +121,13 @@ class HistoryChart(StateWidget):
             latest = state.metrics.get("learning_rate")
 
         output = Text()
-        output.append(self.chart_title, Style(color=_color(MUTED), bold=True))
+        if self.size.width < 28:
+            title = "LOSS" if self.metric == "loss" else "LR"
+        elif self.metric == "loss":
+            title = "TRAIN / VAL"
+        else:
+            title = self.chart_title
+        output.append(title, Style(color=_color(MUTED), bold=True))
         output.append("  ")
         output.append(compact_number(latest, decimals=5 if self.metric == "lr" else 4), Style(color=_color(self.chart_color), bold=True))
         output.append("\n")

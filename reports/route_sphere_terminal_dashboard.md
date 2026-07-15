@@ -77,10 +77,15 @@ completed route edges persist as brighter dots, while the active transition
 uses a growing near-white dotted segment and a white leading point.
 
 The route pane is sized from terminal height to remain visually square under
-the standard 2:1 terminal cell aspect ratio. It is centered with two terminal
-rows of black space above and below, giving the left training pane the released
-width. Sphere geometry occupies about 94% of the inner square in both visual
-axes, leaving a thin additional margin for the rotating node glyphs.
+the standard 2:1 terminal cell aspect ratio. It is centered with one terminal
+row of black space above and below. Sphere geometry occupies about 94% of the
+inner square in both visual axes, leaving a thin additional margin for the
+rotating node glyphs. The left training pane is a two-column grid: progress and
+metrics occupy the summary row, both history charts run side by side, and the
+header and route-health strip span the full width.
+When the terminal is narrow, the training pane keeps a 48-column readability
+floor and the route square scales down before metric labels are allowed to
+collapse.
 
 ## Entry Points
 

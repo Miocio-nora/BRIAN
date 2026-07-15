@@ -191,18 +191,18 @@ def test_learned_position_layout_is_finite_and_aligned() -> None:
 
 
 def test_sphere_pane_tracks_a_visual_square_and_preserves_compact_left_pane() -> None:
-    assert _sphere_pane_width(140, 44) == 80
+    assert _sphere_pane_width(140, 44) == 84
     assert _sphere_pane_width(120, 40) == 72
-    assert _sphere_pane_width(80, 24) == 40
-    assert _sphere_pane_width(64, 24) == 32
-    assert _sphere_pane_geometry(140, 44) == (80, 40, 2, 2)
-    assert _sphere_pane_geometry(64, 24) == (32, 16, 4, 4)
+    assert _sphere_pane_width(80, 24) == 32
+    assert _sphere_pane_width(64, 24) == 16
+    assert _sphere_pane_geometry(140, 44) == (84, 42, 1, 1)
+    assert _sphere_pane_geometry(64, 24) == (16, 8, 8, 8)
 
 
 def test_sphere_projection_fills_most_of_its_square_pane() -> None:
-    radius_x, radius_y = _projection_radii(80, 40)
-    assert (2.0 * radius_x) / 80 == pytest.approx(0.94)
-    assert (2.0 * radius_y) / 40 == pytest.approx(0.94)
+    radius_x, radius_y = _projection_radii(84, 42)
+    assert (2.0 * radius_x) / 84 == pytest.approx(0.94)
+    assert (2.0 * radius_y) / 42 == pytest.approx(0.94)
 
 
 def test_braille_canvas_preserves_ascii_node_overlay() -> None:
@@ -238,8 +238,16 @@ def test_textual_dashboard_mounts_and_sphere_is_text_free() -> None:
             sphere = app.query_one(RouteSphereWidget)
             left = app.query_one("#left")
             text = sphere.render().plain
-            assert sphere.region == pytest.approx((60, 2, 80, 40))
-            assert left.region.width == 60
+            assert sphere.region == pytest.approx((56, 1, 84, 42))
+            assert left.region.width == 56
+            progress = app.query_one("#progress")
+            metrics = app.query_one("#metrics")
+            loss = app.query_one("#loss")
+            learning_rate = app.query_one("#lr")
+            assert progress.region.y == metrics.region.y
+            assert progress.region.x < metrics.region.x
+            assert loss.region.y == learning_rate.region.y
+            assert loss.region.x < learning_rate.region.x
             assert text.count(NODE_GLYPH) == 8
             assert app.dashboard.route_revision > 0
             assert all(
@@ -264,8 +272,8 @@ def test_textual_dashboard_keeps_all_nodes_in_compact_terminal() -> None:
         async with app.run_test(size=(80, 24)) as pilot:
             await pilot.pause(0.2)
             sphere = app.query_one(RouteSphereWidget)
-            assert sphere.region == pytest.approx((40, 2, 40, 20))
-            assert app.query_one("#left").region.width == 40
+            assert sphere.region == pytest.approx((48, 4, 32, 16))
+            assert app.query_one("#left").region.width == 48
             assert sphere.render().plain.count(NODE_GLYPH) == 8
 
     asyncio.run(run())

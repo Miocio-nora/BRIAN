@@ -14,9 +14,12 @@ remain visibly brighter than the static mesh, and the active leading segment
 approaches white.
 
 The right pane tracks a visual square using the terminal cell aspect ratio. It
-is vertically centered with two terminal rows of black space above and below,
-and the sphere keeps a thin internal clipping margin. The wider training pane
-automatically takes all remaining width instead of using a fixed split.
+is vertically centered with one terminal row of black space above and below,
+and the sphere keeps a thin internal clipping margin. The training pane uses a
+two-column grid: progress and metrics share a row, the loss and learning-rate
+charts share the main row, and the header and route-health strip span both.
+The training pane keeps at least 48 terminal columns when space is constrained
+so the half-width metrics remain readable; the route square scales down first.
 
 ## Demo
 
