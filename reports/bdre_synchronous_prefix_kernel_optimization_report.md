@@ -1,6 +1,6 @@
 # BDRE Synchronous-Prefix Kernel Optimization Report
 
-**Status:** first performance checkpoint validated; deeper optimization remains
+**Status:** second performance checkpoint validated; deeper optimization remains
 
 **Date:** 2026-07-16
 
@@ -34,9 +34,10 @@ focused tests compare:
 - gradients for model, writer, and reader parameters;
 - BF16 forward/backward finiteness on CUDA.
 
-The focused BDRE suite currently passes all 30 tests. On the R125 B200
-calibration, identical seeds produce identical reported loss for the reference
-and optimized backends.
+The focused BDRE suite currently passes all 31 tests in the performance
+environment, and the complete repository suite passes in the primary
+`brian-sphere` environment. On the R125 B200 calibration, identical seeds
+produce identical reported loss for the reference and optimized backends.
 
 ## 3. Measurement Method
 
@@ -55,40 +56,59 @@ Formal context length, batch 8, chunk 256, three measured repeats:
 
 | Backend | Median tok/s | Mean tok/s | Peak allocated | Peak reserved | Loss |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| `per_query_reference` | 1,345.44 | 1,344.90 | 111,353 MiB | 179,230 MiB | 114.644012 |
-| `shared_padded_explicit` | 3,918.21 | 3,915.99 | 27,326 MiB | 52,352 MiB | 114.644012 |
+| `per_query_reference` | 1,467.80 | 1,468.06 | 111,353 MiB | 179,230 MiB | 114.644012 |
+| `shared_padded_explicit` | 4,695.64 | 4,685.06 | 27,333 MiB | 52,986 MiB | 114.644012 |
 
 At the same batch, sequence, chunk, input, and seed, the optimized backend is
-approximately **2.91x faster**, reduces peak allocated memory by **75.5%**, and
-reduces peak reserved memory by **70.8%**. The loss is exactly equal at the
+approximately **3.20x faster**, reduces peak allocated memory by **75.5%**, and
+reduces peak reserved memory by **70.4%**. The loss is exactly equal at the
 reported precision.
 
 ## 5. Stable Single-B200 Candidate
 
-Batch 12, sequence 2,048, chunk 512, one warmup plus five repeats:
+Batch 14, sequence 2,048, chunk 512, one warmup plus 20 repeats:
 
 | Metric | Result |
 | --- | ---: |
-| Median throughput | 6,410.08 tok/s |
-| Mean throughput | 6,408.48 tok/s |
-| Per-repeat range | 6,403.33-6,410.88 tok/s |
-| Peak allocated | 85,244 MiB |
-| Peak reserved | 132,346 MiB |
-| Reported loss | 114.692329 |
+| Median throughput | 11,658.95 tok/s |
+| Mean throughput | 11,633.61 tok/s |
+| Per-repeat range | 11,457.65-11,737.98 tok/s |
+| Peak allocated | 101,808 MiB |
+| Peak reserved | 159,848 MiB |
+| Reported loss | 114.653511 |
 
 The prepared config is:
 
 ```text
-configs/train/bdre_rckv_r125_5b_synchronous_prefix_b12_c512_shared_explicit_legacyval.yaml
+configs/train/bdre_rckv_r125_5b_synchronous_prefix_b14_c512_shared_explicit_legacyval.yaml
 ```
 
-At the kernel-only steady-state rate, 5B tokens would take about 9.0 days on
+At the kernel-only steady-state rate, 5B tokens would take about 5.0 days on
 one B200. Real training will be slower after optimizer, data loading,
 evaluation, checkpoint, and W&B overhead. Chunk 512 also gives a longer
 gradient horizon than chunk 128; the throughput result is mathematically
 forward-equivalent but is not a training-dynamics equivalence claim.
 
 ## 6. Small Optimization Decisions
+
+### Advanced indexing cleanup retained
+
+The remaining profiler hotspot was not attention. Position lookup in the cache
+compiler used `normalized_positions[safe_blocks]`. Although the table has only
+eight rows, its generic `IndexBackward/_index_put_impl_` took 65.6 ms, or 37%
+of self CUDA time, for 15 calls in one 128-token chunk. Equivalent `F.embedding`
+lookups now serve compiler writer/reader positions and routed block positions;
+selected hidden/position gathers use `index_select`.
+
+A direct repeated-ID gradient test confirms exact output and gradient equality
+between the old indexing expression and `F.embedding`. The focused model suite
+also preserves logits, loss, cache state, and parameter gradients.
+
+For one profiled chunk, generic `IndexBackward` disappeared and self CUDA time
+fell from 177.0 ms to 112.9 ms. At BS12/C512, median throughput rose from
+6,410.08 to 10,880.33 tok/s, a 69.7% increase. The compiler change is shared by
+both attention backends: the final reference/shared A/B table above was rerun
+after this optimization.
 
 ### Host packing retained
 
@@ -111,18 +131,26 @@ warmup. The likely cause is a slow fallback for the unequal Key head dimension
 and compressed Value dimension plus expanded padded tensors. The backend and
 its configs were removed rather than retained as dead complexity.
 
+### Batch 15 rejected as the default
+
+Batch 15 reached 11,843 tok/s, only 1.7% above batch 14, while peak reserved
+memory rose to 172,276 MiB and left about 10.8 GiB free on the B200. Batch 14
+retains about 23.0 GiB and is the stable candidate.
+
 ## 7. Remaining Bottlenecks
 
-The optimized path still launches many small route/block kernels and retains a
-bursty GPU profile. A sampled long run reached high instantaneous utilization
-but only about 30% average SM utilization. The next profiler-driven work should
-focus on:
+The optimization changed the runtime profile materially. During the stable
+portion of a 20-repeat batch-14 run, one-second samples averaged approximately
+79% SM utilization and peaked at 96%, compared with roughly 30% before the
+indexing cleanup. A one-chunk profiler still records about 28,600 kernel
+launches; `copy_`, matrix multiplies, and elementwise multiplies are now the
+largest CUDA categories. The next profiler-driven work should focus on:
 
 1. route-step host synchronization and Python dispatch;
 2. repeated per-block QKV and writer projection launches;
 3. padding/index-copy overhead for skewed reader groups;
-4. compiler and route-group operations that can be batched without changing
-   routing or cache semantics.
+4. repeated dtype/copy operations and compiler bookkeeping that can be fused or
+   cached without changing routing or cache semantics.
 
 Existing FlexAttention and grouped sparse-padded experiments in the repository
 were slower in backward and should not be reintroduced without new evidence.
@@ -142,6 +170,6 @@ Optimized candidate:
 
 ```bash
 CUDA_VISIBLE_DEVICES=0 PYTHONPATH=src:. python scripts/benchmark_bdre_tbptt.py \
-  --config configs/train/bdre_rckv_r125_5b_synchronous_prefix_b12_c512_shared_explicit_legacyval.yaml \
-  --warmup-steps 1 --repeats 5
+  --config configs/train/bdre_rckv_r125_5b_synchronous_prefix_b14_c512_shared_explicit_legacyval.yaml \
+  --warmup-steps 1 --repeats 20
 ```

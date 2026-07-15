@@ -101,6 +101,23 @@ def test_spherical_code_requires_independent_input_position() -> None:
         BlockPositionTable(2, 8, mode="spherical_code", independent_input_position=False)
 
 
+def test_embedding_position_lookup_matches_advanced_index_gradients() -> None:
+    torch.manual_seed(11)
+    actions = torch.tensor([[0, 2, 2, 1], [1, 0, 2, 2]])
+    legacy_positions = torch.randn(3, 8, requires_grad=True)
+    optimized_positions = legacy_positions.detach().clone().requires_grad_(True)
+    upstream = torch.randn(2, 4, 8)
+
+    legacy = F.normalize(legacy_positions, dim=-1)[actions]
+    optimized = F.embedding(actions, F.normalize(optimized_positions, dim=-1))
+    (legacy * upstream).sum().backward()
+    (optimized * upstream).sum().backward()
+
+    assert torch.equal(legacy, optimized)
+    assert legacy_positions.grad is not None and optimized_positions.grad is not None
+    assert torch.equal(legacy_positions.grad, optimized_positions.grad)
+
+
 def test_bdre_compiler_emits_one_pair_per_reader_and_cache_per_token() -> None:
     compiler = BDRECompiler(max_route_steps=4, key_temperature=0.5, value_temperature=1.0)
     writer_key = torch.randn(2, 4, 5)

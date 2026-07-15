@@ -1089,8 +1089,8 @@ class BrianBDRERouteCore(BrianRouteCore):
             for action, indexes, pack_group in action_groups:
                 block = self.route_blocks[action]
                 projection = self.bdre_projections[action]
-                selected_hidden = flat_hidden[indexes].unsqueeze(1)
-                selected_position = flat_position[indexes]
+                selected_hidden = flat_hidden.index_select(0, indexes).unsqueeze(1)
+                selected_position = flat_position.index_select(0, indexes)
                 routed_input = selected_hidden + block._position_bias(self._block_position(selected_position))
                 attn_input = block.block.attn_norm(routed_input)
                 attention = block.block.attn

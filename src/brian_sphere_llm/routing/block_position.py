@@ -110,7 +110,7 @@ class BlockPositionTable(ModuleBase):
     def by_action(self, action: torch.Tensor) -> torch.Tensor:
         if self.mode == "none":
             return torch.zeros(*action.shape, self.position_dim, dtype=self.embeddings.dtype, device=action.device)
-        return F.normalize(self.embeddings[action], dim=-1)
+        return F.normalize(F.embedding(action, self.embeddings), dim=-1)
 
     def weighted(self, probs: torch.Tensor) -> torch.Tensor:
         if self.mode == "none":

@@ -1,0 +1,28 @@
+extends: bdre_rckv_r125_5b_synchronous_prefix_b12_c512_shared_explicit_legacyval.yaml
+run_name: bdre_rckv_r125_5b_synchronous_prefix_b14_c512_shared_explicit_legacyval
+batch_size: 14
+
+checkpoint_benchmarks:
+  label: bdre_rckv_r125_5b_synchronous_prefix_b14_c512_shared_explicit_legacyval
+
+post_train_benchmarks:
+  label: bdre_rckv_r125_5b_synchronous_prefix_b14_c512_shared_explicit_legacyval
+
+wandb:
+  group: bdre_rckv_r125_5b_synchronous_prefix_b14_c512_shared_explicit_legacyval
+  tags:
+    - bdre
+    - synchronous_prefix
+    - shared_padded_explicit
+    - reader_step
+    - normalized_step_distance
+    - stateful_tbptt
+    - chunk512
+    - grouped_host_dispatch
+    - embedding_position_lookup
+    - r125
+    - 5b
+    - balanced_data
+    - legacy_val
+    - single_gpu
+    - batch14

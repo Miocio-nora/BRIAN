@@ -224,13 +224,13 @@ class BDRECompiler(ModuleBase):
             raise ValueError("BDRE writer history exceeds max_route_steps.")
         normalized_positions = F.normalize(block_positions, dim=-1)
         safe_blocks = writer_blocks.clamp(min=0, max=normalized_positions.size(0) - 1)
-        writer_positions = normalized_positions[safe_blocks]
+        writer_positions = F.embedding(safe_blocks, normalized_positions)
         if reader_actions is None:
             reader_positions = normalized_positions.unsqueeze(0).expand(writer_keys.size(0), -1, -1)
         else:
             if reader_actions.shape != (writer_keys.size(0),):
                 raise ValueError("reader_actions must have shape [batch].")
-            reader_positions = normalized_positions[reader_actions].unsqueeze(1)
+            reader_positions = F.embedding(reader_actions, normalized_positions).unsqueeze(1)
         scores = self.position_tau * torch.einsum("brp,bsp->brs", reader_positions, writer_positions)
         scores = self._add_step_terms(scores, reader_step)
         support = self._support_mask(scores, writer_valid)

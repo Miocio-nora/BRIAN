@@ -233,10 +233,12 @@ The original per-query reader remains the correctness backend. An additive
 selected queries and aggregates Values in compressed space. On one B200 at the
 formal 2,048-token length, a warmed same-workload comparison at batch 8 and
 chunk 256 measured 1,345 tok/s for the reference and 3,918 tok/s for the
-optimized backend, with identical reported loss. Peak allocated memory fell
-from 108.7 GiB to 26.7 GiB. The stable batch-12/chunk-512 candidate measured
-6,410 tok/s median with 83.2 GiB allocated and 129.2 GiB reserved. Its
-kernel-only single-GPU 5B estimate is about 9.0 days; real training remains
+optimized backend, with identical reported loss. After replacing the
+mathematically equivalent but pathological position-table advanced indexing,
+the same comparison measures 1,468 tok/s versus 4,696 tok/s. Peak allocated
+memory falls from 108.7 GiB to 26.7 GiB. The stable batch-14/chunk-512 candidate
+measures 11,659 tok/s median with 99.4 GiB allocated and 156.1 GiB reserved. Its
+kernel-only single-GPU 5B estimate is about 5.0 days; real training remains
 slower, and the stateful trainer remains single-GPU.
 
 Key BDRE entrypoints:
@@ -253,6 +255,7 @@ configs/model/brian_r125_bdre_rckv_synchronous_prefix.yaml
 configs/train/bdre_rckv_r125_5b_synchronous_prefix_b8_c128_legacyval.yaml
 configs/model/brian_r125_bdre_rckv_synchronous_prefix_shared_explicit.yaml
 configs/train/bdre_rckv_r125_5b_synchronous_prefix_b12_c512_shared_explicit_legacyval.yaml
+configs/train/bdre_rckv_r125_5b_synchronous_prefix_b14_c512_shared_explicit_legacyval.yaml
 configs/train/stage5_bdre_tiny_synchronous_prefix_debug.yaml
 ```
 
@@ -381,8 +384,8 @@ Calibrate the optimized synchronous-prefix candidate at the formal context lengt
 
 ```bash
 CUDA_VISIBLE_DEVICES=<gpu> PYTHONPATH=src:. python scripts/benchmark_bdre_tbptt.py \
-  --config configs/train/bdre_rckv_r125_5b_synchronous_prefix_b12_c512_shared_explicit_legacyval.yaml \
-  --warmup-steps 1 --repeats 5
+  --config configs/train/bdre_rckv_r125_5b_synchronous_prefix_b14_c512_shared_explicit_legacyval.yaml \
+  --warmup-steps 1 --repeats 20
 ```
 
 Stateful TBPTT execution, including the synchronous-prefix backend, currently
