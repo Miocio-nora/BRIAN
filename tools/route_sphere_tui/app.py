@@ -21,6 +21,7 @@ from tools.route_sphere_tui.widgets import (
 
 TERMINAL_CELL_HEIGHT_TO_WIDTH = 2.0
 MIN_LEFT_PANE_WIDTH = 32
+SPHERE_VERTICAL_MARGIN = 2
 
 
 class RouteSphereApp(App[None]):
@@ -135,15 +136,29 @@ class RouteSphereApp(App[None]):
         self.query_one(RouteSphereWidget).refresh()
 
     def _resize_panes(self, width: int, height: int) -> None:
-        pane_width = _sphere_pane_width(width, height)
+        pane_width, pane_height, margin_top, margin_bottom = _sphere_pane_geometry(width, height)
         for sphere in self.query(RouteSphereWidget):
             sphere.styles.width = pane_width
+            sphere.styles.height = pane_height
+            sphere.styles.margin = (margin_top, 0, margin_bottom, 0)
 
 
 def _sphere_pane_width(width: int, height: int) -> int:
-    square_width = max(1, int(round(height * TERMINAL_CELL_HEIGHT_TO_WIDTH)))
+    return _sphere_pane_geometry(width, height)[0]
+
+
+def _sphere_pane_geometry(width: int, height: int) -> tuple[int, int, int, int]:
+    preferred_height = max(1, height - 2 * SPHERE_VERTICAL_MARGIN)
     available_width = max(1, width - MIN_LEFT_PANE_WIDTH)
-    return min(square_width, available_width)
+    width_limited_height = max(1, int(available_width / TERMINAL_CELL_HEIGHT_TO_WIDTH))
+    pane_height = min(preferred_height, width_limited_height)
+    pane_width = min(
+        available_width,
+        max(1, int(round(pane_height * TERMINAL_CELL_HEIGHT_TO_WIDTH))),
+    )
+    margin_top = max(0, (height - pane_height) // 2)
+    margin_bottom = max(0, height - pane_height - margin_top)
+    return pane_width, pane_height, margin_top, margin_bottom
 
 
 def build_source(args: argparse.Namespace) -> EventSource:

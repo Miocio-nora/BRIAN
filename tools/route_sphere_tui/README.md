@@ -13,9 +13,10 @@ route uses the same dot raster at higher brightness. Completed route segments
 remain visibly brighter than the static mesh, and the active leading segment
 approaches white.
 
-The right pane tracks a visual square using the terminal cell aspect ratio and
-the sphere fills most of that area with a small clipping margin. The training
-pane automatically takes the remaining width instead of using a fixed split.
+The right pane tracks a visual square using the terminal cell aspect ratio. It
+is vertically centered with two terminal rows of black space above and below,
+and the sphere keeps a thin internal clipping margin. The wider training pane
+automatically takes all remaining width instead of using a fixed split.
 
 ## Demo
 
