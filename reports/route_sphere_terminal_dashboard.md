@@ -66,13 +66,15 @@ Pressing `p` switches to the latest learned-position PCA. Each refreshed PCA is
 orthogonally aligned to the previous frame with Procrustes alignment to prevent
 arbitrary sign and axis flips. The stable spherical layout remains the default.
 
-Each block node has three faint base connections, forming the 12 edges of the
-inscribed cube. The dashboard uses a neutral graphite, gray, and white palette
-without a pure-black background. The compact sphere contour and sparse
-wireframe use connected light box-drawing strokes instead of a dotted or thick
-subpixel raster. Blocks use a larger heavy-asterisk `✱` node glyph. A live route may still
-connect any two blocks: completed route edges brighten to gray, while the
-active transition uses a growing white line and a white leading point.
+The eight block nodes remain the vertices of an inscribed cube. Six unmarked
+axis support vertices turn that structure into a 24-face triangular spherical
+mesh; support vertices are display geometry, not model blocks. The dashboard
+uses a neutral graphite background and white depth shading throughout. The
+compact contour and mesh use connected light box-drawing strokes instead of a
+dotted or thick subpixel raster. Blocks use a larger heavy-asterisk `✱` node
+glyph. A live route may still connect any two blocks: completed route edges
+brighten toward white, while the active transition uses a growing white line
+and a white leading point.
 
 ## Entry Points
 

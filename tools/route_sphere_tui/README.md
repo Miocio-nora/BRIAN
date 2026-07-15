@@ -5,9 +5,10 @@ pane renders optimizer progress, loss and learning-rate curves, throughput,
 memory, and route-health metrics. The interface uses a neutral graphite,
 gray, and white palette. The right pane is deliberately text-free: it contains
 only a compact rotating route sphere, eight `✱` block nodes on an inscribed
-cube, a faint 12-edge wireframe, the current path trail, and a white in-flight
-transition. Sphere lines use connected light box-drawing strokes instead of a
-dotted or thick subpixel raster.
+cube, a triangulated spherical wireframe, the current path trail, and a white
+in-flight transition. Six unmarked support vertices round out the mesh without
+being presented as model blocks. Sphere lines use connected light box-drawing
+strokes instead of a dotted or thick subpixel raster.
 
 ## Demo
 

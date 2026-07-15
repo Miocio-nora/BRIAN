@@ -190,7 +190,7 @@ class RouteSphereWidget(Widget):
         projected = _project(rotated, width, height)
 
         self._draw_shell(canvas, rotation, width, height)
-        self._draw_connections(canvas, projected, rotated)
+        self._draw_connections(canvas, raw_nodes, rotation, width, height)
         active_nodes = self._draw_route(canvas, projected)
         self._draw_nodes(canvas, projected, rotated, active_nodes)
         return canvas.text()
@@ -226,16 +226,40 @@ class RouteSphereWidget(Widget):
             ],
             axis=1,
         )
-        canvas.thin_polyline(points, color=(72, 72, 72), priority=0.1, closed=True)
+        canvas.thin_polyline(points, color=(126, 126, 126), priority=0.1, closed=True)
 
-    def _draw_connections(self, canvas: BrailleCanvas, points: np.ndarray, rotated: np.ndarray) -> None:
+    def _draw_connections(
+        self,
+        canvas: BrailleCanvas,
+        raw_nodes: np.ndarray,
+        rotation: np.ndarray,
+        width: int,
+        height: int,
+    ) -> None:
+        triangulated = len(raw_nodes) == 8 and not self.learned_layout_enabled
+        if triangulated:
+            mesh_nodes, pairs = _triangulated_sphere_mesh()
+        else:
+            mesh_nodes = raw_nodes
+            pairs = _connection_pairs(raw_nodes)
+        rotated = mesh_nodes @ rotation.T
+        points = _project(rotated, width, height)
         ordered = sorted(
-            _connection_pairs(rotated),
+            pairs,
             key=lambda pair: float(rotated[pair[0], 2] + rotated[pair[1], 2]),
         )
         for first, second in ordered:
-            depth = float((rotated[first, 2] + rotated[second, 2]) * 0.5)
-            level = int(76 + 24 * (depth + 1.0) * 0.5)
+            depth = (
+                float(rotated[second, 2])
+                if triangulated and second >= 8
+                else float((rotated[first, 2] + rotated[second, 2]) * 0.5)
+            )
+            if depth < -0.15:
+                level = 30
+            elif depth < 0.0:
+                level = int(38 + 42 * (depth + 0.15) / 0.15)
+            else:
+                level = int(96 + 62 * min(1.0, depth))
             canvas.thin_line(
                 *points[first],
                 *points[second],
@@ -318,7 +342,7 @@ class RouteSphereWidget(Widget):
         for index in np.argsort(rotated[:, 2]):
             depth = float((rotated[index, 2] + 1.0) * 0.5)
             active = int(index) in active_nodes
-            level = int(132 + 62 * depth)
+            level = int(188 + 46 * depth)
             color = WHITE if active else (level, level, level)
             canvas.glyph(*points[index], NODE_GLYPH, color=color, bold=True, priority=4.0 + depth)
 
@@ -390,6 +414,29 @@ def _connection_pairs(nodes: np.ndarray) -> list[tuple[int, int]]:
         nearest = np.argsort(distances[index])[1 : neighbors + 1]
         pairs.update((min(index, int(other)), max(index, int(other))) for other in nearest)
     return sorted(pairs)
+
+
+def _triangulated_sphere_mesh() -> tuple[np.ndarray, list[tuple[int, int]]]:
+    block_nodes = _sphere_nodes(8)
+    support_nodes = np.asarray(
+        [
+            (1.0, 0.0, 0.0),
+            (-1.0, 0.0, 0.0),
+            (0.0, 1.0, 0.0),
+            (0.0, -1.0, 0.0),
+            (0.0, 0.0, 1.0),
+            (0.0, 0.0, -1.0),
+        ],
+        dtype=np.float64,
+    )
+    nodes = np.concatenate([block_nodes, support_nodes], axis=0)
+    pairs = set(_connection_pairs(block_nodes))
+    for support_offset, support in enumerate(support_nodes):
+        dimension = int(np.argmax(np.abs(support)))
+        same_face = np.sign(block_nodes[:, dimension]) == np.sign(support[dimension])
+        for block_index in np.flatnonzero(same_face):
+            pairs.add((int(block_index), 8 + support_offset))
+    return nodes, sorted(pairs)
 
 
 def _learned_position_layout(positions: list[list[float]], *, reference: np.ndarray) -> np.ndarray:

@@ -24,6 +24,7 @@ from tools.route_sphere_tui.widgets import (
     _connection_pairs,
     _learned_position_layout,
     _sphere_nodes,
+    _triangulated_sphere_mesh,
 )
 
 
@@ -166,6 +167,17 @@ def test_cube_wireframe_has_three_edges_per_node() -> None:
     degrees = [sum(index in pair for pair in pairs) for index in range(8)]
     assert len(pairs) == 12
     assert degrees == [3] * 8
+
+
+def test_triangulated_sphere_mesh_keeps_blocks_as_balanced_vertices() -> None:
+    nodes, pairs = _triangulated_sphere_mesh()
+    degrees = [sum(index in pair for pair in pairs) for index in range(len(nodes))]
+    assert nodes.shape == (14, 3)
+    assert np.linalg.norm(nodes, axis=1) == pytest.approx(np.ones(14))
+    assert nodes[:8] == pytest.approx(_sphere_nodes(8))
+    assert len(pairs) == 36
+    assert degrees[:8] == [6] * 8
+    assert degrees[8:] == [4] * 6
 
 
 def test_learned_position_layout_is_finite_and_aligned() -> None:
