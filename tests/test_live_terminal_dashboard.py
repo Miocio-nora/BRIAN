@@ -19,6 +19,7 @@ from tools.route_sphere_tui.canvas import BrailleCanvas
 from tools.route_sphere_tui.source import DemoSource, JsonlTail, ReplaySource
 from tools.route_sphere_tui.state import DashboardState
 from tools.route_sphere_tui.widgets import (
+    NODE_GLYPH,
     RouteSphereWidget,
     _connection_pairs,
     _learned_position_layout,
@@ -193,6 +194,14 @@ def test_quadrant_canvas_renders_solid_subcell_lines() -> None:
     assert not any(0x2800 <= ord(char) <= 0x28FF for char in rendered)
 
 
+def test_thin_canvas_strokes_are_connected_box_drawing_lines() -> None:
+    canvas = BrailleCanvas(20, 8)
+    canvas.thin_line(1, 1, 18, 6, color=(120, 120, 120))
+    rendered = canvas.text().plain
+    assert any(0x2500 <= ord(char) <= 0x257F for char in rendered)
+    assert not any(0x2580 <= ord(char) <= 0x28FF for char in rendered)
+
+
 def test_textual_dashboard_mounts_and_sphere_is_text_free() -> None:
     async def run() -> None:
         app = RouteSphereApp(DemoSource(interval=0.0), fps=12)
@@ -200,12 +209,13 @@ def test_textual_dashboard_mounts_and_sphere_is_text_free() -> None:
             await pilot.pause(0.25)
             sphere = app.query_one(RouteSphereWidget)
             text = sphere.render().plain
-            assert text.count("*") == 8
+            assert text.count(NODE_GLYPH) == 8
             assert app.dashboard.route_revision > 0
             assert all(
-                char in {" ", "\n", "*", "●"} or 0x2580 <= ord(char) <= 0x259F
+                char in {" ", "\n", NODE_GLYPH, "●"} or 0x2500 <= ord(char) <= 0x257F
                 for char in text
             )
+            assert not any(0x2580 <= ord(char) <= 0x259F for char in text)
             assert not any(0x2800 <= ord(char) <= 0x28FF for char in text)
 
     asyncio.run(run())
@@ -216,6 +226,6 @@ def test_textual_dashboard_keeps_all_nodes_in_compact_terminal() -> None:
         app = RouteSphereApp(DemoSource(interval=0.0), fps=8)
         async with app.run_test(size=(80, 24)) as pilot:
             await pilot.pause(0.2)
-            assert app.query_one(RouteSphereWidget).render().plain.count("*") == 8
+            assert app.query_one(RouteSphereWidget).render().plain.count(NODE_GLYPH) == 8
 
     asyncio.run(run())

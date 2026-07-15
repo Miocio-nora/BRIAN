@@ -21,6 +21,7 @@ DIM = (42, 42, 42)
 BRIGHT = (244, 244, 244)
 MID = (170, 170, 170)
 WHITE = (255, 255, 255)
+NODE_GLYPH = "✱"
 
 
 class StateWidget(Static):
@@ -172,7 +173,7 @@ class RouteSphereWidget(Widget):
     def render(self) -> Text:
         width = max(4, self.size.width)
         height = max(4, self.size.height)
-        canvas = BrailleCanvas(width, height, render_mode="quadrant")
+        canvas = BrailleCanvas(width, height)
         state = self.dashboard
         if state.route_revision != self._route_revision:
             self._route_revision = state.route_revision
@@ -225,7 +226,7 @@ class RouteSphereWidget(Widget):
             ],
             axis=1,
         )
-        canvas.polyline(points, color=(76, 76, 76), intensity=0.18)
+        canvas.thin_polyline(points, color=(72, 72, 72), priority=0.1, closed=True)
 
     def _draw_connections(self, canvas: BrailleCanvas, points: np.ndarray, rotated: np.ndarray) -> None:
         ordered = sorted(
@@ -234,8 +235,13 @@ class RouteSphereWidget(Widget):
         )
         for first, second in ordered:
             depth = float((rotated[first, 2] + rotated[second, 2]) * 0.5)
-            intensity = 0.13 + 0.06 * (depth + 1.0) * 0.5
-            canvas.line(*points[first], *points[second], color=(92, 92, 92), intensity=intensity)
+            level = int(76 + 24 * (depth + 1.0) * 0.5)
+            canvas.thin_line(
+                *points[first],
+                *points[second],
+                color=(level, level, level),
+                priority=0.2,
+            )
 
     def _draw_route(self, canvas: BrailleCanvas, points: np.ndarray) -> set[int]:
         route = [value for value in self._route if 0 <= value < len(points)]
@@ -256,7 +262,12 @@ class RouteSphereWidget(Widget):
             first, second = route[index], route[index + 1]
             if first == second:
                 continue
-            canvas.line(*points[first], *points[second], color=(174, 174, 174), intensity=0.58)
+            canvas.thin_line(
+                *points[first],
+                *points[second],
+                color=(174, 174, 174),
+                priority=1.0,
+            )
 
         active_nodes = set(route[: completed + 1])
         if completed < segment_count:
@@ -265,19 +276,20 @@ class RouteSphereWidget(Widget):
             if first == second:
                 active_nodes.add(first)
             else:
-                canvas.line(
+                canvas.thin_line(
                     *points[first],
                     *points[second],
                     color=(190, 190, 190),
-                    intensity=0.55,
+                    priority=1.5,
                     end=active_fraction,
                 )
                 tail_start = max(0.0, active_fraction - 0.24)
-                canvas.line(
+                canvas.thin_line(
                     *points[first],
                     *points[second],
                     color=WHITE,
-                    intensity=0.98,
+                    priority=2.0,
+                    bold=True,
                     start=tail_start,
                     end=active_fraction,
                 )
@@ -288,7 +300,12 @@ class RouteSphereWidget(Widget):
             active_nodes.update(route)
             for first, second in zip(route[:-1], route[1:]):
                 if first != second:
-                    canvas.line(*points[first], *points[second], color=(174, 174, 174), intensity=0.58)
+                    canvas.thin_line(
+                        *points[first],
+                        *points[second],
+                        color=(174, 174, 174),
+                        priority=1.0,
+                    )
         return active_nodes
 
     def _draw_nodes(
@@ -303,7 +320,7 @@ class RouteSphereWidget(Widget):
             active = int(index) in active_nodes
             level = int(132 + 62 * depth)
             color = WHITE if active else (level, level, level)
-            canvas.glyph(*points[index], "*", color=color, bold=active, priority=4.0 + depth)
+            canvas.glyph(*points[index], NODE_GLYPH, color=color, bold=True, priority=4.0 + depth)
 
 
 def _draw_history(
