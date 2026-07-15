@@ -213,7 +213,26 @@ not yet a throughput-optimized replacement for the existing full-sequence
 models. A separate single-GPU stateful-TBPTT backend retains the exact forward
 cache values but detaches their autograd history at configurable token
 boundaries. Its parallelism comes from `batch_size`, not from parallel tokens
-inside one sequence.
+inside one sequence. An uncontended B200 calibration at `batch_size=32` measured
+28.18 tok/s for 128-token sequences and 25.53 tok/s for 256-token sequences.
+TBPTT solves the full-autograd memory growth but not token-serial throughput, so
+this backend is retained as a correctness/profiling oracle and is not a formal
+5B training path.
+
+The additive `synchronous_prefix` backend now parallelizes tokens inside a
+chunk while keeping route depth serial. At reader step `l`, every token compiles
+only writer steps `s <= l`; completed chunks persist one cache per
+`(token, reader_step, reader_block)`, and the current chunk constructs the same
+causal prefix cache on the fly. Full-chunk, streamed-chunk, and one-token
+incremental execution agree under this new cache definition. Training detaches
+state between chunks, so chunk size changes the gradient horizon even though it
+does not change forward values.
+
+On one B200 at the formal 2048-token length, local batch 8 and chunk 128 measured
+447 tok/s with 55.1 GiB peak allocated and 100.9 GiB peak reserved memory.
+Chunk 256 reached 685 tok/s but reserved 177.4 GiB and is not a stable default.
+The synchronous backend is ready for bounded ablations, but projected single-GPU
+5B time is still about 129 days and the stateful trainer remains single-GPU.
 
 Key BDRE entrypoints:
 
@@ -225,6 +244,9 @@ configs/train/stage5_bdre_tiny_ddp2_debug.yaml
 configs/model/brian_r125_bdre_rckv_v1_tbptt.yaml
 configs/train/bdre_rckv_r125_5b_tbptt_bs32_legacyval.yaml
 configs/train/stage5_bdre_tiny_tbptt_debug.yaml
+configs/model/brian_r125_bdre_rckv_synchronous_prefix.yaml
+configs/train/bdre_rckv_r125_5b_synchronous_prefix_b8_c128_legacyval.yaml
+configs/train/stage5_bdre_tiny_synchronous_prefix_debug.yaml
 ```
 
 Training logs include compile timing, writer-step counts, K/V compile entropy,
@@ -236,6 +258,9 @@ remaining prefill work are recorded in
 The TBPTT gradient contract, exact cache optimizations, and calibration status
 are recorded in
 [reports/bdre_stateful_tbptt_implementation_report.md](./reports/bdre_stateful_tbptt_implementation_report.md).
+The synchronous-prefix semantics, acceptance tests, B200 calibration, and
+remaining performance limits are recorded in
+[reports/bdre_synchronous_prefix_prefill_report.md](./reports/bdre_synchronous_prefix_prefill_report.md).
 
 ## Live Route Sphere
 
@@ -323,6 +348,7 @@ python scripts/train.py --config configs/train/stage4_tiny_debug.yaml
 python scripts/train.py --config configs/train/stage5_tiny_debug.yaml
 python scripts/train.py --config configs/train/stage5_bdre_tiny_debug.yaml
 python scripts/train.py --config configs/train/stage5_bdre_tiny_tbptt_debug.yaml
+python scripts/train.py --config configs/train/stage5_bdre_tiny_synchronous_prefix_debug.yaml
 python scripts/train.py --config configs/train/stage6_tiny_debug.yaml
 ```
 
@@ -333,16 +359,24 @@ torchrun --nproc_per_node=2 scripts/train.py \
   --config configs/train/stage5_bdre_tiny_ddp2_debug.yaml
 ```
 
-Run the calibrated stateful-TBPTT backend on one GPU:
+Calibrate the exact stateful-TBPTT reference on one GPU:
 
 ```bash
 CUDA_VISIBLE_DEVICES=<gpu> PYTHONPATH=src:. python scripts/benchmark_bdre_tbptt.py \
   --config configs/train/bdre_rckv_r125_5b_tbptt_bs32_legacyval.yaml \
   --chunk-size 8
-
-CUDA_VISIBLE_DEVICES=<gpu> PYTHONPATH=src:. python scripts/train.py \
-  --config configs/train/bdre_rckv_r125_5b_tbptt_bs32_legacyval.yaml
 ```
+
+Calibrate the stable synchronous-prefix candidate at the formal context length:
+
+```bash
+CUDA_VISIBLE_DEVICES=<gpu> PYTHONPATH=src:. python scripts/benchmark_bdre_tbptt.py \
+  --config configs/train/bdre_rckv_r125_5b_synchronous_prefix_b8_c128_legacyval.yaml \
+  --batch-size 8 --sequence-length 2048 --chunk-size 128
+```
+
+Stateful TBPTT execution, including the synchronous-prefix backend, currently
+supports one GPU only. Do not launch these configs with `torchrun`.
 
 For multi-GPU jobs, launch the same training entrypoint with `torchrun`; the trainer reads `WORLD_SIZE`, `RANK`, and `LOCAL_RANK`, uses a distributed train sampler, wraps the model with DDP, applies `no_sync()` during accumulated non-final microbatches, records train token throughput in global-token units while retaining `local_*` token diagnostics, averages train loss/routing scalars across ranks, and writes checkpoints/reports only from rank 0:
 

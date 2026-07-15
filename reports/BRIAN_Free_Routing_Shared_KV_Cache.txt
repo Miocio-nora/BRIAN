@@ -1,0 +1,240 @@
+\documentclass[UTF8,twocolumn,10pt,a4paper]{ctexart}
+
+\usepackage[a4paper,left=1.55cm,right=1.55cm,top=1.45cm,bottom=1.60cm,columnsep=0.66cm]{geometry}
+\usepackage{fontspec}
+\setmainfont{DejaVu Serif}
+\setsansfont{DejaVu Sans}
+\setmonofont{DejaVu Sans Mono}
+\setCJKmainfont{Noto Serif CJK SC}
+\setCJKsansfont{Noto Sans CJK SC}
+\setCJKmonofont{Noto Sans Mono CJK SC}
+
+\usepackage{amsmath,amssymb,mathtools,bm}
+\usepackage{microtype}
+\usepackage[hidelinks]{hyperref}
+
+\hypersetup{
+  pdftitle={Reader-Compiled Shared KV Cache for Free Routing in BRIAN},
+  pdfauthor={YMH-Latent-Sphere},
+  pdfsubject={Architecture specification for shared KV cache under free routing},
+  pdfkeywords={BRIAN, free routing, KV cache, reader compilation, BDRE}
+}
+
+\setlength{\parindent}{1em}
+\setlength{\parskip}{0.12em}
+\renewcommand{\baselinestretch}{1.015}
+\setlength{\abovedisplayskip}{4.4pt plus 1pt minus 1pt}
+\setlength{\belowdisplayskip}{4.4pt plus 1pt minus 1pt}
+\setlength{\abovedisplayshortskip}{2.4pt plus 1pt}
+\setlength{\belowdisplayshortskip}{2.4pt plus 1pt minus 1pt}
+\setlength{\textfloatsep}{7pt plus 2pt minus 2pt}
+\setlength{\dbltextfloatsep}{7pt plus 2pt minus 2pt}
+\setlength{\intextsep}{6pt plus 2pt minus 2pt}
+\setlength{\emergencystretch}{1.2em}
+\ctexset{
+  section={beforeskip=0.72ex plus .2ex,afterskip=0.34ex plus .1ex,format=\large\bfseries},
+  paragraph={beforeskip=0.45ex plus .15ex,afterskip=0.55em,runin=true,format=\normalsize\bfseries}
+}
+\allowdisplaybreaks
+
+\newcommand{\Concat}{\operatorname{Concat}}
+\newcommand{\TopK}{\operatorname{TopK}}
+\newcommand{\softmax}{\operatorname{softmax}}
+\newcommand{\RCKV}{\textsf{RC-KV}}
+\newcommand{\BDRE}{\textsf{BDRE}}
+
+\title{\vspace{-1.0em}\textbf{面向 BRIAN 自由路由的 Reader-Compiled 共享 KV 缓存}}
+\author{YMH-Latent-Sphere}
+\date{}
+
+\begin{document}
+\maketitle
+\vspace{-1.55em}
+
+\begin{abstract}
+BRIAN 的 free routing 使历史 token 与未来 reader 不再共享固定的 layer identity，标准按层组织的 KV cache 因而缺少稳定的写入--读取对应关系。本文提出 Reader-Compiled Shared KV Cache（\RCKV{}）：每个 writer step 分别拼接全部 Key heads 与 Value heads，并映射到跨 block 对齐的 canonical K/V latent；token 完成路由后，Block--Depth Relative Encoding（\BDRE{}）依据深度距离与 block 几何关系，为不同 reader states 编译专属缓存；运行时，各 reader head 通过独立映射恢复其 Key/Value 视角并执行标准 causal attention。本文给出该缓存结构的数学定义及其低维等价计算。
+\end{abstract}
+
+\noindent\textbf{关键词：} BRIAN；自由路由；共享 KV 缓存；reader compilation；BDRE
+
+\section{引言}
+固定层 Transformer 将第 $\ell$ 层产生的历史 Key/Value 交由后续 token 的同一层读取。layer identity 同时限定了写入方、读取方及其 head 坐标系。BRIAN 中的 free routing 打破了这一对应关系：不同 token 可以经过不同 block 序列，同一计算深度也可能由不同 block 承担。因此，一个由 writer block 生成的 KV cache 不能直接假设适用于任意未来 reader block。
+
+本文研究 BRIAN 框架下的共享 KV cache 接口。所需接口应同时满足三个条件：不同路由产生的历史状态能够进入统一缓存空间；历史 token 不以 writer step 与 writer head 的笛卡尔积形式暴露给未来 attention；reader block 与 reader head 仍可保留自己的寻址几何和 Value 解释。为此，\RCKV{} 将缓存构造分为 writer-side canonicalization 与 reader-side compilation 两个阶段。前者消除 writer-head 对象轴并建立跨 block 的 latent 接口，后者利用已完成的 token route 为不同 reader state 生成专属缓存。
+
+除本文定义的缓存构造与读取机制外，BRIAN 已有的 routing policy、block 初始化、训练设置及其他经过验证的 golden setting 均保持不变。
+
+\section{问题定义}
+设第 $i$ 个 token 的完整路由轨迹为
+\begin{equation}
+  \pi_i=(b_{i,1},b_{i,2},\ldots,b_{i,S_i}),
+  \label{eq:route}
+\end{equation}
+其中 $S_i$ 是该 token 的计算步数，$b_{i,s}$ 表示第 $s$ 个 writer step 所使用的 block。令 $\bm x_{i,s}\in\mathbb R^d$ 为该 step 的输入状态，$d$ 为 hidden dimension。若每个 attention block 含有 $H$ 个 heads、单个 head 的维度为 $d_h$，则标准写入形式为
+\begin{align}
+  \bm k_{i,s}^{(h)} &= W_{K,b_{i,s}}^{(h)}\bm x_{i,s},\\
+  \bm v_{i,s}^{(h)} &= W_{V,b_{i,s}}^{(h)}\bm x_{i,s},
+  \qquad h=1,\ldots,H,
+  \label{eq:writer-kv}
+\end{align}
+其中 $\bm k_{i,s}^{(h)},\bm v_{i,s}^{(h)}\in\mathbb R^{d_h}$。
+
+若所有 writer objects 都作为独立缓存，单个历史 token 将产生 $S_iH$ 个 Key objects 与 $S_iH$ 个 Value objects。未来 reader 不仅要选择历史 token，还要处理其 writer step 与 writer head。另一方面，若所有 writer states 仅形成一组全局共享 KV，则不同 reader heads 只能在同一 Key space 和同一 Value space 中工作。本文采用中间结构：writer side 形成共享的 canonical latent，而 reader side 保留独立解码器。
+
+一个 reader state 记为 $r=(\ell_r,b_r)$，其中 $\ell_r$ 是当前计算深度，$b_r$ 是 active reader block。可用 reader states 的集合记为 $\mathcal R$；其具体来源由 BRIAN 的既有 routing 机制决定。
+
+\section{Reader-Compiled 共享缓存}
+\paragraph{写入端规范化。}
+同一 writer step 的所有 Key heads 与所有 Value heads 分别拼接为
+\begin{align}
+  \bm K^{\mathrm{cat}}_{i,s}
+  &=\Concat_{h=1}^{H}\bm k_{i,s}^{(h)}
+  \in\mathbb R^{Hd_h},\\
+  \bm V^{\mathrm{cat}}_{i,s}
+  &=\Concat_{h=1}^{H}\bm v_{i,s}^{(h)}
+  \in\mathbb R^{Hd_h}.
+  \label{eq:concat}
+\end{align}
+拼接后，writer head 从 attention 的对象轴变为向量的 feature axis。Key 与 Value 随后分别压缩：
+\begin{align}
+  \bm c^K_{i,s}
+  &= A^K_{b_{i,s}}\bm K^{\mathrm{cat}}_{i,s}
+  \in\mathbb R^{r_K},\\
+  \bm c^V_{i,s}
+  &= A^V_{b_{i,s}}\bm V^{\mathrm{cat}}_{i,s}
+  \in\mathbb R^{r_V},
+  \label{eq:canonical}
+\end{align}
+其中 $r_K$ 与 $r_V$ 是 canonical Key/Value latent 的维度，$A^K_b\in\mathbb R^{r_K\times Hd_h}$ 与 $A^V_b\in\mathbb R^{r_V\times Hd_h}$ 是 block $b$ 的写入映射。不同 writer blocks 可以使用不同的写入映射，但其输出分别位于统一的 K-latent 与 V-latent 坐标系。实现时，$\bm c^K_{i,s}$ 与 $\bm c^V_{i,s}$ 可以连续存放；数学上保持分离，以避免 Key 的寻址几何与 Value 的内容表示在同一压缩瓶颈中相互干扰。
+
+\paragraph{面向读者的缓存编译。}
+当 token $i$ 完成式 \eqref{eq:route} 中的全部 writer steps 后，其 step-level latent 已固定。设每个 block $b$ 关联一个单位范数位置向量 $\bm z_b$，即 $\|\bm z_b\|_2=1$。对于 reader state $r=(\ell_r,b_r)$ 与 writer step $s$，\BDRE{} 定义结构兼容分数
+\begin{equation}
+  e_{i,r,s}
+  =-\lambda\lvert \ell_r-s\rvert
+  +\tau\,\bm z_{b_r}^{\top}\bm z_{b_{i,s}},
+  \label{eq:bdre}
+\end{equation}
+其中 $\lambda\ge 0$ 控制计算深度距离的影响，$\tau\ge 0$ 控制 reader--writer block 几何相似度的影响。该分数只依赖已完成的 route 与目标 reader state。
+
+为保持编译后 Key 的区分度，先从所有 writer steps 中选择结构分数最高的 $k_c$ 个候选：
+\begin{equation}
+  \mathcal I_{i,r}=\TopK_s\bigl(e_{i,r,s};k_c\bigr).
+  \label{eq:support}
+\end{equation}
+Key 与 Value 使用相同候选集合，但允许不同温度。对于 $X\in\{K,V\}$，定义
+\begin{equation}
+  \alpha^X_{i,r,s}
+  =\frac{\exp(e_{i,r,s}/T_X)}
+  {\sum_{u\in\mathcal I_{i,r}}\exp(e_{i,r,u}/T_X)},
+  \quad s\in\mathcal I_{i,r},
+  \label{eq:alpha}
+\end{equation}
+而当 $s\notin\mathcal I_{i,r}$ 时令 $\alpha^X_{i,r,s}=0$。温度满足 $T_K\le T_V$，使 Key 的组合相对尖锐，而 Value 可以在同一候选集合内保留更平滑的多步信息。
+
+历史 token $i$ 面向 reader state $r$ 的缓存由
+\begin{align}
+  \bm m^K_{i\rightarrow r}
+  &=\sum_{s=1}^{S_i}\alpha^K_{i,r,s}\bm c^K_{i,s}
+  \in\mathbb R^{r_K},\\
+  \bm m^V_{i\rightarrow r}
+  &=\sum_{s=1}^{S_i}\alpha^V_{i,r,s}\bm c^V_{i,s}
+  \in\mathbb R^{r_V}
+  \label{eq:compiled}
+\end{align}
+给出。由于 token $i$ 的 route 已完成，式 \eqref{eq:compiled} 对每个 $r\in\mathcal R$ 仅需生成一次。编译完成后，临时 step latents 可被释放，持久缓存保留 $\{(\bm m^K_{i\rightarrow r},\bm m^V_{i\rightarrow r})\}_{r\in\mathcal R}$。
+
+
+
+\paragraph{读出端注意力。}
+考虑当前 token $t$ 位于 reader state $r$。第 $h$ 个 reader head 首先产生标准 query
+\begin{equation}
+  \bm q_{t,r}^{(h)}=W_{Q,r}^{(h)}\bm x_{t,r}
+  \in\mathbb R^{d_h}.
+  \label{eq:query}
+\end{equation}
+每个 reader head 拥有独立的 Key decoder $B^K_{r,h}\in\mathbb R^{d_h\times r_K}$ 与 Value decoder $B^V_{r,h}\in\mathbb R^{d_h\times r_V}$。历史 token $i<t$ 的显式 Key/Value 为
+\begin{align}
+  \widehat{\bm k}_{i\rightarrow r}^{(h)}
+  &=B^K_{r,h}\bm m^K_{i\rightarrow r},\\
+  \widehat{\bm v}_{i\rightarrow r}^{(h)}
+  &=B^V_{r,h}\bm m^V_{i\rightarrow r}.
+  \label{eq:decode}
+\end{align}
+为突出共享缓存的数学结构，下面省略 BRIAN 现有的 temporal position transform；实际实现中，该变换仍按既有方式作用于 query 与显式 Key。标准 causal attention 为
+\begin{align}
+  \ell_{t,i}^{(r,h)}
+  &=\frac{(\bm q_{t,r}^{(h)})^{\top}
+  \widehat{\bm k}_{i\rightarrow r}^{(h)}}{\sqrt{d_h}},\\
+  a_{t,i}^{(r,h)}
+  &=\frac{\exp(\ell_{t,i}^{(r,h)})}
+  {\sum_{j<t}\exp(\ell_{t,j}^{(r,h)})},\\
+  \bm o_{t,r}^{(h)}
+  &=\sum_{i<t}a_{t,i}^{(r,h)}
+  \widehat{\bm v}_{i\rightarrow r}^{(h)}.
+  \label{eq:standard-attn}
+\end{align}
+最终多头输出为
+\begin{equation}
+  \bm o_{t,r}=W^O_r\Concat_{h=1}^{H}\bm o_{t,r}^{(h)}.
+  \label{eq:output}
+\end{equation}
+式 \eqref{eq:query}--\eqref{eq:output} 与普通多头注意力的语义一致；区别仅在于历史 K/V 由 reader-compiled latent 解码得到。
+
+上述显式形式还可利用线性映射的结合律改写。对于 Key 路径，
+\begin{align}
+  (\bm q_{t,r}^{(h)})^{\top}\widehat{\bm k}_{i\rightarrow r}^{(h)}
+  &=(\bm q_{t,r}^{(h)})^{\top}B^K_{r,h}\bm m^K_{i\rightarrow r}\\
+  &=\bigl((B^K_{r,h})^{\top}\bm q_{t,r}^{(h)}\bigr)^{\top}
+  \bm m^K_{i\rightarrow r}.
+  \label{eq:key-equivalence}
+\end{align}
+因此定义 latent query
+\begin{equation}
+  \widetilde{\bm q}_{t,r}^{(h)}
+  =(B^K_{r,h})^{\top}\bm q_{t,r}^{(h)}
+  \in\mathbb R^{r_K},
+  \label{eq:latent-query}
+\end{equation}
+即可直接计算
+\begin{equation}
+  \ell_{t,i}^{(r,h)}
+  =\frac{(\widetilde{\bm q}_{t,r}^{(h)})^{\top}
+  \bm m^K_{i\rightarrow r}}{\sqrt{d_h}}.
+  \label{eq:latent-score}
+\end{equation}
+对于 Value 路径，线性性给出
+\begin{align}
+  \bm o_{t,r}^{(h)}
+  &=\sum_{i<t}a_{t,i}^{(r,h)}B^V_{r,h}\bm m^V_{i\rightarrow r}\\
+  &=B^V_{r,h}
+  \left(\sum_{i<t}a_{t,i}^{(r,h)}\bm m^V_{i\rightarrow r}\right).
+  \label{eq:value-equivalence}
+\end{align}
+也就是说，可以先在 $r_V$ 维 latent space 中聚合 Value，再由 $B^V_{r,h}$ 解码一次。式 \eqref{eq:key-equivalence} 与 \eqref{eq:value-equivalence} 是标准注意力的等价实现，而非新的注意力定义。
+
+\paragraph{缓存生命周期。}
+当前 token 在其路由完成前仅保留临时的 $\{(\bm c^K_{t,s},\bm c^V_{t,s})\}_{s=1}^{S_t}$。式 \eqref{eq:compiled} 只在完整 route 可用后执行；随后，该 token 的 reader-compiled cache 被提交给未来 token。因而当前 token 在 temporal attention 中只能读取 $i<t$ 的持久缓存，不会把自己在 earlier steps 产生的 cache copies 作为历史 token 再次检索。
+
+\section{架构性质}
+\paragraph{跨路径共享与读者特化。}
+写入映射 $A^K_b,A^V_b$ 将不同 writer blocks 的输出规范化到共享 latent interface，而解码映射 $B^K_{r,h},B^V_{r,h}$ 将同一缓存解释为 reader-state- 与 head-specific 的 Key/Value。共享发生在存储接口上，并不要求所有 reader heads 使用同一最终 K/V 表示。
+
+\paragraph{注意力对象的组织。}
+在原始逐 step、逐 head 缓存中，历史 token $i$ 对应 $S_iH$ 个 writer-head objects。\RCKV{} 先在每个 step 内整合 heads，再沿 writer-step 轴编译 reader-specific latent。运行时，一个 reader head 对每个历史 token 只面对一对 $\bm m^K_{i\rightarrow r},\bm m^V_{i\rightarrow r}$，而不需要重新遍历该 token 的全部 writer steps 或 writer heads。
+
+\paragraph{存储规模。}
+若 $N$ 个历史 token 已提交缓存，且 $R=|\mathcal R|$，则持久缓存的元素数为
+\begin{equation}
+  C_{\mathrm{persist}}=NR(r_K+r_V).
+  \label{eq:storage}
+\end{equation}
+正在计算的 token $i$ 额外保存 $S_i(r_K+r_V)$ 个临时元素，路由完成并编译后即可释放。该规模显式保留了 reader-state 维度，以换取 free routing 下的 reader-specific memory interpretation。
+
+\section{局限}
+\RCKV{} 仍依赖若干需要实验验证的假设。首先，持久存储随可用 reader states 的数量 $R$ 线性增长；当 depth--block 组合很多时，该维度可能成为主要成本。其次，式 \eqref{eq:canonical} 与 \eqref{eq:compiled} 都是有损映射，canonical latent 的维度、候选步数 $k_c$ 以及温度 $T_K,T_V$ 会共同决定信息保真度；不同 writer blocks 的写入映射也必须在训练中形成可组合的共享坐标系。本文沿用 BRIAN 现有的 temporal position mechanism，并未在此定义新的位置编码。最后，本文给出了增量生成时的缓存合约，但高效的并行 prefill 尚未解决，留待后续工作讨论。
+
+\section{结论}
+本文给出了 BRIAN free routing 下的共享 KV cache 合约：writer-side K/V 经 head concat 与独立压缩进入 canonical latent，完整 route 再由 \BDRE{} 编译为 reader-specific cache，reader heads 则通过独立解码器执行标准 attention。该结构在不同 block 路径之间建立统一缓存接口，同时避免将 writer step 与 writer head 直接扩展为注意力对象轴。
+
+\end{document}

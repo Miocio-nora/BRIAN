@@ -45,6 +45,33 @@ class BDRECacheState:
         writer_valid: torch.Tensor | None = None,
         lazy_cache: dict[tuple[int, int], tuple[torch.Tensor, torch.Tensor]] | None = None,
     ) -> "BDRECacheState":
+        return self.append_tokens(
+            block_key.unsqueeze(1),
+            block_value.unsqueeze(1),
+            step_key=None if step_key is None else step_key.unsqueeze(1),
+            step_value=None if step_value is None else step_value.unsqueeze(1),
+            writer_key=None if writer_key is None else writer_key.unsqueeze(1),
+            writer_value=None if writer_value is None else writer_value.unsqueeze(1),
+            writer_block=None if writer_block is None else writer_block.unsqueeze(1),
+            writer_valid=None if writer_valid is None else writer_valid.unsqueeze(1),
+            lazy_cache=lazy_cache,
+        )
+
+    def append_tokens(
+        self,
+        block_key: torch.Tensor,
+        block_value: torch.Tensor,
+        *,
+        step_key: torch.Tensor | None = None,
+        step_value: torch.Tensor | None = None,
+        writer_key: torch.Tensor | None = None,
+        writer_value: torch.Tensor | None = None,
+        writer_block: torch.Tensor | None = None,
+        writer_valid: torch.Tensor | None = None,
+        lazy_cache: dict[tuple[int, int], tuple[torch.Tensor, torch.Tensor]] | None = None,
+    ) -> "BDRECacheState":
+        """Append an already contiguous token chunk along the cache token axis."""
+
         has_step = step_key is not None or step_value is not None
         if has_step and (step_key is None or step_value is None):
             raise ValueError("BDRE step Key and Value caches must be appended together.")
@@ -52,14 +79,14 @@ class BDRECacheState:
         if has_writer and any(value is None for value in (writer_key, writer_value, writer_block, writer_valid)):
             raise ValueError("BDRE writer history requires Key, Value, block IDs, and validity.")
         return BDRECacheState(
-            block_keys=_append_token(self.block_keys, block_key),
-            block_values=_append_token(self.block_values, block_value),
-            step_keys=_append_optional_token(self.step_keys, step_key),
-            step_values=_append_optional_token(self.step_values, step_value),
-            writer_keys=_append_optional_token(self.writer_keys, writer_key),
-            writer_values=_append_optional_token(self.writer_values, writer_value),
-            writer_blocks=_append_optional_token(self.writer_blocks, writer_block),
-            writer_valid=_append_optional_token(self.writer_valid, writer_valid),
+            block_keys=_append_tokens(self.block_keys, block_key),
+            block_values=_append_tokens(self.block_values, block_value),
+            step_keys=_append_optional_tokens(self.step_keys, step_key),
+            step_values=_append_optional_tokens(self.step_values, step_value),
+            writer_keys=_append_optional_tokens(self.writer_keys, writer_key),
+            writer_values=_append_optional_tokens(self.writer_values, writer_value),
+            writer_blocks=_append_optional_tokens(self.writer_blocks, writer_block),
+            writer_valid=_append_optional_tokens(self.writer_valid, writer_valid),
             lazy_cache={} if lazy_cache is None else lazy_cache,
         )
 
@@ -118,15 +145,16 @@ class BDRECacheState:
         return sum(int(value.numel() * value.element_size()) for value in tensors)
 
 
-def _append_token(history: torch.Tensor | None, value: torch.Tensor) -> torch.Tensor:
-    value = value.unsqueeze(1)
+def _append_tokens(history: torch.Tensor | None, value: torch.Tensor) -> torch.Tensor:
+    if value.dim() < 2:
+        raise ValueError("BDRE cache chunks must include batch and token dimensions.")
     return value if history is None else torch.cat((history, value), dim=1)
 
 
-def _append_optional_token(history: torch.Tensor | None, value: torch.Tensor | None) -> torch.Tensor | None:
+def _append_optional_tokens(history: torch.Tensor | None, value: torch.Tensor | None) -> torch.Tensor | None:
     if value is None:
         return history
-    return _append_token(history, value)
+    return _append_tokens(history, value)
 
 
 def _detach_optional(value: torch.Tensor | None) -> torch.Tensor | None:
@@ -153,6 +181,7 @@ class BDRECompiler(ModuleBase):
         value_temperature: float,
         position_tau: float = 1.0,
         step_lambda: float = 0.0,
+        normalize_step_distance: bool = False,
         late_step_weight: float = 0.0,
         compile_top_k: int | None = None,
     ) -> None:
@@ -170,6 +199,7 @@ class BDRECompiler(ModuleBase):
         self.value_temperature = float(value_temperature)
         self.position_tau = float(position_tau)
         self.step_lambda = float(step_lambda)
+        self.normalize_step_distance = bool(normalize_step_distance)
         self.late_step_weight = float(late_step_weight)
         self.compile_top_k = int(compile_top_k) if compile_top_k is not None else None
 
@@ -210,6 +240,35 @@ class BDRECompiler(ModuleBase):
         values = torch.einsum("brs,bsv->brv", value_weights.to(writer_values.dtype), writer_values)
         metrics = self._metrics(key_weights, value_weights, writer_valid, support)
         return BDRECompileOutput(keys, values, key_weights, value_weights, metrics)
+
+    def compile_prefix(
+        self,
+        writer_keys: torch.Tensor,
+        writer_values: torch.Tensor,
+        writer_blocks: torch.Tensor,
+        writer_valid: torch.Tensor,
+        block_positions: torch.Tensor,
+        *,
+        reader_step: int,
+        reader_actions: torch.Tensor | None = None,
+    ) -> BDRECompileOutput:
+        """Compile the writer prefix visible at one synchronous route step."""
+
+        if reader_step < 0 or reader_step >= self.max_route_steps:
+            raise ValueError("reader_step must be within max_route_steps.")
+        step_indexes = torch.arange(writer_valid.size(1), device=writer_valid.device)
+        prefix_valid = writer_valid & (step_indexes.unsqueeze(0) <= int(reader_step))
+        if not bool(prefix_valid.any(dim=-1).all()):
+            raise ValueError("Every synchronous-prefix token must have a valid writer by reader_step.")
+        return self.compile(
+            writer_keys,
+            writer_values,
+            writer_blocks,
+            prefix_valid,
+            block_positions,
+            reader_step=reader_step,
+            reader_actions=reader_actions,
+        )
 
     def compile_all_reader_steps(
         self,
@@ -280,6 +339,8 @@ class BDRECompiler(ModuleBase):
             else:
                 reader = reader_step.to(device=scores.device, dtype=scores.dtype).reshape(-1, 1, 1)
                 distance = (step_indexes.view(1, 1, -1) - reader).abs()
+            if self.normalize_step_distance and self.max_route_steps > 1:
+                distance = distance / float(self.max_route_steps - 1)
             scores = scores - self.step_lambda * distance
         if self.late_step_weight != 0.0:
             late = (step_indexes + 1.0) / float(self.max_route_steps)

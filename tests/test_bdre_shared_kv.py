@@ -21,6 +21,8 @@ def _config(
     depth_mode: str = "none",
     reader_step_cache: str = "lazy",
     self_kv_mode: str = "bdre_prefix",
+    execution_mode: str = "token_by_token",
+    chunk_size: int = 1,
 ) -> BDREConfig:
     base = BaselineConfig(
         model_name="tiny_bdre_test",
@@ -51,9 +53,22 @@ def _config(
         key_dim=8,
         value_dim=8,
         depth_mode=depth_mode,
-        step_lambda=0.7 if depth_mode == "reader_step" else 0.0,
+        step_lambda=0.7 if depth_mode == "reader_step" else 0.25 if depth_mode == "synchronous_prefix" else 0.0,
+        normalize_step_distance=depth_mode == "synchronous_prefix",
         reader_step_cache=reader_step_cache,
         self_kv_mode=self_kv_mode,
+        execution_mode=execution_mode,
+        dispatch_mode="grouped_host" if execution_mode == "synchronous_prefix" else "legacy_cuda_scan",
+        chunk_size=chunk_size,
+    )
+
+
+def _synchronous_config(*, chunk_size: int = 8) -> BDREConfig:
+    return _config(
+        depth_mode="synchronous_prefix",
+        reader_step_cache="eager",
+        execution_mode="synchronous_prefix",
+        chunk_size=chunk_size,
     )
 
 
@@ -117,6 +132,79 @@ def test_bdre_hard_topk_and_temperatures_are_effective_and_differentiable() -> N
     (output.keys.square().mean() + output.values.square().mean()).backward()
     assert writer_key.grad is not None and torch.isfinite(writer_key.grad).all()
     assert writer_value.grad is not None and torch.isfinite(writer_value.grad).all()
+
+
+def test_synchronous_prefix_compiler_masks_future_writer_steps() -> None:
+    compiler = BDRECompiler(
+        max_route_steps=4,
+        key_temperature=0.5,
+        value_temperature=1.0,
+        step_lambda=0.25,
+        normalize_step_distance=True,
+    )
+    writer_key = torch.randn(2, 4, 5)
+    writer_value = torch.randn(2, 4, 7)
+    writer_blocks = torch.tensor([[0, 1, 2, 0], [2, 1, 0, 2]])
+    valid = torch.ones(2, 4, dtype=torch.bool)
+    positions = F.normalize(torch.randn(3, 8), dim=-1)
+    changed_key = writer_key.clone()
+    changed_value = writer_value.clone()
+    changed_key[:, 2:] += 100.0
+    changed_value[:, 2:] -= 100.0
+
+    prefix = compiler.compile_prefix(
+        writer_key,
+        writer_value,
+        writer_blocks,
+        valid,
+        positions,
+        reader_step=1,
+    )
+    changed = compiler.compile_prefix(
+        changed_key,
+        changed_value,
+        writer_blocks,
+        valid,
+        positions,
+        reader_step=1,
+    )
+    later = compiler.compile_prefix(
+        changed_key,
+        changed_value,
+        writer_blocks,
+        valid,
+        positions,
+        reader_step=3,
+    )
+
+    assert torch.allclose(prefix.keys, changed.keys)
+    assert torch.allclose(prefix.values, changed.values)
+    assert not torch.allclose(prefix.keys, later.keys)
+    assert torch.equal((prefix.key_weights > 0).sum(dim=-1), torch.full((2, 3), 2))
+
+
+def test_bdre_cache_appends_contiguous_synchronous_token_chunks() -> None:
+    state = BDRECacheState()
+    block_key = torch.randn(2, 3, 4, 5)
+    block_value = torch.randn(2, 3, 4, 7)
+    step_key = torch.randn(2, 3, 6, 4, 5)
+    step_value = torch.randn(2, 3, 6, 4, 7)
+    state = state.append_tokens(
+        block_key,
+        block_value,
+        step_key=step_key,
+        step_value=step_value,
+    )
+    state = state.append_tokens(
+        block_key + 1.0,
+        block_value + 1.0,
+        step_key=step_key + 1.0,
+        step_value=step_value + 1.0,
+    )
+
+    assert state.tokens == 6
+    assert state.block_keys is not None and state.block_keys.shape == (2, 6, 4, 5)
+    assert state.step_keys is not None and state.step_keys.shape == (2, 6, 6, 4, 5)
 
 
 def test_bdre_projection_parameters_are_independent_per_block_and_head() -> None:
@@ -315,6 +403,94 @@ def test_bdre_prefix_logits_are_suffix_invariant() -> None:
     assert torch.allclose(first_logits[:, :3], second_logits[:, :3], atol=1e-6, rtol=1e-6)
 
 
+def test_synchronous_prefix_is_chunk_boundary_and_incremental_invariant() -> None:
+    torch.manual_seed(53)
+    full = BrianBDRERouteCore(_synchronous_config(chunk_size=8)).eval()
+    streamed = BrianBDRERouteCore(_synchronous_config(chunk_size=8)).eval()
+    incremental = BrianBDRERouteCore(_synchronous_config(chunk_size=8)).eval()
+    streamed.load_state_dict(full.state_dict())
+    incremental.load_state_dict(full.state_dict())
+    input_ids = torch.randint(0, 64, (3, 7))
+
+    with torch.no_grad():
+        full_logits = full(input_ids, route_mode="fixed", pseudo_policy="sequential")["logits"]
+        state = None
+        stream_logits = []
+        for start in range(0, input_ids.size(1), 2):
+            output = streamed.forward_stream_chunk(
+                input_ids[:, start : start + 2],
+                state,
+                route_mode="fixed",
+                pseudo_policy="sequential",
+            )
+            state = output["incremental_state"]
+            stream_logits.append(output["logits"])
+        incremental_state = None
+        incremental_logits = []
+        for token in input_ids.unbind(dim=1):
+            output = incremental.forward_incremental(
+                token,
+                incremental_state,
+                route_mode="fixed",
+                pseudo_policy="sequential",
+            )
+            incremental_state = output["incremental_state"]
+            incremental_logits.append(output["logits"])
+
+    assert state is not None and state.cache.step_keys is not None
+    assert state.cache.step_keys.shape == (3, 7, 3, 2, 8)
+    assert torch.allclose(full_logits, torch.cat(stream_logits, dim=1), atol=2e-5, rtol=2e-5)
+    assert torch.allclose(full_logits, torch.cat(incremental_logits, dim=1), atol=2e-5, rtol=2e-5)
+
+
+def test_synchronous_prefix_is_suffix_invariant() -> None:
+    torch.manual_seed(59)
+    model = BrianBDRERouteCore(_synchronous_config(chunk_size=8)).eval()
+    first = torch.tensor([[1, 2, 3, 4, 5, 6]])
+    second = torch.tensor([[1, 2, 3, 22, 23, 24]])
+    with torch.no_grad():
+        first_logits = model(first, route_mode="fixed", pseudo_policy="sequential")["logits"]
+        second_logits = model(second, route_mode="fixed", pseudo_policy="sequential")["logits"]
+    assert torch.allclose(first_logits[:, :3], second_logits[:, :3], atol=2e-5, rtol=2e-5)
+
+
+def test_synchronous_prefix_forward_backward_is_finite() -> None:
+    torch.manual_seed(61)
+    model = BrianBDRERouteCore(_synchronous_config(chunk_size=4)).train()
+    input_ids = torch.randint(0, 64, (2, 4))
+    output = model(
+        input_ids,
+        targets=input_ids,
+        route_mode="fixed",
+        pseudo_policy="sequential",
+    )
+    output["loss"].backward()
+    assert torch.isfinite(output["loss"])
+    assert model.bdre_projections[0].key_write.weight.grad is not None
+    assert torch.isfinite(model.bdre_projections[0].key_write.weight.grad).all()
+
+
+def test_synchronous_prefix_visualization_masks_future_writer_steps() -> None:
+    model = BrianBDRERouteCore(_synchronous_config(chunk_size=4)).eval()
+    with torch.no_grad():
+        output = model(
+            torch.randint(0, 64, (1, 3)),
+            route_mode="fixed",
+            pseudo_policy="sequential",
+            collect_bdre_visualization=True,
+        )
+
+    payload = output["bdre_visualization"]
+    key_weights = payload["reader_step_key_weights"]
+    value_weights = payload["reader_step_value_weights"]
+    assert key_weights.shape == (1, 3, 2, 3)
+    assert value_weights.shape == (1, 3, 2, 3)
+    assert torch.count_nonzero(key_weights[:, 0, :, 1:]) == 0
+    assert torch.count_nonzero(value_weights[:, 0, :, 1:]) == 0
+    assert torch.count_nonzero(key_weights[:, 1, :, 2:]) == 0
+    assert torch.count_nonzero(value_weights[:, 1, :, 2:]) == 0
+
+
 @pytest.mark.parametrize("self_kv_mode", ["bdre_prefix", "current_step", "none"])
 def test_bdre_self_modes_are_finite(self_kv_mode: str) -> None:
     model = BrianBDRERouteCore(_config(self_kv_mode=self_kv_mode))
@@ -399,6 +575,18 @@ def test_bdre_rejects_top2_without_touching_legacy_config() -> None:
 def test_bdre_cuda_bf16_forward_backward_is_finite() -> None:
     model = BrianBDRERouteCore(_config()).cuda().train()
     input_ids = torch.randint(0, 64, (2, 5), device="cuda")
+    with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+        output = model(input_ids, targets=input_ids, route_mode="fixed", pseudo_policy="sequential")
+    output["loss"].backward()
+    assert torch.isfinite(output["loss"])
+    assert model.bdre_projections[0].key_write.weight.grad is not None
+    assert torch.isfinite(model.bdre_projections[0].key_write.weight.grad).all()
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is required")
+def test_synchronous_prefix_cuda_bf16_forward_backward_is_finite() -> None:
+    model = BrianBDRERouteCore(_synchronous_config(chunk_size=4)).cuda().train()
+    input_ids = torch.randint(0, 64, (2, 4), device="cuda")
     with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
         output = model(input_ids, targets=input_ids, route_mode="fixed", pseudo_policy="sequential")
     output["loss"].backward()

@@ -1,7 +1,7 @@
 # BDRE Stateful TBPTT Implementation Report
 
-**Status:** implementation and tiny end-to-end validation complete; full R125
-memory calibration pending an uncontended B200
+**Status:** exact-forward implementation validated; rejected as a formal R125
+training backend because token-serial throughput is not viable
 
 **Date:** 2026-07-16
 
@@ -121,23 +121,49 @@ because an unrelated root-owned vLLM job loaded approximately 170 GiB on the
 same GPU during the measurement. No timing or memory conclusion is taken from
 that run.
 
-## 7. Remaining Acceptance
+An uncontended B200 calibration was completed on GPU 0 with the formal R125
+model, BF16, `batch_size=32`, and `chunk_size=8`. The benchmark includes the
+complete forward and backward for one random-token microbatch; optimizer update
+overhead is excluded.
 
-Before starting the formal 5B run, use one uncontended B200 to execute one full
-2048-token optimizer step and record:
+| Sequence | Tokens | Wall time | Throughput | Peak allocated | Peak reserved |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 128 | 4,096 | 145.37 s | 28.18 tok/s | 3.28 GiB | 3.59 GiB |
+| 256 | 8,192 | 320.93 s | 25.53 tok/s | 4.46 GiB | 4.86 GiB |
+
+The raw reports are:
 
 ```text
-peak allocated and reserved CUDA memory
-tokens per second
-route-step host synchronization time
-BDRE compile time fraction
-pre/post attention time
-final cache memory
+reports/bdre_tbptt_bs32_chunk8_seq128_calibration.json
+reports/bdre_tbptt_bs32_chunk8_seq256_calibration.json
 ```
 
-Test `C=8` first. If it OOMs, restart the calibration with `C=4`; do not change
-the chunk size inside a running optimizer step. The largest value with a useful
-memory margin should be fixed in the formal config and report.
+Observed SM utilization was bursty and generally below 40%, while memory was
+far from the 183 GiB B200 limit. The bottleneck is therefore token/route-step
+control flow and many small kernels, compounded by attention over a growing
+history, rather than memory capacity.
+
+## 7. Throughput Decision
+
+A two-point model `time(T) = aT + bT^2`, fitted only to the uncontended 128 and
+256 token measurements, projects a 2048-token step at approximately 5,950
+seconds (99 minutes), 11 tok/s, and about 21 GiB peak allocated memory. This is
+an extrapolation, not a completed 2048-token measurement, and route behavior can
+move the exact value. It is sufficient for the engineering decision: even the
+more favorable measured 25.53 tok/s would require more than six years to consume
+5B training tokens on one GPU.
+
+The old full-autograd BDRE DDP4 attempt consumed approximately 97 GiB per rank
+and produced no recorded optimizer step after about 54 minutes. Stateful TBPTT
+therefore fixes the memory problem, but it does not fix the fundamental
+throughput problem. Increasing batch size or changing the truncation boundary
+cannot recover the several orders of magnitude needed for formal training.
+
+Exact token-by-token execution remains the semantic oracle for correctness and
+incremental inference. Formal BDRE training is blocked on a parallel prefill or
+parallel training formulation with explicit approximation/equivalence tests.
+The subsequent synchronous-prefix implementation and B200 calibration are
+documented in `reports/bdre_synchronous_prefix_prefill_report.md`.
 
 ## 8. Commands
 
@@ -148,7 +174,7 @@ CUDA_VISIBLE_DEVICES=<gpu> PYTHONPATH=src:. python scripts/train.py \
   --config configs/train/stage5_bdre_tiny_tbptt_debug.yaml
 ```
 
-Single-step memory and throughput calibration:
+Short-sequence memory and throughput calibration:
 
 ```bash
 CUDA_VISIBLE_DEVICES=<gpu> PYTHONPATH=src:. python scripts/benchmark_bdre_tbptt.py \
@@ -157,9 +183,6 @@ CUDA_VISIBLE_DEVICES=<gpu> PYTHONPATH=src:. python scripts/benchmark_bdre_tbptt.
   --output reports/bdre_tbptt_bs32_chunk8_calibration.json
 ```
 
-Formal single-GPU training after memory calibration:
-
-```bash
-CUDA_VISIBLE_DEVICES=<gpu> PYTHONPATH=src:. python scripts/train.py \
-  --config configs/train/bdre_rckv_r125_5b_tbptt_bs32_legacyval.yaml
-```
+The R125 stateful-TBPTT config is retained as a correctness and profiling
+reference. Do not use it for a formal 5B run unless a later implementation
+changes the token-serial throughput result above.

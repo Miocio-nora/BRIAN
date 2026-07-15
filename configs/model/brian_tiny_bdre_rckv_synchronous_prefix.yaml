@@ -1,0 +1,12 @@
+extends: brian_tiny_bdre_rckv.yaml
+model_name: brian_tiny_bdre_rckv_synchronous_prefix
+
+bdre_depth_mode: synchronous_prefix
+bdre_step_lambda: 0.25
+bdre_normalize_step_distance: true
+bdre_reader_step_cache: eager
+
+execution:
+  mode: synchronous_prefix
+  dispatch: grouped_host
+  chunk_size: 8

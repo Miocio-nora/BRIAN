@@ -64,6 +64,8 @@ class BDREConfig:
     position_geometry_normalize: bool = True
     execution_mode: str = "token_by_token"
     dispatch_mode: str = "legacy_cuda_scan"
+    chunk_size: int = 1
+    normalize_step_distance: bool = False
 
     @classmethod
     def from_dict(cls, data: dict[str, Any], *, config_dir: str | Path | None = None) -> "BDREConfig":
@@ -119,6 +121,11 @@ class BDREConfig:
             ),
             execution_mode=str(execution.get("mode", "token_by_token")),
             dispatch_mode=str(execution.get("dispatch", "legacy_cuda_scan")),
+            chunk_size=_int_value(execution.get("chunk_size", 1), "execution.chunk_size", minimum=1),
+            normalize_step_distance=_bool_value(
+                data.get("bdre_normalize_step_distance", False),
+                "bdre_normalize_step_distance",
+            ),
         )
         if str(geometry.get("internal_target", "regular_simplex")) != "regular_simplex":
             raise ValueError("BDRE v1 position_geometry.internal_target must be regular_simplex.")
@@ -128,8 +135,8 @@ class BDREConfig:
         return config
 
     def validate(self) -> None:
-        if self.depth_mode not in {"none", "reader_step"}:
-            raise ValueError("bdre_depth_mode must be 'none' or 'reader_step'.")
+        if self.depth_mode not in {"none", "reader_step", "synchronous_prefix"}:
+            raise ValueError("bdre_depth_mode must be 'none', 'reader_step', or 'synchronous_prefix'.")
         if self.reader_step_cache not in {"eager", "lazy", "dynamic"}:
             raise ValueError("bdre_reader_step_cache must be 'eager', 'lazy', or 'dynamic'.")
         if self.self_kv_mode not in {"bdre_prefix", "current_step", "none"}:
@@ -138,10 +145,21 @@ class BDREConfig:
             raise ValueError("BDRE v1 supports only explicit_decode_rope Key reads.")
         if self.value_read_mode != "latent_aggregate":
             raise ValueError("BDRE v1 supports only latent_aggregate Value reads.")
-        if self.execution_mode != "token_by_token":
-            raise ValueError("BDRE v1 supports only exact token_by_token execution.")
+        if self.execution_mode not in {"token_by_token", "synchronous_prefix"}:
+            raise ValueError("BDRE execution.mode must be 'token_by_token' or 'synchronous_prefix'.")
         if self.dispatch_mode not in {"legacy_cuda_scan", "grouped_host"}:
             raise ValueError("BDRE execution.dispatch must be 'legacy_cuda_scan' or 'grouped_host'.")
+        if self.execution_mode == "synchronous_prefix":
+            if self.depth_mode != "synchronous_prefix":
+                raise ValueError("synchronous_prefix execution requires bdre_depth_mode=synchronous_prefix.")
+            if self.reader_step_cache != "eager":
+                raise ValueError("synchronous_prefix execution requires bdre_reader_step_cache=eager.")
+            if self.self_kv_mode != "bdre_prefix":
+                raise ValueError("synchronous_prefix execution requires bdre_self_kv_mode=bdre_prefix.")
+            if not self.route.hard_exit:
+                raise ValueError("synchronous_prefix execution requires hard_exit=true.")
+        elif self.depth_mode == "synchronous_prefix":
+            raise ValueError("bdre_depth_mode=synchronous_prefix requires synchronous_prefix execution.")
         if not self.position_geometry_normalize:
             raise ValueError("BDRE v1 requires normalized position geometry.")
         if self.route.top_k != 1 or self.route.later_top_k != 1:
@@ -251,6 +269,46 @@ def _incremental_transformer_block(
     return hidden, IncrementalAttentionState(all_keys, all_values)
 
 
+def _chunk_transformer_block(
+    block: Any,
+    hidden: torch.Tensor,
+    state: IncrementalAttentionState,
+    start_position: int,
+) -> tuple[torch.Tensor, IncrementalAttentionState]:
+    """Advance a standard causal block over several contiguous token positions."""
+
+    attn_input = block.attn_norm(hidden)
+    attention = block.attn
+    batch, chunk, dim = attn_input.shape
+    q, key, value = attention.qkv(attn_input).chunk(3, dim=-1)
+    q = q.view(batch, chunk, attention.n_heads, attention.head_dim).transpose(1, 2)
+    key = key.view(batch, chunk, attention.n_heads, attention.head_dim).transpose(1, 2)
+    value = value.view(batch, chunk, attention.n_heads, attention.head_dim).transpose(1, 2)
+    positions = torch.arange(start_position, start_position + chunk, device=hidden.device)
+    cosine = attention.rope.cos[:, :, positions, :].to(device=q.device, dtype=q.dtype)
+    sine = attention.rope.sin[:, :, positions, :].to(device=q.device, dtype=q.dtype)
+    q = apply_rotary(q, cosine, sine)
+    key = apply_rotary(key, cosine, sine)
+    all_keys = torch.cat((state.keys, key), dim=2) if state.keys is not None else key
+    all_values = torch.cat((state.values, value), dim=2) if state.values is not None else value
+    if all_keys.size(2) != start_position + chunk:
+        raise ValueError("Chunk attention state length does not match the BDRE token position.")
+    key_positions = torch.arange(all_keys.size(2), device=hidden.device)
+    allowed = key_positions.view(1, 1, 1, -1) <= positions.view(1, 1, -1, 1)
+    attended = F.scaled_dot_product_attention(
+        q,
+        all_keys,
+        all_values,
+        attn_mask=allowed,
+        is_causal=False,
+        dropout_p=attention.dropout if block.training else 0.0,
+    )
+    attended = attended.transpose(1, 2).contiguous().view(batch, chunk, dim)
+    hidden = hidden + attention.out(attended)
+    hidden = hidden + block.ffn(block.ffn_norm(hidden))
+    return hidden, IncrementalAttentionState(all_keys, all_values)
+
+
 class _BDREDiagnostics:
     def __init__(self) -> None:
         self.started = time.perf_counter()
@@ -287,7 +345,14 @@ class _BDREDiagnostics:
                 "last_step_mass": 0.0,
             }
         compiled_state_count = 0
-        if state.block_keys is not None:
+        if state.step_keys is not None:
+            compiled_state_count = (
+                state.tokens
+                * state.step_keys.size(0)
+                * state.step_keys.size(2)
+                * state.step_keys.size(3)
+            )
+        elif state.block_keys is not None:
             compiled_state_count = state.tokens * state.block_keys.size(0) * state.block_keys.size(2)
         return {
             "bdre_compile_time_ms": self.compile_seconds * 1000.0,
@@ -335,6 +400,7 @@ class BrianBDRERouteCore(BrianRouteCore):
             value_temperature=bdre_config.value_temperature,
             position_tau=bdre_config.position_tau,
             step_lambda=bdre_config.step_lambda,
+            normalize_step_distance=bdre_config.normalize_step_distance,
             late_step_weight=bdre_config.late_step_weight,
             compile_top_k=bdre_config.compile_top_k,
         )
@@ -364,6 +430,23 @@ class BrianBDRERouteCore(BrianRouteCore):
         collect_bdre_visualization: bool = False,
         summarize_routing: bool = True,
     ) -> dict[str, Any]:
+        if self.bdre_config.execution_mode == "synchronous_prefix":
+            return self._forward_synchronous_prefix(
+                input_ids,
+                targets,
+                route_mode=route_mode,
+                pseudo_policy=pseudo_policy,
+                loss_weights=loss_weights,
+                routing_constraints=routing_constraints,
+                routing_options=routing_options,
+                hard_exit=hard_exit,
+                log_path_counts=log_path_counts,
+                router_probability=router_probability,
+                global_step=global_step,
+                collect_router_space=collect_router_space,
+                collect_bdre_visualization=collect_bdre_visualization,
+                summarize_routing=summarize_routing,
+            )
         if input_ids.dim() != 2 or input_ids.size(1) < 1:
             raise ValueError("BDRE exact forward requires input_ids with shape [batch, sequence].")
         if route_mode == "parallel":
@@ -450,6 +533,20 @@ class BrianBDRERouteCore(BrianRouteCore):
             input_ids = input_ids.unsqueeze(1)
         if input_ids.dim() != 2 or input_ids.size(1) != 1:
             raise ValueError("forward_incremental accepts exactly one token per batch item.")
+        if self.bdre_config.execution_mode == "synchronous_prefix":
+            output = self._forward_synchronous_prefix_stream_chunk(
+                input_ids,
+                state,
+                route_mode=route_mode,
+                pseudo_policy=pseudo_policy,
+                routing_constraints=routing_constraints,
+                routing_options=routing_options,
+                hard_exit=hard_exit,
+                router_probability=router_probability,
+                global_step=global_step,
+                collect_bdre_visualization=collect_bdre_visualization,
+            )
+            return output
         state = state or self.empty_incremental_state()
         constraints = _routing_constraints_mapping(routing_constraints)
         options = _routing_options_mapping(routing_options)
@@ -518,6 +615,28 @@ class BrianBDRERouteCore(BrianRouteCore):
         summarize_routing: bool = True,
     ) -> dict[str, Any]:
         """Advance an exact token-serial chunk while preserving its persistent KV state."""
+
+        if self.bdre_config.execution_mode == "synchronous_prefix":
+            return self._forward_synchronous_prefix_stream_chunk(
+                input_ids,
+                state,
+                next_token_targets=next_token_targets,
+                loss_token_count=loss_token_count,
+                include_auxiliary_losses=include_auxiliary_losses,
+                route_targets=route_targets,
+                route_mode=route_mode,
+                pseudo_policy=pseudo_policy,
+                loss_weights=loss_weights,
+                routing_constraints=routing_constraints,
+                routing_options=routing_options,
+                hard_exit=hard_exit,
+                log_path_counts=log_path_counts,
+                router_probability=router_probability,
+                global_step=global_step,
+                collect_router_space=collect_router_space,
+                collect_bdre_visualization=collect_bdre_visualization,
+                summarize_routing=summarize_routing,
+            )
 
         if input_ids.dim() != 2 or input_ids.size(1) < 1:
             raise ValueError("BDRE stream chunks require input_ids with shape [batch, chunk].")
@@ -611,6 +730,650 @@ class BrianBDRERouteCore(BrianRouteCore):
         if diagnostics.last_visualization is not None:
             output["bdre_visualization"] = diagnostics.last_visualization
         return output
+
+    def _forward_synchronous_prefix(
+        self,
+        input_ids: torch.Tensor,
+        targets: torch.Tensor | None,
+        *,
+        route_mode: str,
+        pseudo_policy: str,
+        loss_weights: Mapping[str, Any] | None,
+        routing_constraints: Mapping[str, Any] | None,
+        routing_options: Mapping[str, Any] | None,
+        hard_exit: bool | None,
+        log_path_counts: bool,
+        router_probability: float | None,
+        global_step: int,
+        collect_router_space: bool,
+        collect_bdre_visualization: bool,
+        summarize_routing: bool,
+    ) -> dict[str, Any]:
+        if input_ids.dim() != 2 or input_ids.size(1) < 1:
+            raise ValueError("BDRE synchronous-prefix forward requires [batch, sequence] input_ids.")
+        if route_mode == "parallel":
+            raise ValueError("BDRE synchronous-prefix execution does not support parallel route passing.")
+        mapped_loss_weights = _loss_weights_mapping(loss_weights)
+        constraints = _routing_constraints_mapping(routing_constraints)
+        options = _routing_options_mapping(routing_options)
+        hard_exit = self.config.hard_exit if hard_exit is None else hard_exit
+        if not hard_exit:
+            raise ValueError("BDRE synchronous-prefix execution requires hard exit.")
+        route_targets = self._targets_for_mode(route_mode, pseudo_policy, input_ids)
+        state = self.empty_incremental_state()
+        diagnostics = _BDREDiagnostics()
+        logits_by_chunk: list[torch.Tensor] = []
+        last_route_info: dict[str, Any] | None = None
+        last_router_records: list[dict[str, Any]] | None = None
+        chunk_size = min(self.bdre_config.chunk_size, input_ids.size(1))
+
+        for start in range(0, input_ids.size(1), chunk_size):
+            end = min(input_ids.size(1), start + chunk_size)
+            final_chunk = end == input_ids.size(1)
+            logits, state, route_info, router_records = self._run_synchronous_prefix_chunk(
+                input_ids[:, start:end],
+                state,
+                route_mode=route_mode,
+                route_targets=route_targets,
+                routing_constraints=constraints,
+                routing_options=options,
+                hard_exit=True,
+                router_probability=router_probability,
+                global_step=global_step,
+                diagnostics=diagnostics,
+                record=final_chunk,
+                collect_router_space=collect_router_space and final_chunk,
+                collect_bdre_visualization=collect_bdre_visualization and final_chunk,
+            )
+            logits_by_chunk.append(logits)
+            if final_chunk:
+                last_route_info = route_info
+                last_router_records = router_records
+
+        assert last_route_info is not None
+        logits = torch.cat(logits_by_chunk, dim=1)
+        bdre_metrics = (
+            diagnostics.metrics(state.cache, self.position_table.geometry_metrics())
+            if summarize_routing
+            else {}
+        )
+        output = self._build_output(
+            logits,
+            last_route_info,
+            targets=targets,
+            loss_weights=mapped_loss_weights,
+            routing_constraints=constraints,
+            max_steps=len(last_route_info["route_logits"]),
+            summarize_routing=summarize_routing,
+            log_path_counts=log_path_counts,
+            bdre_metrics=bdre_metrics,
+        )
+        if last_router_records is not None:
+            output["router_space"] = {
+                "records": last_router_records,
+                "num_actions": self.config.route_pool_blocks + 1,
+                "out_action": self.out_action,
+            }
+        if diagnostics.last_visualization is not None:
+            output["bdre_visualization"] = diagnostics.last_visualization
+        return output
+
+    def _forward_synchronous_prefix_stream_chunk(
+        self,
+        input_ids: torch.Tensor,
+        state: BDREIncrementalState | None = None,
+        *,
+        next_token_targets: torch.Tensor | None = None,
+        loss_token_count: int | None = None,
+        include_auxiliary_losses: bool = False,
+        route_targets: list[torch.Tensor] | None = None,
+        route_mode: str = "free",
+        pseudo_policy: str = "sequential",
+        loss_weights: Mapping[str, Any] | None = None,
+        routing_constraints: Mapping[str, Any] | None = None,
+        routing_options: Mapping[str, Any] | None = None,
+        hard_exit: bool | None = None,
+        log_path_counts: bool = False,
+        router_probability: float | None = None,
+        global_step: int = 0,
+        collect_router_space: bool = False,
+        collect_bdre_visualization: bool = False,
+        summarize_routing: bool = True,
+    ) -> dict[str, Any]:
+        if input_ids.dim() != 2 or input_ids.size(1) < 1:
+            raise ValueError("BDRE synchronous-prefix chunks require [batch, chunk] input_ids.")
+        if input_ids.size(1) > self.bdre_config.chunk_size:
+            raise ValueError("Synchronous-prefix chunk exceeds execution.chunk_size.")
+        if route_mode == "parallel":
+            raise ValueError("BDRE synchronous-prefix execution does not support parallel route passing.")
+        if next_token_targets is not None and next_token_targets.shape != input_ids.shape:
+            raise ValueError("next_token_targets must match the synchronous-prefix chunk shape.")
+        if next_token_targets is not None and (loss_token_count is None or loss_token_count < 1):
+            raise ValueError("loss_token_count must be positive when next_token_targets are provided.")
+        hard_exit = self.config.hard_exit if hard_exit is None else hard_exit
+        if not hard_exit:
+            raise ValueError("BDRE synchronous-prefix execution requires hard exit.")
+        state = state or self.empty_incremental_state()
+        if state.cache.tokens and state.cache.step_keys is None:
+            raise ValueError("Synchronous-prefix history requires step-indexed cache tensors.")
+        if (
+            state.cache.tokens
+            and state.cache.block_keys is not None
+            and state.cache.block_keys.size(0) != input_ids.size(0)
+        ):
+            raise ValueError("BDRE synchronous-prefix state batch size does not match input_ids.")
+
+        mapped_loss_weights = _loss_weights_mapping(loss_weights)
+        constraints = _routing_constraints_mapping(routing_constraints)
+        options = _routing_options_mapping(routing_options)
+        route_targets = (
+            route_targets
+            if route_targets is not None
+            else self._targets_for_mode(route_mode, pseudo_policy, input_ids)
+        )
+        diagnostics = _BDREDiagnostics()
+        logits, next_state, route_info, router_records = self._run_synchronous_prefix_chunk(
+            input_ids,
+            state,
+            route_mode=route_mode,
+            route_targets=route_targets,
+            routing_constraints=constraints,
+            routing_options=options,
+            hard_exit=True,
+            router_probability=router_probability,
+            global_step=global_step,
+            diagnostics=diagnostics,
+            record=True,
+            collect_router_space=collect_router_space,
+            collect_bdre_visualization=collect_bdre_visualization,
+        )
+        lm_loss = None
+        if next_token_targets is not None:
+            lm_loss = F.cross_entropy(
+                logits.reshape(-1, logits.size(-1)),
+                next_token_targets.reshape(-1),
+                ignore_index=-100,
+                reduction="sum",
+            ) / int(loss_token_count)
+        bdre_metrics = (
+            diagnostics.metrics(next_state.cache, self.position_table.geometry_metrics())
+            if summarize_routing
+            else {}
+        )
+        output = self._build_output(
+            logits,
+            route_info,
+            targets=None,
+            lm_loss=lm_loss,
+            include_auxiliary_losses=include_auxiliary_losses,
+            loss_weights=mapped_loss_weights,
+            routing_constraints=constraints,
+            max_steps=len(route_info["route_logits"]),
+            summarize_routing=summarize_routing,
+            log_path_counts=log_path_counts,
+            bdre_metrics=bdre_metrics,
+        )
+        output["incremental_state"] = next_state
+        if router_records is not None:
+            output["router_space"] = {
+                "records": router_records,
+                "num_actions": self.config.route_pool_blocks + 1,
+                "out_action": self.out_action,
+            }
+        if diagnostics.last_visualization is not None:
+            output["bdre_visualization"] = diagnostics.last_visualization
+        return output
+
+    def _run_synchronous_prefix_chunk(
+        self,
+        input_ids: torch.Tensor,
+        state: BDREIncrementalState,
+        *,
+        route_mode: str,
+        route_targets: list[torch.Tensor],
+        routing_constraints: Mapping[str, Any],
+        routing_options: Mapping[str, Any],
+        hard_exit: bool,
+        router_probability: float | None,
+        global_step: int,
+        diagnostics: _BDREDiagnostics,
+        record: bool,
+        collect_router_space: bool,
+        collect_bdre_visualization: bool,
+    ) -> tuple[torch.Tensor, BDREIncrementalState, dict[str, Any], list[dict[str, Any]] | None]:
+        batch, chunk = input_ids.shape
+        start_position = state.cache.tokens
+        hidden = self.token_embedding(input_ids)
+        pre_states: list[IncrementalAttentionState] = []
+        for block, block_state in zip(self.pre_blocks, state.pre):
+            hidden, next_block_state = _chunk_transformer_block(block, hidden, block_state, start_position)
+            pre_states.append(next_block_state)
+
+        initial_position = self.position_table.initial(batch, input_ids.device)
+        position = initial_position.unsqueeze(1).expand(-1, chunk, -1)
+        route_info = self._empty_route_info(hidden, hard_exit, global_step, routing_options)
+        router_records: list[dict[str, Any]] | None = [] if collect_router_space else None
+        max_steps = len(route_targets) if route_mode in {"fixed", "pseudo"} else self.config.max_route_steps
+        if max_steps > self.config.max_route_steps:
+            raise ValueError("Synchronous-prefix route target exceeds max_route_steps.")
+        route_shape = (batch, chunk)
+        exited = torch.zeros(route_shape, dtype=torch.bool, device=input_ids.device)
+        last_internal = torch.full(route_shape, -1, dtype=torch.long, device=input_ids.device)
+        recur_length = torch.zeros(route_shape, dtype=torch.long, device=input_ids.device)
+        has_writer = torch.zeros(route_shape, dtype=torch.bool, device=input_ids.device)
+        writer_keys: list[torch.Tensor] = []
+        writer_values: list[torch.Tensor] = []
+        writer_blocks: list[torch.Tensor] = []
+        writer_valid: list[torch.Tensor] = []
+        step_compile_outputs: list[BDRECompileOutput] = []
+
+        for step in range(max_steps):
+            exited_before = exited
+            router_position = self._router_position(position)
+            router_embedding = (
+                self.router.token_embedding(hidden, router_position) if router_records is not None else None
+            )
+            raw_logits = (
+                self.router.logits_from_embedding(router_embedding)
+                if router_embedding is not None
+                else self.router.token_logits(hidden, router_position)
+            )
+            logits = self._apply_location_bias(raw_logits, position)
+            logits = self._apply_route_logit_noise(logits, global_step, routing_options)
+            logits = self._apply_route_constraints(logits, step, max_steps, routing_constraints)
+            logits, recur_cap_mask = self._apply_self_recur_cap(
+                logits,
+                last_internal,
+                recur_length,
+                routing_constraints,
+            )
+            probs = F.softmax(logits, dim=-1)
+            top_actions, top_weights = self._topk_actions(probs, 1)
+            if route_mode in {"fixed", "pseudo", "scheduled"} and step < len(route_targets):
+                target = route_targets[step]
+                if target.dim() == 1:
+                    target = target.unsqueeze(1).expand(-1, chunk)
+                elif target.shape != route_shape:
+                    raise ValueError("Synchronous-prefix route targets must have shape [batch] or [batch, chunk].")
+            else:
+                target = torch.full(route_shape, self.out_action, dtype=torch.long, device=input_ids.device)
+
+            if route_mode in {"fixed", "pseudo"}:
+                selected = target
+            elif route_mode == "scheduled":
+                selected, _ = self._scheduled_select(
+                    logits,
+                    target,
+                    global_step,
+                    router_probability,
+                    routing_options,
+                )
+            elif route_mode == "free":
+                selected = self._router_action(logits, routing_options)
+            else:
+                raise ValueError(f"Unknown route_mode: {route_mode}")
+
+            if route_mode in {"free", "scheduled"}:
+                selected, random_mask = self._apply_random_route_override(
+                    selected,
+                    global_step,
+                    routing_options,
+                    last_internal,
+                    recur_length,
+                    routing_constraints,
+                )
+            else:
+                random_mask = torch.zeros_like(selected, dtype=torch.bool)
+            selected, selected_cap_mask = self._enforce_self_recur_cap_on_selected(
+                selected,
+                logits,
+                last_internal,
+                recur_length,
+                routing_constraints,
+            )
+            if self._force_final_exit(step, max_steps, routing_constraints):
+                selected = torch.full_like(selected, self.out_action)
+            selected = torch.where(exited, torch.full_like(selected, self.out_action), selected)
+            missing_writer = ~has_writer & (selected == self.out_action) & ~exited
+            internal_choice = logits[..., : self.config.route_pool_blocks].argmax(dim=-1)
+            selected = torch.where(missing_writer, internal_choice, selected)
+
+            exit_now = selected == self.out_action
+            valid = (selected != self.out_action) & ~exited
+            has_writer = has_writer | valid
+            flat_hidden = hidden.reshape(batch * chunk, -1)
+            flat_position = position.reshape(batch * chunk, -1)
+            flat_selected = selected.reshape(-1)
+            flat_valid = valid.reshape(-1)
+            step_key: torch.Tensor | None = None
+            step_value: torch.Tensor | None = None
+            prepared: list[tuple[int, torch.Tensor, torch.Tensor, torch.Tensor]] = []
+            action_groups, _ = self._active_action_groups(flat_selected, flat_valid)
+
+            for action, indexes in action_groups:
+                block = self.route_blocks[action]
+                projection = self.bdre_projections[action]
+                selected_hidden = flat_hidden[indexes].unsqueeze(1)
+                selected_position = flat_position[indexes]
+                routed_input = selected_hidden + block._position_bias(self._block_position(selected_position))
+                attn_input = block.block.attn_norm(routed_input)
+                attention = block.block.attn
+                dim = attn_input.size(-1)
+                query, key, value = attention.qkv(attn_input).chunk(3, dim=-1)
+                query = query.view(-1, 1, attention.n_heads, attention.head_dim).transpose(1, 2).squeeze(2)
+                key = key.view(-1, 1, attention.n_heads, attention.head_dim).transpose(1, 2)
+                value = value.view(-1, 1, attention.n_heads, attention.head_dim).transpose(1, 2)
+                canonical_key = projection.key_write(key.transpose(1, 2).reshape(-1, 1, dim)).squeeze(1)
+                canonical_value = projection.value_write(value.transpose(1, 2).reshape(-1, 1, dim)).squeeze(1)
+                if step_key is None or step_value is None:
+                    step_key = canonical_key.new_zeros((batch * chunk, self.bdre_config.key_dim))
+                    step_value = canonical_value.new_zeros((batch * chunk, self.bdre_config.value_dim))
+                step_key = step_key.index_copy(0, indexes, canonical_key)
+                step_value = step_value.index_copy(0, indexes, canonical_value)
+                prepared.append((action, indexes, routed_input, query))
+
+            if step_key is None or step_value is None:
+                if not writer_keys or not writer_values:
+                    raise RuntimeError("The first synchronous-prefix route step must produce a writer.")
+                step_key = writer_keys[0].new_zeros((batch * chunk, self.bdre_config.key_dim))
+                step_value = writer_values[0].new_zeros((batch * chunk, self.bdre_config.value_dim))
+            writer_keys.append(step_key.view(batch, chunk, -1))
+            writer_values.append(step_value.view(batch, chunk, -1))
+            writer_blocks.append(selected.clamp(min=0, max=self.config.route_pool_blocks - 1))
+            writer_valid.append(valid)
+            compile_output, flat_writers = self._compile_synchronous_prefix_step(
+                writer_keys,
+                writer_values,
+                writer_blocks,
+                writer_valid,
+                reader_step=step,
+                diagnostics=diagnostics,
+            )
+            step_compile_outputs.append(compile_output)
+            current_keys = compile_output.keys.view(
+                batch,
+                chunk,
+                self.config.route_pool_blocks,
+                self.bdre_config.key_dim,
+            )
+            current_values = compile_output.values.view(
+                batch,
+                chunk,
+                self.config.route_pool_blocks,
+                self.bdre_config.value_dim,
+            )
+
+            next_flat_hidden = flat_hidden
+            for action, indexes, routed_input, query in prepared:
+                block_output = self._finish_synchronous_prefix_block(
+                    self.route_blocks[action],
+                    self.bdre_projections[action],
+                    routed_input,
+                    query,
+                    indexes=indexes,
+                    chunk=chunk,
+                    start_position=start_position,
+                    reader_action=action,
+                    reader_step=step,
+                    historical_state=state.cache,
+                    current_keys=current_keys,
+                    current_values=current_values,
+                )
+                next_flat_hidden = next_flat_hidden.index_copy(0, indexes, block_output.squeeze(1))
+            hidden = next_flat_hidden.view(batch, chunk, -1)
+
+            if hard_exit:
+                exited = exited | exit_now
+            position = self.position_table.by_action(selected)
+            if record:
+                record_logits = self._last_token_view(logits)
+                record_probs = self._last_token_view(probs)
+                record_selected = self._last_token_view(selected)
+                record_target = self._last_token_view(target)
+                record_position = self._last_token_view(position)
+                route_info["route_logits"].append(record_logits)
+                route_info["route_probs"].append(record_probs)
+                route_info["selected_actions"].append(record_selected)
+                route_info["topk_actions"].append(self._last_token_view(top_actions))
+                route_info["topk_weights"].append(self._last_token_view(top_weights))
+                route_info["used_weighted_fusion"].append(torch.zeros_like(record_selected, dtype=torch.bool))
+                route_info["exit_flags"].append(self._last_token_view(exit_now))
+                if route_mode in {"fixed", "pseudo", "scheduled"} and step < len(route_targets):
+                    route_info["route_targets"].append(record_target)
+                route_info["location_distance"].append(
+                    self.position_table.location_distance(record_position, record_probs)
+                )
+                route_info["position_norms"].append(record_position.norm(dim=-1).mean())
+                route_info["random_route_override_count"].append(
+                    self._last_token_view(random_mask).to(hidden.dtype).sum()
+                )
+                route_info["self_recur_cap_count"].append(
+                    (
+                        self._last_token_view(recur_cap_mask)
+                        | self._last_token_view(selected_cap_mask)
+                    ).to(hidden.dtype).sum()
+                )
+            if router_records is not None and router_embedding is not None:
+                router_records.append(
+                    {
+                        "step": int(step),
+                        "embedding": self._last_token_view(router_embedding).detach(),
+                        "raw_logits": self._last_token_view(raw_logits).detach(),
+                        "effective_logits": self._last_token_view(logits).detach(),
+                        "probs": self._last_token_view(probs).detach(),
+                        "selected_actions": self._last_token_view(selected).detach(),
+                        "top_actions": self._last_token_view(top_actions).detach(),
+                        "top_weights": self._last_token_view(top_weights).detach(),
+                        "random_route_override": self._last_token_view(random_mask).detach(),
+                        "self_recur_cap_active": self._last_token_view(recur_cap_mask).detach(),
+                        "exited_before": self._last_token_view(exited_before).detach(),
+                        "exit_now": self._last_token_view(exit_now).detach(),
+                    }
+                )
+            last_internal, recur_length = self._update_self_recur_state(
+                selected,
+                last_internal,
+                recur_length,
+            )
+            if hard_exit and bool(exited.detach().all().cpu()):
+                break
+
+        if not writer_keys:
+            raise RuntimeError("Synchronous-prefix routing produced no writer states.")
+        for reader_step in range(len(step_compile_outputs), self.config.max_route_steps):
+            compile_output, flat_writers = self._compile_synchronous_prefix_step(
+                writer_keys,
+                writer_values,
+                writer_blocks,
+                writer_valid,
+                reader_step=reader_step,
+                diagnostics=diagnostics,
+            )
+            step_compile_outputs.append(compile_output)
+
+        flat_key, flat_value, flat_block, flat_valid = flat_writers
+        started = time.perf_counter()
+        final_compile = self.bdre_compiler.compile(
+            flat_key,
+            flat_value,
+            flat_block,
+            flat_valid,
+            self._internal_block_positions(),
+        )
+        diagnostics.record_compile(final_compile, time.perf_counter() - started)
+        diagnostics.writer_counts.append(flat_valid.sum(dim=-1))
+        block_keys = final_compile.keys.view(
+            batch,
+            chunk,
+            self.config.route_pool_blocks,
+            self.bdre_config.key_dim,
+        )
+        block_values = final_compile.values.view(
+            batch,
+            chunk,
+            self.config.route_pool_blocks,
+            self.bdre_config.value_dim,
+        )
+        step_keys = torch.stack(
+            [
+                output.keys.view(
+                    batch,
+                    chunk,
+                    self.config.route_pool_blocks,
+                    self.bdre_config.key_dim,
+                )
+                for output in step_compile_outputs
+            ],
+            dim=2,
+        )
+        step_values = torch.stack(
+            [
+                output.values.view(
+                    batch,
+                    chunk,
+                    self.config.route_pool_blocks,
+                    self.bdre_config.value_dim,
+                )
+                for output in step_compile_outputs
+            ],
+            dim=2,
+        )
+        next_cache = state.cache.append_tokens(
+            block_keys,
+            block_values,
+            step_key=step_keys,
+            step_value=step_values,
+        )
+        if collect_bdre_visualization:
+            last_rows = torch.arange(batch, device=input_ids.device) * chunk + (chunk - 1)
+            diagnostics.last_visualization = {
+                "writer_blocks": flat_block[last_rows].detach().cpu(),
+                "writer_valid": flat_valid[last_rows].detach().cpu(),
+                "key_weights": final_compile.key_weights[last_rows].detach().cpu(),
+                "value_weights": final_compile.value_weights[last_rows].detach().cpu(),
+                "reader_step_key_weights": torch.stack(
+                    [output.key_weights[last_rows] for output in step_compile_outputs],
+                    dim=1,
+                ).detach().cpu(),
+                "reader_step_value_weights": torch.stack(
+                    [output.value_weights[last_rows] for output in step_compile_outputs],
+                    dim=1,
+                ).detach().cpu(),
+                "block_positions": self._internal_block_positions().detach().cpu(),
+            }
+
+        out_actions = torch.full(route_shape, self.out_action, dtype=torch.long, device=input_ids.device)
+        out_position = self._block_position(self.position_table.by_action(out_actions))
+        hidden = self.exit_block(hidden, out_position)
+        post_states: list[IncrementalAttentionState] = []
+        for block, block_state in zip(self.post_blocks, state.post):
+            hidden, next_block_state = _chunk_transformer_block(block, hidden, block_state, start_position)
+            post_states.append(next_block_state)
+        logits_out = self.lm_head(self.norm(hidden))
+        next_state = BDREIncrementalState(tuple(pre_states), tuple(post_states), next_cache)
+        return logits_out, next_state, route_info, router_records
+
+    def _compile_synchronous_prefix_step(
+        self,
+        writer_keys: list[torch.Tensor],
+        writer_values: list[torch.Tensor],
+        writer_blocks: list[torch.Tensor],
+        writer_valid: list[torch.Tensor],
+        *,
+        reader_step: int,
+        diagnostics: _BDREDiagnostics,
+    ) -> tuple[BDRECompileOutput, tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]]:
+        batch, chunk = writer_valid[0].shape
+        steps = len(writer_keys)
+        key = torch.stack(writer_keys, dim=2)
+        value = torch.stack(writer_values, dim=2)
+        block = torch.stack(writer_blocks, dim=2)
+        valid = torch.stack(writer_valid, dim=2)
+        padding = self.config.max_route_steps - steps
+        if padding < 0:
+            raise ValueError("Synchronous-prefix writer history exceeds max_route_steps.")
+        if padding:
+            key = F.pad(key, (0, 0, 0, padding))
+            value = F.pad(value, (0, 0, 0, padding))
+            block = F.pad(block, (0, padding))
+            valid = F.pad(valid, (0, padding), value=False)
+        flat_key = key.reshape(batch * chunk, self.config.max_route_steps, self.bdre_config.key_dim)
+        flat_value = value.reshape(batch * chunk, self.config.max_route_steps, self.bdre_config.value_dim)
+        flat_block = block.reshape(batch * chunk, self.config.max_route_steps)
+        flat_valid = valid.reshape(batch * chunk, self.config.max_route_steps)
+        started = time.perf_counter()
+        output = self.bdre_compiler.compile_prefix(
+            flat_key,
+            flat_value,
+            flat_block,
+            flat_valid,
+            self._internal_block_positions(),
+            reader_step=reader_step,
+        )
+        diagnostics.record_compile(output, time.perf_counter() - started)
+        return output, (flat_key, flat_value, flat_block, flat_valid)
+
+    def _finish_synchronous_prefix_block(
+        self,
+        block: Any,
+        projection: BDREBlockProjection,
+        routed_input: torch.Tensor,
+        query: torch.Tensor,
+        *,
+        indexes: torch.Tensor,
+        chunk: int,
+        start_position: int,
+        reader_action: int,
+        reader_step: int,
+        historical_state: BDRECacheState,
+        current_keys: torch.Tensor,
+        current_values: torch.Tensor,
+    ) -> torch.Tensor:
+        batch_indexes = torch.div(indexes, chunk, rounding_mode="floor")
+        local_positions = indexes % chunk
+        key_parts: list[torch.Tensor] = []
+        value_parts: list[torch.Tensor] = []
+        if start_position:
+            if historical_state.step_keys is None or historical_state.step_values is None:
+                raise ValueError("Synchronous-prefix history is missing step cache tensors.")
+            key_parts.append(historical_state.step_keys[batch_indexes, :, reader_step, reader_action, :])
+            value_parts.append(historical_state.step_values[batch_indexes, :, reader_step, reader_action, :])
+        key_parts.append(current_keys[batch_indexes, :, reader_action, :])
+        value_parts.append(current_values[batch_indexes, :, reader_action, :])
+        key_codes = torch.cat(key_parts, dim=1)
+        value_codes = torch.cat(value_parts, dim=1)
+        attention = block.block.attn
+        decoded_key = torch.einsum(
+            "nkr,hrd->nhkd",
+            key_codes.to(dtype=projection.key_read.dtype),
+            projection.key_read,
+        ).to(dtype=query.dtype)
+        key_positions = torch.arange(key_codes.size(1), device=query.device)
+        key_cosine = attention.rope.cos[:, :, key_positions, :].to(device=query.device, dtype=query.dtype)
+        key_sine = attention.rope.sin[:, :, key_positions, :].to(device=query.device, dtype=query.dtype)
+        decoded_key = apply_rotary(decoded_key, key_cosine, key_sine)
+        query_positions = start_position + local_positions
+        query_cosine = attention.rope.cos[0, 0, query_positions, :].to(device=query.device, dtype=query.dtype)
+        query_sine = attention.rope.sin[0, 0, query_positions, :].to(device=query.device, dtype=query.dtype)
+        query = apply_rotary(query, query_cosine.unsqueeze(1), query_sine.unsqueeze(1))
+        scores = torch.einsum("nhd,nhkd->nhk", query, decoded_key) * (attention.head_dim**-0.5)
+        allowed = key_positions.unsqueeze(0) <= query_positions.unsqueeze(1)
+        scores = scores.masked_fill(~allowed.unsqueeze(1), torch.finfo(scores.dtype).min)
+        weights = F.softmax(scores.float(), dim=-1).to(dtype=query.dtype)
+        weights = F.dropout(weights, p=attention.dropout, training=block.training)
+        latent_value = torch.einsum(
+            "nhk,nkr->nhr",
+            weights,
+            value_codes.to(dtype=weights.dtype),
+        )
+        attended = torch.einsum(
+            "nhr,hrd->nhd",
+            latent_value.to(dtype=projection.value_read.dtype),
+            projection.value_read,
+        ).to(dtype=routed_input.dtype)
+        attended = attended.reshape(routed_input.size(0), 1, -1)
+        routed = routed_input + attention.out(attended)
+        return routed + block.block.ffn(block.block.ffn_norm(routed))
 
     def _forward_one_token(
         self,
@@ -1356,6 +2119,8 @@ class BrianBDRERouteCore(BrianRouteCore):
                 "bdre_value_temperature": str(self.bdre_config.value_temperature),
                 "bdre_execution_mode": self.bdre_config.execution_mode,
                 "bdre_dispatch_mode": self.bdre_config.dispatch_mode,
+                "bdre_chunk_size": self.bdre_config.chunk_size,
+                "bdre_normalize_step_distance": str(self.bdre_config.normalize_step_distance),
             }
         )
         return stats

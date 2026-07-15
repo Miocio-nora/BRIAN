@@ -1,6 +1,7 @@
 # BRIAN BDRE Reader-Compiled Shared KV Implementation Report
 
-**Status:** exact-reference implementation complete; stateful TBPTT backend added
+**Status:** exact reference, stateful TBPTT, and additive synchronous-prefix
+prefill backends implemented
 **Date:** 2026-07-16
 **Working model name:** `BRIAN-R125-BDRE-RCKV-v1`
 **Base reference:** `BRIAN-R125 Global KV Cache-Only v1`
@@ -23,8 +24,8 @@ clarifications:
 - writer canonicalizers are block-specific and are not shared;
 - the default current-token self cache is a single BDRE-compiled prefix object;
 - exact token-by-token execution is the correctness reference;
-- parallel or approximate prefill is a later implementation and must be
-  measured against the exact reference;
+- parallel prefill must remain additive and must be measured against the exact
+  reference before it can replace any established experiment;
 - internal block positions use a spherical-code initialization rather than the
   existing open-arc initialization.
 
@@ -60,6 +61,9 @@ configs/model/brian_tiny_bdre_rckv.yaml
 configs/train/bdre_rckv_r125_5b_ddp2_legacyval.yaml
 configs/train/stage5_bdre_tiny_debug.yaml
 configs/train/stage5_bdre_tiny_ddp2_debug.yaml
+configs/model/brian_r125_bdre_rckv_synchronous_prefix.yaml
+configs/train/bdre_rckv_r125_5b_synchronous_prefix_b8_c128_legacyval.yaml
+configs/train/stage5_bdre_tiny_synchronous_prefix_debug.yaml
 ```
 
 Implemented execution and state contracts:
@@ -87,7 +91,7 @@ added on 2026-07-16:
 
 | Check | Result |
 | --- | --- |
-| New BDRE unit/integration tests | 16 passed |
+| BDRE focused unit/integration tests | 27 passed |
 | Prefix suffix-invariance | passed |
 | Full exact forward vs stateful incremental | max logits difference `0.0` |
 | Reader-step eager/lazy/dynamic equivalence | passed at `atol=rtol=1e-6` |
@@ -103,10 +107,15 @@ It produced eight valid writer steps per token, finite loss and gradients, about
 `1.31 GiB` peak allocated CUDA memory, and about `2.47 s` wall time. This is a
 correctness measurement only and must not be extrapolated to 5B training.
 
-Approximate/wavefront prefill is intentionally not implemented. The exact
-token-by-token implementation remains the oracle required by Section 16.
-The terminal visualization architecture and validation are recorded separately
-in `reports/route_sphere_terminal_dashboard.md`.
+An additive synchronous-prefix prefill is now implemented after the exact
+reference passed its acceptance tests. It stores one cache per
+`(token, reader_step, reader_block)`, hard-masks future writer steps, and
+parallelizes tokens while keeping route depth serial. Its semantics, tests, and
+B200 calibration are recorded in
+`reports/bdre_synchronous_prefix_prefill_report.md`. The exact token-by-token
+implementation remains available as the oracle required by Section 16. The
+terminal visualization architecture and validation are recorded separately in
+`reports/route_sphere_terminal_dashboard.md`.
 
 Stateful TBPTT is now available as a separate single-GPU training backend. It
 preserves exact token-serial forward and KV values while detaching cache history
@@ -609,8 +618,8 @@ lazy compiled reader-step caches.
 
 ### Phase E: Approximate Prefill
 
-- Implement approximate or wavefront prefill only after the exact reference
-  passes correctness and training smoke tests.
+- Implement synchronous-prefix prefill only after the exact reference passes
+  correctness and training smoke tests. Completed on 2026-07-16.
 - Keep exact token-by-token mode permanently available as the oracle.
 
 ## 14. Required Metrics
@@ -669,7 +678,8 @@ The implementation is not accepted without:
 
 ## 16. Exact vs Approximate Prefill Acceptance
 
-Approximate prefill must be compared with exact token-by-token execution using:
+Any prefill proposed as a drop-in replacement for exact token-by-token
+execution must be compared using:
 
 ```text
 logits max/mean absolute difference
@@ -687,6 +697,12 @@ peak CUDA memory
 Approximate prefill cannot replace the exact default based only on throughput.
 Its quality and route behavior must remain within explicitly reported error
 bounds.
+
+The implemented synchronous-prefix backend deliberately changes historical
+reader-step cache semantics from completed-route compilation to route-prefix
+compilation. It is internally chunk-boundary and incremental invariant, but it
+is not presented as logit-equivalent to the exact backend. It remains a separate
+model configuration until benchmark evidence supports a model-level decision.
 
 ## 17. Initial Ablation Matrix
 
@@ -757,5 +773,5 @@ Position initialization:
 Position geometry loss: enabled, weak
 Route-position location loss: disabled
 
-Approximate prefill: disabled until exact-reference validation
+Synchronous-prefix prefill: additive separate config; exact backend retained
 ```

@@ -1,0 +1,32 @@
+extends: bdre_rckv_r125_5b_tbptt_bs32_legacyval.yaml
+run_name: bdre_rckv_r125_5b_synchronous_prefix_b8_c128_legacyval
+model_config: ../model/brian_r125_bdre_rckv_synchronous_prefix.yaml
+batch_size: 8
+gradient_accumulation_steps: 1
+
+stateful_tbptt:
+  enabled: true
+  chunk_size: 128
+
+checkpoint_benchmarks:
+  label: bdre_rckv_r125_5b_synchronous_prefix_b8_c128_legacyval
+
+post_train_benchmarks:
+  label: bdre_rckv_r125_5b_synchronous_prefix_b8_c128_legacyval
+
+wandb:
+  group: bdre_rckv_r125_5b_synchronous_prefix_b8_c128_legacyval
+  tags:
+    - bdre
+    - synchronous_prefix
+    - reader_step
+    - normalized_step_distance
+    - stateful_tbptt
+    - chunk128
+    - grouped_host_dispatch
+    - r125
+    - 5b
+    - balanced_data
+    - legacy_val
+    - single_gpu
+    - batch8
