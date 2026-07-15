@@ -166,6 +166,144 @@ def test_bdre_exact_forward_backward_and_incremental_match() -> None:
     assert torch.allclose(full, torch.cat(incremental, dim=1), atol=1e-6, rtol=1e-6)
 
 
+def test_bdre_stream_chunks_preserve_exact_forward_and_loss_values() -> None:
+    torch.manual_seed(41)
+    model = BrianBDRERouteCore(_config()).eval()
+    input_ids = torch.randint(0, 64, (3, 7))
+    full = model(
+        input_ids,
+        targets=input_ids,
+        route_mode="fixed",
+        pseudo_policy="sequential",
+    )
+    route_targets = model.prepare_stream_route_targets(
+        input_ids,
+        route_mode="fixed",
+        pseudo_policy="sequential",
+    )
+    state = None
+    chunk_logits = []
+    chunk_losses = []
+    for start in range(0, input_ids.size(1), 2):
+        end = min(input_ids.size(1), start + 2)
+        chunk = input_ids[:, start:end]
+        targets = torch.full_like(chunk, -100)
+        valid = max(0, min(end, input_ids.size(1) - 1) - start)
+        if valid:
+            targets[:, :valid] = input_ids[:, start + 1 : start + 1 + valid]
+        output = model.forward_stream_chunk(
+            chunk,
+            state,
+            next_token_targets=targets,
+            loss_token_count=input_ids.size(0) * (input_ids.size(1) - 1),
+            include_auxiliary_losses=end == input_ids.size(1),
+            route_targets=route_targets,
+            route_mode="fixed",
+            pseudo_policy="sequential",
+        )
+        chunk_logits.append(output["logits"])
+        chunk_losses.append(output["loss"])
+        state = output["incremental_state"].detached()
+
+    assert state is not None
+    assert state.cache.tokens == input_ids.size(1)
+    assert torch.allclose(full["logits"], torch.cat(chunk_logits, dim=1), atol=1e-6, rtol=1e-6)
+    assert torch.allclose(full["loss"], torch.stack(chunk_losses).sum(), atol=3e-6, rtol=1e-6)
+
+
+def test_bdre_stream_state_detach_allows_independent_chunk_backwards() -> None:
+    torch.manual_seed(43)
+    model = BrianBDRERouteCore(_config()).train()
+    input_ids = torch.randint(0, 64, (2, 4))
+    route_targets = model.prepare_stream_route_targets(
+        input_ids,
+        route_mode="fixed",
+        pseudo_policy="sequential",
+    )
+    first = model.forward_stream_chunk(
+        input_ids[:, :2],
+        next_token_targets=input_ids[:, 1:3],
+        loss_token_count=6,
+        route_targets=route_targets,
+        route_mode="fixed",
+        pseudo_policy="sequential",
+    )
+    first["loss"].backward()
+    state = first["incremental_state"].detached()
+    assert state.cache.block_keys is not None and state.cache.block_keys.grad_fn is None
+    assert state.pre[0].keys is not None and state.pre[0].keys.grad_fn is None
+
+    final_targets = torch.full_like(input_ids[:, 2:], -100)
+    final_targets[:, 0] = input_ids[:, 3]
+    second = model.forward_stream_chunk(
+        input_ids[:, 2:],
+        state,
+        next_token_targets=final_targets,
+        loss_token_count=6,
+        include_auxiliary_losses=True,
+        route_targets=route_targets,
+        route_mode="fixed",
+        pseudo_policy="sequential",
+    )
+    second["loss"].backward()
+    assert model.bdre_projections[0].key_write.weight.grad is not None
+    assert torch.isfinite(model.bdre_projections[0].key_write.weight.grad).all()
+
+
+def test_bdre_single_stream_chunk_matches_exact_gradients() -> None:
+    torch.manual_seed(45)
+    exact = BrianBDRERouteCore(_config()).train()
+    stream = BrianBDRERouteCore(_config()).train()
+    stream.load_state_dict(exact.state_dict())
+    input_ids = torch.randint(0, 64, (2, 5))
+
+    exact_output = exact(
+        input_ids,
+        targets=input_ids,
+        route_mode="fixed",
+        pseudo_policy="sequential",
+    )
+    exact_output["loss"].backward()
+
+    next_targets = torch.full_like(input_ids, -100)
+    next_targets[:, :-1] = input_ids[:, 1:]
+    stream_output = stream.forward_stream_chunk(
+        input_ids,
+        next_token_targets=next_targets,
+        loss_token_count=input_ids.size(0) * (input_ids.size(1) - 1),
+        include_auxiliary_losses=True,
+        route_targets=stream.prepare_stream_route_targets(
+            input_ids,
+            route_mode="fixed",
+            pseudo_policy="sequential",
+        ),
+        route_mode="fixed",
+        pseudo_policy="sequential",
+    )
+    stream_output["loss"].backward()
+
+    assert torch.allclose(exact_output["loss"], stream_output["loss"], atol=2e-6, rtol=1e-6)
+    for exact_parameter, stream_parameter in (
+        (exact.token_embedding.weight, stream.token_embedding.weight),
+        (exact.bdre_projections[0].key_write.weight, stream.bdre_projections[0].key_write.weight),
+        (exact.lm_head.weight, stream.lm_head.weight),
+    ):
+        assert exact_parameter.grad is not None and stream_parameter.grad is not None
+        assert torch.allclose(exact_parameter.grad, stream_parameter.grad, atol=2e-6, rtol=1e-5)
+
+
+def test_bdre_grouped_host_dispatch_matches_legacy_cuda_scan() -> None:
+    torch.manual_seed(47)
+    legacy = BrianBDRERouteCore(_config()).eval()
+    grouped = BrianBDRERouteCore(replace(_config(), dispatch_mode="grouped_host")).eval()
+    grouped.load_state_dict(legacy.state_dict())
+    input_ids = torch.randint(0, 64, (5, 6))
+    with torch.no_grad():
+        legacy_logits = legacy(input_ids, route_mode="fixed", pseudo_policy="sequential")["logits"]
+        grouped_logits = grouped(input_ids, route_mode="fixed", pseudo_policy="sequential")["logits"]
+    assert torch.allclose(legacy_logits, grouped_logits, atol=1e-6, rtol=1e-6)
+
+
 def test_bdre_prefix_logits_are_suffix_invariant() -> None:
     torch.manual_seed(7)
     model = BrianBDRERouteCore(_config()).eval()

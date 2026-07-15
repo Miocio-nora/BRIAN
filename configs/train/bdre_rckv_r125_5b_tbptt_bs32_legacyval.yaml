@@ -1,0 +1,30 @@
+extends: bdre_rckv_r125_5b_ddp2_legacyval.yaml
+run_name: bdre_rckv_r125_5b_tbptt_bs32_legacyval
+model_config: ../model/brian_r125_bdre_rckv_v1_tbptt.yaml
+batch_size: 32
+gradient_accumulation_steps: 1
+
+stateful_tbptt:
+  enabled: true
+  chunk_size: 8
+
+checkpoint_benchmarks:
+  label: bdre_rckv_r125_5b_tbptt_bs32_legacyval
+
+post_train_benchmarks:
+  label: bdre_rckv_r125_5b_tbptt_bs32_legacyval
+
+wandb:
+  group: bdre_rckv_r125_5b_tbptt_bs32_legacyval
+  tags:
+    - bdre
+    - reader_compiled_kv
+    - stateful_tbptt
+    - chunk8
+    - grouped_host_dispatch
+    - r125
+    - 5b
+    - balanced_data
+    - legacy_val
+    - single_gpu
+    - batch32

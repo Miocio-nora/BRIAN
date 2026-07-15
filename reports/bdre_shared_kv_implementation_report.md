@@ -1,7 +1,7 @@
 # BRIAN BDRE Reader-Compiled Shared KV Implementation Report
 
-**Status:** exact-reference implementation complete; approximate prefill remains future work
-**Date:** 2026-07-15
+**Status:** exact-reference implementation complete; stateful TBPTT backend added
+**Date:** 2026-07-16
 **Working model name:** `BRIAN-R125-BDRE-RCKV-v1`
 **Base reference:** `BRIAN-R125 Global KV Cache-Only v1`
 
@@ -107,6 +107,12 @@ Approximate/wavefront prefill is intentionally not implemented. The exact
 token-by-token implementation remains the oracle required by Section 16.
 The terminal visualization architecture and validation are recorded separately
 in `reports/route_sphere_terminal_dashboard.md`.
+
+Stateful TBPTT is now available as a separate single-GPU training backend. It
+preserves exact token-serial forward and KV values while detaching cache history
+at explicit gradient boundaries; it is not approximate prefill. Implementation,
+configuration, validation, and remaining R125 memory calibration are recorded
+in `reports/bdre_stateful_tbptt_implementation_report.md`.
 
 ## 2. Model Scope
 

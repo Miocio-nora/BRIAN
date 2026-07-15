@@ -35,6 +35,7 @@ from brian_sphere_llm.train.trainer import (
     _router_space_visualization_config,
     _schedule_values,
     _set_sampler_epoch,
+    _stateful_tbptt_config,
     _wrap_distributed_model,
     _finish_wandb,
     _init_wandb,
@@ -130,6 +131,15 @@ def test_learning_rate_schedule_config_rejects_unknown_name() -> None:
 def test_train_config_mapping_helper_rejects_non_mapping() -> None:
     with pytest.raises(ValueError, match="routing"):
         _mapping_config({"routing": True}, "routing")
+
+
+def test_stateful_tbptt_config_is_explicit_and_validated() -> None:
+    assert _stateful_tbptt_config({}) == {"enabled": False, "chunk_size": 8}
+    assert _stateful_tbptt_config(
+        {"stateful_tbptt": {"enabled": True, "chunk_size": 16}}
+    ) == {"enabled": True, "chunk_size": 16}
+    with pytest.raises(ValueError, match="chunk_size"):
+        _stateful_tbptt_config({"stateful_tbptt": {"enabled": True, "chunk_size": 0}})
 
 
 def test_wandb_logging_initializes_logs_and_finishes_on_main_process(

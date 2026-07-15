@@ -210,7 +210,10 @@ uses its own K/V writer and per-head reader projections; fixed pre/post blocks
 retain conventional incremental KV caches. The exact implementation processes
 tokens serially and is the correctness oracle for a later approximate prefill,
 not yet a throughput-optimized replacement for the existing full-sequence
-models.
+models. A separate single-GPU stateful-TBPTT backend retains the exact forward
+cache values but detaches their autograd history at configurable token
+boundaries. Its parallelism comes from `batch_size`, not from parallel tokens
+inside one sequence.
 
 Key BDRE entrypoints:
 
@@ -219,6 +222,9 @@ configs/model/brian_r125_bdre_rckv_v1.yaml
 configs/train/bdre_rckv_r125_5b_ddp2_legacyval.yaml
 configs/train/stage5_bdre_tiny_debug.yaml
 configs/train/stage5_bdre_tiny_ddp2_debug.yaml
+configs/model/brian_r125_bdre_rckv_v1_tbptt.yaml
+configs/train/bdre_rckv_r125_5b_tbptt_bs32_legacyval.yaml
+configs/train/stage5_bdre_tiny_tbptt_debug.yaml
 ```
 
 Training logs include compile timing, writer-step counts, K/V compile entropy,
@@ -227,6 +233,9 @@ config also emits a W&B HTML view with 3D position/writer paths and switchable
 Key/Value reader-weight heatmaps. Design, defaults, validation results, and
 remaining prefill work are recorded in
 [reports/bdre_shared_kv_implementation_report.md](./reports/bdre_shared_kv_implementation_report.md).
+The TBPTT gradient contract, exact cache optimizations, and calibration status
+are recorded in
+[reports/bdre_stateful_tbptt_implementation_report.md](./reports/bdre_stateful_tbptt_implementation_report.md).
 
 ## Live Route Sphere
 
@@ -313,6 +322,7 @@ python scripts/train.py --config configs/train/stage3_top2_tiny_debug.yaml
 python scripts/train.py --config configs/train/stage4_tiny_debug.yaml
 python scripts/train.py --config configs/train/stage5_tiny_debug.yaml
 python scripts/train.py --config configs/train/stage5_bdre_tiny_debug.yaml
+python scripts/train.py --config configs/train/stage5_bdre_tiny_tbptt_debug.yaml
 python scripts/train.py --config configs/train/stage6_tiny_debug.yaml
 ```
 
@@ -321,6 +331,17 @@ Run the BDRE DDP smoke on two GPUs:
 ```bash
 torchrun --nproc_per_node=2 scripts/train.py \
   --config configs/train/stage5_bdre_tiny_ddp2_debug.yaml
+```
+
+Run the calibrated stateful-TBPTT backend on one GPU:
+
+```bash
+CUDA_VISIBLE_DEVICES=<gpu> PYTHONPATH=src:. python scripts/benchmark_bdre_tbptt.py \
+  --config configs/train/bdre_rckv_r125_5b_tbptt_bs32_legacyval.yaml \
+  --chunk-size 8
+
+CUDA_VISIBLE_DEVICES=<gpu> PYTHONPATH=src:. python scripts/train.py \
+  --config configs/train/bdre_rckv_r125_5b_tbptt_bs32_legacyval.yaml
 ```
 
 For multi-GPU jobs, launch the same training entrypoint with `torchrun`; the trainer reads `WORLD_SIZE`, `RANK`, and `LOCAL_RANK`, uses a distributed train sampler, wraps the model with DDP, applies `no_sync()` during accumulated non-final microbatches, records train token throughput in global-token units while retaining `local_*` token diagnostics, averages train loss/routing scalars across ranks, and writes checkpoints/reports only from rank 0:

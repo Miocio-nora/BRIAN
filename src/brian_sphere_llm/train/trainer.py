@@ -97,6 +97,7 @@ def train_from_config(config_path: str | Path) -> Path:
         raise ValueError("min_learning_rate must be <= learning_rate.")
     weight_decay = _float_config(config, "weight_decay", default=0.0, minimum=0.0)
     terminal_dashboard_config = TerminalDashboardConfig.from_train_config(config)
+    stateful_tbptt = _stateful_tbptt_config(config)
     stage_mode = train_mode_for_stage(config["stage"])
     ddp_find_unused_parameters = _bool_config(
         config,
@@ -118,6 +119,14 @@ def train_from_config(config_path: str | Path) -> Path:
     device = _device(str(config.get("device", "auto")))
     distributed = dist_utils.init_distributed(device)
     is_main_process = dist_utils.is_main_process()
+    if stateful_tbptt["enabled"]:
+        if distributed:
+            raise ValueError("stateful_tbptt currently supports single-GPU training only.")
+        if not hasattr(model, "forward_stream_chunk") or not hasattr(
+            model,
+            "prepare_stream_route_targets",
+        ):
+            raise ValueError("stateful_tbptt requires a BDRE model with streaming chunk support.")
     model.to(device)
 
     run_dir = Path(config.get("output_root", "runs")) / run_name(
@@ -310,20 +319,36 @@ def train_from_config(config_path: str | Path) -> Path:
             batch = batch.to(device)
             should_sync_gradients = micro_step == gradient_accumulation_steps - 1
             with _gradient_sync_context(model, distributed=distributed, should_sync=should_sync_gradients):
-                with _autocast_context(device, str(config.get("precision", "fp32"))):
-                    outputs = _forward_for_stage(
+                if stateful_tbptt["enabled"]:
+                    outputs = _backward_stateful_tbptt_microbatch(
                         model,
                         batch,
                         config=config,
                         route_mode=stage_mode,
                         global_step=step,
+                        chunk_size=int(stateful_tbptt["chunk_size"]),
+                        gradient_scale=1.0 / gradient_accumulation_steps,
+                        device=device,
                         collect_router_space=collect_router_space and should_sync_gradients,
                         collect_bdre_visualization=collect_bdre_visualization and should_sync_gradients,
                         summarize_routing=summarize_routing,
                     )
                     loss = outputs["loss"]
-                    scaled_loss = loss / gradient_accumulation_steps
-                scaled_loss.backward()
+                else:
+                    with _autocast_context(device, str(config.get("precision", "fp32"))):
+                        outputs = _forward_for_stage(
+                            model,
+                            batch,
+                            config=config,
+                            route_mode=stage_mode,
+                            global_step=step,
+                            collect_router_space=collect_router_space and should_sync_gradients,
+                            collect_bdre_visualization=collect_bdre_visualization and should_sync_gradients,
+                            summarize_routing=summarize_routing,
+                        )
+                        loss = outputs["loss"]
+                        scaled_loss = loss / gradient_accumulation_steps
+                    scaled_loss.backward()
             token_count += int(batch.numel())
             losses.append(float(loss.detach().cpu()))
             _accumulate_loss_components(loss_components, outputs.get("loss_components", {}))
@@ -355,6 +380,11 @@ def train_from_config(config_path: str | Path) -> Path:
             "distributed_world_size": distributed_world_size,
             "ddp_find_unused_parameters": ddp_find_unused_parameters,
             "ddp_no_sync_microbatches": ddp_no_sync_microbatches,
+            "stateful_tbptt_enabled": bool(stateful_tbptt["enabled"]),
+            "stateful_tbptt_chunk_size": (
+                int(stateful_tbptt["chunk_size"]) if stateful_tbptt["enabled"] else 0
+            ),
+            "stateful_tbptt_chunks": int(outputs.get("stateful_tbptt_chunks", 0)),
             "local_tokens_per_second": int(local_token_count / elapsed),
             "tokens_per_second": int(global_token_count / elapsed),
             "train_step_time_seconds": elapsed,
@@ -588,6 +618,112 @@ def _forward_for_stage(
     if schedule_values:
         outputs["schedule_values"] = schedule_values
     return outputs
+
+
+def _backward_stateful_tbptt_microbatch(
+    model: Any,
+    batch: "torch.Tensor",
+    *,
+    config: dict[str, Any],
+    route_mode: str,
+    global_step: int,
+    chunk_size: int,
+    gradient_scale: float,
+    device: "torch.device",
+    collect_router_space: bool = False,
+    collect_bdre_visualization: bool = False,
+    summarize_routing: bool = True,
+) -> dict[str, Any]:
+    if route_mode in {"baseline", "parallel"}:
+        raise ValueError("stateful_tbptt supports routed, token-serial BDRE stages only.")
+    if batch.dim() != 2 or batch.size(1) < 2:
+        raise ValueError("stateful_tbptt requires batches with at least two tokens per sequence.")
+    if chunk_size < 1:
+        raise ValueError("stateful_tbptt chunk_size must be positive.")
+
+    routing_cfg = _mapping_config(config, "routing")
+    loss_weights = dict(_mapping_config(config, "loss_weights"))
+    schedule_values = _schedule_values(config, route_mode=route_mode, global_step=global_step)
+    router_probability = schedule_values.get("scheduled_router_probability")
+    if "scheduled_lambda_route" in schedule_values:
+        loss_weights["route"] = schedule_values["scheduled_lambda_route"]
+    pseudo_policy = str(routing_cfg.get("pseudo_policy", "sequential"))
+    route_targets = model.prepare_stream_route_targets(
+        batch,
+        route_mode=route_mode,
+        pseudo_policy=pseudo_policy,
+    )
+    constraints = _mapping_config(dict(routing_cfg), "constraints")
+    hard_exit = _bool_mapping_value(
+        routing_cfg,
+        "hard_exit",
+        default=str(config.get("stage")) == "stage4_output_action",
+        name="routing.hard_exit",
+    )
+    log_path_counts = _bool_mapping_value(
+        routing_cfg,
+        "log_path_counts",
+        default=False,
+        name="routing.log_path_counts",
+    )
+    sequence_length = int(batch.size(1))
+    loss_token_count = int(batch.size(0) * (sequence_length - 1))
+    state = None
+    total_loss = None
+    total_components: dict[str, torch.Tensor] = {}
+    final_outputs: dict[str, Any] | None = None
+
+    for start in range(0, sequence_length, chunk_size):
+        end = min(sequence_length, start + chunk_size)
+        final_chunk = end == sequence_length
+        input_chunk = batch[:, start:end]
+        next_targets = torch.full_like(input_chunk, -100)
+        valid_tokens = max(0, min(end, sequence_length - 1) - start)
+        if valid_tokens:
+            next_targets[:, :valid_tokens] = batch[:, start + 1 : start + 1 + valid_tokens]
+
+        with _autocast_context(device, str(config.get("precision", "fp32"))):
+            outputs = model.forward_stream_chunk(
+                input_chunk,
+                state,
+                next_token_targets=next_targets,
+                loss_token_count=loss_token_count,
+                include_auxiliary_losses=final_chunk,
+                route_targets=route_targets,
+                route_mode=route_mode,
+                pseudo_policy=pseudo_policy,
+                loss_weights=loss_weights,
+                routing_constraints=constraints,
+                routing_options=routing_cfg,
+                hard_exit=hard_exit,
+                log_path_counts=log_path_counts,
+                router_probability=router_probability,
+                global_step=global_step,
+                collect_router_space=collect_router_space and final_chunk,
+                collect_bdre_visualization=collect_bdre_visualization and final_chunk,
+                summarize_routing=summarize_routing and final_chunk,
+            )
+            chunk_loss = outputs["loss"]
+            scaled_loss = chunk_loss * gradient_scale
+        scaled_loss.backward()
+
+        detached_loss = chunk_loss.detach()
+        total_loss = detached_loss if total_loss is None else total_loss + detached_loss
+        for name, value in outputs.get("loss_components", {}).items():
+            detached = value.detach()
+            total_components[name] = detached if name not in total_components else total_components[name] + detached
+        state = outputs["incremental_state"].detached()
+        if final_chunk:
+            final_outputs = outputs
+
+    assert final_outputs is not None and total_loss is not None
+    final_outputs.pop("incremental_state", None)
+    final_outputs["loss"] = total_loss
+    final_outputs["loss_components"] = total_components
+    final_outputs["stateful_tbptt_chunks"] = math.ceil(sequence_length / chunk_size)
+    if schedule_values:
+        final_outputs["schedule_values"] = schedule_values
+    return final_outputs
 
 
 def _routing_summary_due(config: Mapping[str, Any], *, global_step: int) -> bool:
@@ -1557,6 +1693,13 @@ def _mapping_config(config: dict[str, Any], key: str) -> Mapping[str, Any]:
     if not isinstance(value, Mapping):
         raise ValueError(f"{key} must be a mapping.")
     return value
+
+
+def _stateful_tbptt_config(config: dict[str, Any]) -> dict[str, int | bool]:
+    raw = dict(_mapping_config(config, "stateful_tbptt"))
+    enabled = _bool_config(raw, "enabled", default=False)
+    chunk_size = _int_config(raw, "chunk_size", default=8, minimum=1)
+    return {"enabled": enabled, "chunk_size": chunk_size}
 
 
 def _data_manifest_ref(data_config: dict[str, Any], tokenized_dir: Path) -> dict[str, Any]:

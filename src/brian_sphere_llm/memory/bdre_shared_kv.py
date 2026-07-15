@@ -16,21 +16,21 @@ ModuleBase = nn.Module if nn is not None else object
 
 @dataclass
 class BDRECacheState:
-    """Persistent reader-compiled cache, stored one tensor per completed token."""
+    """Persistent reader-compiled cache with a contiguous token dimension."""
 
-    block_keys: tuple[torch.Tensor, ...] = ()
-    block_values: tuple[torch.Tensor, ...] = ()
-    step_keys: tuple[torch.Tensor, ...] = ()
-    step_values: tuple[torch.Tensor, ...] = ()
-    writer_keys: tuple[torch.Tensor, ...] = ()
-    writer_values: tuple[torch.Tensor, ...] = ()
-    writer_blocks: tuple[torch.Tensor, ...] = ()
-    writer_valid: tuple[torch.Tensor, ...] = ()
+    block_keys: torch.Tensor | None = None
+    block_values: torch.Tensor | None = None
+    step_keys: torch.Tensor | None = None
+    step_values: torch.Tensor | None = None
+    writer_keys: torch.Tensor | None = None
+    writer_values: torch.Tensor | None = None
+    writer_blocks: torch.Tensor | None = None
+    writer_valid: torch.Tensor | None = None
     lazy_cache: dict[tuple[int, int], tuple[torch.Tensor, torch.Tensor]] = field(default_factory=dict)
 
     @property
     def tokens(self) -> int:
-        return len(self.block_keys)
+        return 0 if self.block_keys is None else int(self.block_keys.size(1))
 
     def append(
         self,
@@ -52,51 +52,85 @@ class BDRECacheState:
         if has_writer and any(value is None for value in (writer_key, writer_value, writer_block, writer_valid)):
             raise ValueError("BDRE writer history requires Key, Value, block IDs, and validity.")
         return BDRECacheState(
-            block_keys=self.block_keys + (block_key,),
-            block_values=self.block_values + (block_value,),
-            step_keys=self.step_keys + ((step_key,) if step_key is not None else ()),
-            step_values=self.step_values + ((step_value,) if step_value is not None else ()),
-            writer_keys=self.writer_keys + ((writer_key,) if writer_key is not None else ()),
-            writer_values=self.writer_values + ((writer_value,) if writer_value is not None else ()),
-            writer_blocks=self.writer_blocks + ((writer_block,) if writer_block is not None else ()),
-            writer_valid=self.writer_valid + ((writer_valid,) if writer_valid is not None else ()),
+            block_keys=_append_token(self.block_keys, block_key),
+            block_values=_append_token(self.block_values, block_value),
+            step_keys=_append_optional_token(self.step_keys, step_key),
+            step_values=_append_optional_token(self.step_values, step_value),
+            writer_keys=_append_optional_token(self.writer_keys, writer_key),
+            writer_values=_append_optional_token(self.writer_values, writer_value),
+            writer_blocks=_append_optional_token(self.writer_blocks, writer_block),
+            writer_valid=_append_optional_token(self.writer_valid, writer_valid),
             lazy_cache={} if lazy_cache is None else lazy_cache,
         )
 
+    def detached(self) -> "BDRECacheState":
+        return BDRECacheState(
+            block_keys=_detach_optional(self.block_keys),
+            block_values=_detach_optional(self.block_values),
+            step_keys=_detach_optional(self.step_keys),
+            step_values=_detach_optional(self.step_values),
+            writer_keys=_detach_optional(self.writer_keys),
+            writer_values=_detach_optional(self.writer_values),
+            writer_blocks=_detach_optional(self.writer_blocks),
+            writer_valid=_detach_optional(self.writer_valid),
+            lazy_cache={key: (value[0].detach(), value[1].detach()) for key, value in self.lazy_cache.items()},
+        )
+
     def stacked_blocks(self) -> tuple[torch.Tensor, torch.Tensor]:
-        if not self.block_keys:
+        if self.block_keys is None or self.block_values is None:
             raise ValueError("BDRE block cache is empty.")
-        return torch.stack(self.block_keys, dim=1), torch.stack(self.block_values, dim=1)
+        return self.block_keys, self.block_values
 
     def stacked_steps(self) -> tuple[torch.Tensor, torch.Tensor]:
-        if not self.step_keys:
+        if self.step_keys is None or self.step_values is None:
             raise ValueError("BDRE eager reader-step cache is empty.")
-        return torch.stack(self.step_keys, dim=1), torch.stack(self.step_values, dim=1)
+        return self.step_keys, self.step_values
 
     def stacked_writers(self) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-        if not self.writer_keys:
+        if any(
+            value is None
+            for value in (self.writer_keys, self.writer_values, self.writer_blocks, self.writer_valid)
+        ):
             raise ValueError("BDRE writer history is unavailable for reader-step compilation.")
         return (
-            torch.stack(self.writer_keys, dim=1),
-            torch.stack(self.writer_values, dim=1),
-            torch.stack(self.writer_blocks, dim=1),
-            torch.stack(self.writer_valid, dim=1),
+            self.writer_keys,
+            self.writer_values,
+            self.writer_blocks,
+            self.writer_valid,
         )
 
     def memory_bytes(self) -> int:
         lazy_tensors = tuple(tensor for pair in self.lazy_cache.values() for tensor in pair)
-        tensors = (
-            self.block_keys
-            + self.block_values
-            + self.step_keys
-            + self.step_values
-            + self.writer_keys
-            + self.writer_values
-            + self.writer_blocks
-            + self.writer_valid
-            + lazy_tensors
-        )
+        tensors = tuple(
+            value
+            for value in (
+                self.block_keys,
+                self.block_values,
+                self.step_keys,
+                self.step_values,
+                self.writer_keys,
+                self.writer_values,
+                self.writer_blocks,
+                self.writer_valid,
+            )
+            if value is not None
+        ) + lazy_tensors
         return sum(int(value.numel() * value.element_size()) for value in tensors)
+
+
+def _append_token(history: torch.Tensor | None, value: torch.Tensor) -> torch.Tensor:
+    value = value.unsqueeze(1)
+    return value if history is None else torch.cat((history, value), dim=1)
+
+
+def _append_optional_token(history: torch.Tensor | None, value: torch.Tensor | None) -> torch.Tensor | None:
+    if value is None:
+        return history
+    return _append_token(history, value)
+
+
+def _detach_optional(value: torch.Tensor | None) -> torch.Tensor | None:
+    return None if value is None else value.detach()
 
 
 @dataclass(frozen=True)

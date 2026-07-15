@@ -63,6 +63,7 @@ class BDREConfig:
     position_geometry_weight: float = 0.001
     position_geometry_normalize: bool = True
     execution_mode: str = "token_by_token"
+    dispatch_mode: str = "legacy_cuda_scan"
 
     @classmethod
     def from_dict(cls, data: dict[str, Any], *, config_dir: str | Path | None = None) -> "BDREConfig":
@@ -117,6 +118,7 @@ class BDREConfig:
                 "position_geometry.normalize",
             ),
             execution_mode=str(execution.get("mode", "token_by_token")),
+            dispatch_mode=str(execution.get("dispatch", "legacy_cuda_scan")),
         )
         if str(geometry.get("internal_target", "regular_simplex")) != "regular_simplex":
             raise ValueError("BDRE v1 position_geometry.internal_target must be regular_simplex.")
@@ -138,6 +140,8 @@ class BDREConfig:
             raise ValueError("BDRE v1 supports only latent_aggregate Value reads.")
         if self.execution_mode != "token_by_token":
             raise ValueError("BDRE v1 supports only exact token_by_token execution.")
+        if self.dispatch_mode not in {"legacy_cuda_scan", "grouped_host"}:
+            raise ValueError("BDRE execution.dispatch must be 'legacy_cuda_scan' or 'grouped_host'.")
         if not self.position_geometry_normalize:
             raise ValueError("BDRE v1 requires normalized position geometry.")
         if self.route.top_k != 1 or self.route.later_top_k != 1:
@@ -172,11 +176,19 @@ class BDREBlockProjection(ModuleBase):
 
 @dataclass(frozen=True)
 class IncrementalAttentionState:
-    keys: tuple[torch.Tensor, ...] = ()
-    values: tuple[torch.Tensor, ...] = ()
+    keys: torch.Tensor | None = None
+    values: torch.Tensor | None = None
 
     def append(self, key: torch.Tensor, value: torch.Tensor) -> "IncrementalAttentionState":
-        return IncrementalAttentionState(self.keys + (key,), self.values + (value,))
+        keys = key if self.keys is None else torch.cat((self.keys, key), dim=2)
+        values = value if self.values is None else torch.cat((self.values, value), dim=2)
+        return IncrementalAttentionState(keys, values)
+
+    def detached(self) -> "IncrementalAttentionState":
+        return IncrementalAttentionState(
+            None if self.keys is None else self.keys.detach(),
+            None if self.values is None else self.values.detach(),
+        )
 
 
 @dataclass(frozen=True)
@@ -184,6 +196,13 @@ class BDREIncrementalState:
     pre: tuple[IncrementalAttentionState, ...]
     post: tuple[IncrementalAttentionState, ...]
     cache: BDRECacheState
+
+    def detached(self) -> "BDREIncrementalState":
+        return BDREIncrementalState(
+            pre=tuple(state.detached() for state in self.pre),
+            post=tuple(state.detached() for state in self.post),
+            cache=self.cache.detached(),
+        )
 
 
 def _optional_positive_int(value: Any, name: str) -> int | None:
@@ -217,8 +236,8 @@ def _incremental_transformer_block(
     )
     q = apply_rotary(q, cosine, sine)
     key = apply_rotary(key, cosine, sine)
-    all_keys = torch.cat((*state.keys, key), dim=2) if state.keys else key
-    all_values = torch.cat((*state.values, value), dim=2) if state.values else value
+    all_keys = torch.cat((state.keys, key), dim=2) if state.keys is not None else key
+    all_values = torch.cat((state.values, value), dim=2) if state.values is not None else value
     attended = F.scaled_dot_product_attention(
         q,
         all_keys,
@@ -229,7 +248,7 @@ def _incremental_transformer_block(
     attended = attended.transpose(1, 2).contiguous().view(batch, 1, dim)
     hidden = hidden + attention.out(attended)
     hidden = hidden + block.ffn(block.ffn_norm(hidden))
-    return hidden, state.append(key, value)
+    return hidden, IncrementalAttentionState(all_keys, all_values)
 
 
 class _BDREDiagnostics:
@@ -268,8 +287,8 @@ class _BDREDiagnostics:
                 "last_step_mass": 0.0,
             }
         compiled_state_count = 0
-        if state.block_keys:
-            compiled_state_count = state.tokens * state.block_keys[0].size(0) * state.block_keys[0].size(1)
+        if state.block_keys is not None:
+            compiled_state_count = state.tokens * state.block_keys.size(0) * state.block_keys.size(2)
         return {
             "bdre_compile_time_ms": self.compile_seconds * 1000.0,
             "bdre_compile_fraction": self.compile_seconds / elapsed,
@@ -385,8 +404,11 @@ class BrianBDRERouteCore(BrianRouteCore):
 
         assert last_route_info is not None
         logits = torch.cat(logits_by_token, dim=1)
-        position_metrics = self.position_table.geometry_metrics()
-        bdre_metrics = diagnostics.metrics(state.cache, position_metrics)
+        bdre_metrics = (
+            diagnostics.metrics(state.cache, self.position_table.geometry_metrics())
+            if summarize_routing
+            else {}
+        )
         output = self._build_output(
             logits,
             last_route_info,
@@ -462,6 +484,134 @@ class BrianBDRERouteCore(BrianRouteCore):
             output["bdre_visualization"] = diagnostics.last_visualization
         return output
 
+    def prepare_stream_route_targets(
+        self,
+        input_ids: torch.Tensor,
+        *,
+        route_mode: str,
+        pseudo_policy: str,
+    ) -> list[torch.Tensor]:
+        """Prepare one route-target schedule shared by every token chunk."""
+
+        return self._targets_for_mode(route_mode, pseudo_policy, input_ids)
+
+    def forward_stream_chunk(
+        self,
+        input_ids: torch.Tensor,
+        state: BDREIncrementalState | None = None,
+        *,
+        next_token_targets: torch.Tensor | None = None,
+        loss_token_count: int | None = None,
+        include_auxiliary_losses: bool = False,
+        route_targets: list[torch.Tensor] | None = None,
+        route_mode: str = "free",
+        pseudo_policy: str = "sequential",
+        loss_weights: Mapping[str, Any] | None = None,
+        routing_constraints: Mapping[str, Any] | None = None,
+        routing_options: Mapping[str, Any] | None = None,
+        hard_exit: bool | None = None,
+        log_path_counts: bool = False,
+        router_probability: float | None = None,
+        global_step: int = 0,
+        collect_router_space: bool = False,
+        collect_bdre_visualization: bool = False,
+        summarize_routing: bool = True,
+    ) -> dict[str, Any]:
+        """Advance an exact token-serial chunk while preserving its persistent KV state."""
+
+        if input_ids.dim() != 2 or input_ids.size(1) < 1:
+            raise ValueError("BDRE stream chunks require input_ids with shape [batch, chunk].")
+        if route_mode == "parallel":
+            raise ValueError("BDRE v1 does not support parallel route passing.")
+        if next_token_targets is not None and next_token_targets.shape != input_ids.shape:
+            raise ValueError("next_token_targets must match the stream chunk shape.")
+        if next_token_targets is not None and (loss_token_count is None or loss_token_count < 1):
+            raise ValueError("loss_token_count must be positive when next_token_targets are provided.")
+
+        state = state or self.empty_incremental_state()
+        if (
+            state.cache.tokens
+            and state.cache.block_keys is not None
+            and state.cache.block_keys.size(0) != input_ids.size(0)
+        ):
+            raise ValueError("BDRE stream state batch size does not match input_ids.")
+        loss_weights = _loss_weights_mapping(loss_weights)
+        constraints = _routing_constraints_mapping(routing_constraints)
+        options = _routing_options_mapping(routing_options)
+        hard_exit = self.config.hard_exit if hard_exit is None else hard_exit
+        route_targets = (
+            route_targets
+            if route_targets is not None
+            else self._targets_for_mode(route_mode, pseudo_policy, input_ids)
+        )
+        diagnostics = _BDREDiagnostics()
+        start_position = state.cache.tokens
+        logits_by_token: list[torch.Tensor] = []
+        last_route_info: dict[str, Any] | None = None
+        last_router_records: list[dict[str, Any]] | None = None
+
+        for chunk_position in range(input_ids.size(1)):
+            record = chunk_position == input_ids.size(1) - 1
+            logits, state, route_info, router_records = self._forward_one_token(
+                input_ids[:, chunk_position : chunk_position + 1],
+                state,
+                token_position=start_position + chunk_position,
+                route_mode=route_mode,
+                route_targets=route_targets,
+                routing_constraints=constraints,
+                routing_options=options,
+                hard_exit=bool(hard_exit),
+                router_probability=router_probability,
+                global_step=global_step,
+                diagnostics=diagnostics,
+                record=record,
+                collect_router_space=collect_router_space and record,
+                collect_bdre_visualization=collect_bdre_visualization and record,
+            )
+            logits_by_token.append(logits)
+            if record:
+                last_route_info = route_info
+                last_router_records = router_records
+
+        assert last_route_info is not None
+        logits = torch.cat(logits_by_token, dim=1)
+        lm_loss = None
+        if next_token_targets is not None:
+            lm_loss = F.cross_entropy(
+                logits.reshape(-1, logits.size(-1)),
+                next_token_targets.reshape(-1),
+                ignore_index=-100,
+                reduction="sum",
+            ) / int(loss_token_count)
+        bdre_metrics = (
+            diagnostics.metrics(state.cache, self.position_table.geometry_metrics())
+            if summarize_routing
+            else {}
+        )
+        output = self._build_output(
+            logits,
+            last_route_info,
+            targets=None,
+            lm_loss=lm_loss,
+            include_auxiliary_losses=include_auxiliary_losses,
+            loss_weights=loss_weights,
+            routing_constraints=constraints,
+            max_steps=len(last_route_info["route_logits"]),
+            summarize_routing=summarize_routing,
+            log_path_counts=log_path_counts,
+            bdre_metrics=bdre_metrics,
+        )
+        output["incremental_state"] = state
+        if last_router_records is not None:
+            output["router_space"] = {
+                "records": last_router_records,
+                "num_actions": self.config.route_pool_blocks + 1,
+                "out_action": self.out_action,
+            }
+        if diagnostics.last_visualization is not None:
+            output["bdre_visualization"] = diagnostics.last_visualization
+        return output
+
     def _forward_one_token(
         self,
         input_ids: torch.Tensor,
@@ -498,6 +648,8 @@ class BrianBDRERouteCore(BrianRouteCore):
         writer_values: list[torch.Tensor] = []
         writer_blocks: list[torch.Tensor] = []
         writer_valid: list[torch.Tensor] = []
+        has_writer = torch.zeros(batch, dtype=torch.bool, device=input_ids.device)
+        exited_host = torch.zeros(batch, dtype=torch.bool) if self.bdre_config.dispatch_mode == "grouped_host" else None
 
         for step in range(max_steps):
             exited_before = exited
@@ -561,26 +713,24 @@ class BrianBDRERouteCore(BrianRouteCore):
                 selected = torch.full_like(selected, self.out_action)
             selected = torch.where(exited, torch.full_like(selected, self.out_action), selected)
 
-            has_writer = (
-                torch.stack(writer_valid, dim=1).any(dim=1)
-                if writer_valid
-                else torch.zeros(batch, dtype=torch.bool, device=input_ids.device)
-            )
             missing_writer = ~has_writer & (selected == self.out_action) & ~exited
-            if torch.any(missing_writer):
-                internal_choice = logits[..., : self.config.route_pool_blocks].argmax(dim=-1)
-                selected = torch.where(missing_writer, internal_choice, selected)
+            internal_choice = logits[..., : self.config.route_pool_blocks].argmax(dim=-1)
+            selected = torch.where(missing_writer, internal_choice, selected)
 
             exit_now = selected == self.out_action
             next_hidden = hidden
             step_key = writer_keys[0].new_zeros((batch, self.bdre_config.key_dim)) if writer_keys else None
             step_value = writer_values[0].new_zeros((batch, self.bdre_config.value_dim)) if writer_values else None
             valid = (selected != self.out_action) & ~exited
-            for action, (block, projection) in enumerate(zip(self.route_blocks, self.bdre_projections)):
-                action_mask = valid & (selected == action)
-                if not torch.any(action_mask):
-                    continue
-                indexes = torch.nonzero(action_mask, as_tuple=False).flatten()
+            has_writer = has_writer | valid
+            previous_key_all = torch.stack(writer_keys, dim=1) if writer_keys else None
+            previous_value_all = torch.stack(writer_values, dim=1) if writer_values else None
+            previous_blocks_all = torch.stack(writer_blocks, dim=1) if writer_blocks else None
+            previous_valid_all = torch.stack(writer_valid, dim=1) if writer_valid else None
+            action_groups, selected_host = self._active_action_groups(selected, valid)
+            for action, indexes in action_groups:
+                block = self.route_blocks[action]
+                projection = self.bdre_projections[action]
                 historical_key, historical_value = self._historical_reader_codes(
                     state.cache,
                     action=action,
@@ -588,10 +738,10 @@ class BrianBDRERouteCore(BrianRouteCore):
                     indexes=indexes,
                     diagnostics=diagnostics,
                 )
-                previous_key = torch.stack(writer_keys, dim=1)[indexes] if writer_keys else None
-                previous_value = torch.stack(writer_values, dim=1)[indexes] if writer_values else None
-                previous_blocks = torch.stack(writer_blocks, dim=1)[indexes] if writer_blocks else None
-                previous_valid = torch.stack(writer_valid, dim=1)[indexes] if writer_valid else None
+                previous_key = previous_key_all[indexes] if previous_key_all is not None else None
+                previous_value = previous_value_all[indexes] if previous_value_all is not None else None
+                previous_blocks = previous_blocks_all[indexes] if previous_blocks_all is not None else None
+                previous_valid = previous_valid_all[indexes] if previous_valid_all is not None else None
                 block_output, canonical_key, canonical_value = self._run_bdre_block(
                     block,
                     projection,
@@ -665,8 +815,13 @@ class BrianBDRERouteCore(BrianRouteCore):
                 last_internal,
                 recur_length,
             )
-            if hard_exit and torch.all(exited):
-                break
+            if hard_exit:
+                if selected_host is not None and exited_host is not None:
+                    exited_host |= selected_host.eq(self.out_action)
+                    if bool(exited_host.all()):
+                        break
+                elif torch.all(exited):
+                    break
 
         next_cache = self._compile_completed_token(
             state.cache,
@@ -721,6 +876,32 @@ class BrianBDRERouteCore(BrianRouteCore):
             "hard_exit_enabled": bool(hard_exit),
             "max_route_steps": self.config.max_route_steps,
         }
+
+    def _active_action_groups(
+        self,
+        selected: torch.Tensor,
+        valid: torch.Tensor,
+    ) -> tuple[list[tuple[int, torch.Tensor]], torch.Tensor | None]:
+        if self.bdre_config.dispatch_mode == "legacy_cuda_scan":
+            groups: list[tuple[int, torch.Tensor]] = []
+            for action in range(self.config.route_pool_blocks):
+                action_mask = valid & (selected == action)
+                if not torch.any(action_mask):
+                    continue
+                groups.append((action, torch.nonzero(action_mask, as_tuple=False).flatten()))
+            return groups, None
+
+        selected_host = selected.detach().to(device="cpu")
+        active_host = selected_host != self.out_action
+        actions = torch.unique(selected_host[active_host], sorted=True).tolist()
+        groups = [
+            (
+                int(action),
+                torch.nonzero(selected_host == action, as_tuple=False).flatten().to(device=selected.device),
+            )
+            for action in actions
+        ]
+        return groups, selected_host
 
     def _internal_block_positions(self) -> torch.Tensor:
         return F.normalize(self.position_table.embeddings[: self.config.route_pool_blocks], dim=-1)
@@ -1028,6 +1209,8 @@ class BrianBDRERouteCore(BrianRouteCore):
         route_info: dict[str, Any],
         *,
         targets: torch.Tensor | None,
+        lm_loss: torch.Tensor | None = None,
+        include_auxiliary_losses: bool = True,
         loss_weights: Mapping[str, Any],
         routing_constraints: Mapping[str, Any],
         max_steps: int,
@@ -1044,10 +1227,16 @@ class BrianBDRERouteCore(BrianRouteCore):
             )
             summary.update(bdre_metrics)
             output["routing_summary"] = summary
-        if targets is None:
+        if targets is not None and lm_loss is not None:
+            raise ValueError("Provide targets or lm_loss, not both.")
+        if targets is None and lm_loss is None:
             return output
 
-        lm = build_causal_lm_loss(logits, targets)
+        lm = build_causal_lm_loss(logits, targets) if lm_loss is None else lm_loss
+        if not include_auxiliary_losses:
+            output["loss"] = lm
+            output["loss_components"] = {"lm_loss": lm.detach()}
+            return output
         route_weight = _loss_weight(loss_weights, "route")
         balance_weight = _loss_weight(loss_weights, "balance")
         cost_weight = _loss_weight(loss_weights, "cost")
@@ -1166,6 +1355,7 @@ class BrianBDRERouteCore(BrianRouteCore):
                 "bdre_key_temperature": str(self.bdre_config.key_temperature),
                 "bdre_value_temperature": str(self.bdre_config.value_temperature),
                 "bdre_execution_mode": self.bdre_config.execution_mode,
+                "bdre_dispatch_mode": self.bdre_config.dispatch_mode,
             }
         )
         return stats

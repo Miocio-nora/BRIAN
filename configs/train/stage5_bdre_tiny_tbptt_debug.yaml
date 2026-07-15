@@ -1,0 +1,9 @@
+extends: stage5_bdre_tiny_debug.yaml
+run_name: stage5_bdre_tiny_tbptt_debug
+model_config: ../model/brian_tiny_bdre_rckv_tbptt.yaml
+batch_size: 4
+gradient_accumulation_steps: 1
+
+stateful_tbptt:
+  enabled: true
+  chunk_size: 8

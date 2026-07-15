@@ -1,0 +1,6 @@
+extends: brian_r125_bdre_rckv_v1.yaml
+model_name: brian_r125_bdre_rckv_v1_tbptt
+
+execution:
+  mode: token_by_token
+  dispatch: grouped_host
