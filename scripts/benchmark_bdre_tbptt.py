@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import statistics
 import sys
 import time
 from pathlib import Path
@@ -26,6 +27,8 @@ def main() -> None:
     parser.add_argument("--chunk-size", type=int, default=None)
     parser.add_argument("--global-step", type=int, default=1)
     parser.add_argument("--seed", type=int, default=123)
+    parser.add_argument("--warmup-steps", type=int, default=0)
+    parser.add_argument("--repeats", type=int, default=1)
     parser.add_argument("--output", default=None, help="Optional JSON report path.")
     args = parser.parse_args()
 
@@ -45,6 +48,8 @@ def main() -> None:
     chunk_size = int(args.chunk_size or tbptt["chunk_size"])
     if min(batch_size, sequence_length, chunk_size) < 1 or sequence_length < 2:
         raise SystemExit("batch size and chunk size must be positive; sequence length must be at least two.")
+    if args.warmup_steps < 0 or args.repeats < 1:
+        raise SystemExit("warmup steps must be non-negative and repeats must be positive.")
 
     set_seed(args.seed)
     torch.set_float32_matmul_precision(str(config.get("float32_matmul_precision", "high")))
@@ -53,30 +58,64 @@ def main() -> None:
     vocab_size = int(model.config.base.vocab_size)
     batch = torch.randint(0, vocab_size, (batch_size, sequence_length), device=device)
 
-    torch.cuda.reset_peak_memory_stats(device)
-    torch.cuda.synchronize(device)
-    started = time.perf_counter()
     status = "passed"
     error: str | None = None
-    output: dict[str, Any] | None = None
-    try:
-        output = _backward_stateful_tbptt_microbatch(
-            model,
-            batch,
-            config=config,
-            route_mode=train_mode_for_stage(str(config["stage"])),
-            global_step=args.global_step,
-            chunk_size=chunk_size,
-            gradient_scale=1.0,
-            device=device,
-            summarize_routing=False,
-        )
+    measurements: list[dict[str, Any]] = []
+
+    def run_backward(*, measured: bool) -> dict[str, Any] | None:
+        nonlocal status, error
+        model.zero_grad(set_to_none=True)
+        # Reset routing/noise RNG so every repeat measures the same mathematical work.
+        set_seed(args.seed + 1)
+        if measured:
+            torch.cuda.reset_peak_memory_stats(device)
         torch.cuda.synchronize(device)
-    except torch.cuda.OutOfMemoryError as exc:
-        status = "oom"
-        error = str(exc)
-        torch.cuda.synchronize(device)
-    elapsed = time.perf_counter() - started
+        started = time.perf_counter()
+        try:
+            result = _backward_stateful_tbptt_microbatch(
+                model,
+                batch,
+                config=config,
+                route_mode=train_mode_for_stage(str(config["stage"])),
+                global_step=args.global_step,
+                chunk_size=chunk_size,
+                gradient_scale=1.0,
+                device=device,
+                summarize_routing=False,
+            )
+            torch.cuda.synchronize(device)
+        except torch.cuda.OutOfMemoryError as exc:
+            status = "oom"
+            error = str(exc)
+            torch.cuda.synchronize(device)
+            return None
+        elapsed = time.perf_counter() - started
+        if measured:
+            measurements.append(
+                {
+                    "elapsed_seconds": elapsed,
+                    "tokens_per_second": batch.numel() / elapsed,
+                    "peak_allocated_mb": torch.cuda.max_memory_allocated(device) / (1024.0 * 1024.0),
+                    "peak_reserved_mb": torch.cuda.max_memory_reserved(device) / (1024.0 * 1024.0),
+                    "loss": float(result["loss"].cpu()),
+                }
+            )
+        return result
+
+    for _ in range(args.warmup_steps):
+        if run_backward(measured=False) is None:
+            break
+    if status == "passed":
+        for _ in range(args.repeats):
+            if run_backward(measured=True) is None:
+                break
+
+    elapsed_samples = [float(item["elapsed_seconds"]) for item in measurements]
+    throughput_samples = [float(item["tokens_per_second"]) for item in measurements]
+    median_elapsed = statistics.median(elapsed_samples) if elapsed_samples else 0.0
+    mean_elapsed = statistics.fmean(elapsed_samples) if elapsed_samples else 0.0
+    median_throughput = statistics.median(throughput_samples) if throughput_samples else 0.0
+    mean_throughput = statistics.fmean(throughput_samples) if throughput_samples else 0.0
     report = {
         "status": status,
         "config": str(config_path),
@@ -86,12 +125,21 @@ def main() -> None:
         "sequence_length": sequence_length,
         "chunk_size": chunk_size,
         "global_step": args.global_step,
-        "elapsed_seconds": elapsed,
-        "tokens_per_second": batch.numel() / elapsed,
-        "peak_allocated_mb": torch.cuda.max_memory_allocated(device) / (1024.0 * 1024.0),
-        "peak_reserved_mb": torch.cuda.max_memory_reserved(device) / (1024.0 * 1024.0),
+        "warmup_steps": args.warmup_steps,
+        "repeats": args.repeats,
+        "elapsed_seconds": median_elapsed,
+        "elapsed_seconds_mean": mean_elapsed,
+        "tokens_per_second": median_throughput,
+        "tokens_per_second_mean": mean_throughput,
+        "peak_allocated_mb": max(
+            (float(item["peak_allocated_mb"]) for item in measurements), default=0.0
+        ),
+        "peak_reserved_mb": max(
+            (float(item["peak_reserved_mb"]) for item in measurements), default=0.0
+        ),
         "final_allocated_mb": torch.cuda.memory_allocated(device) / (1024.0 * 1024.0),
-        "loss": float(output["loss"].cpu()) if output is not None else None,
+        "loss": measurements[-1]["loss"] if measurements else None,
+        "measurements": measurements,
         "error": error,
     }
     payload = json.dumps(report, indent=2, sort_keys=True)

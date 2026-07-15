@@ -63,12 +63,19 @@ def _config(
     )
 
 
-def _synchronous_config(*, chunk_size: int = 8) -> BDREConfig:
-    return _config(
-        depth_mode="synchronous_prefix",
-        reader_step_cache="eager",
-        execution_mode="synchronous_prefix",
-        chunk_size=chunk_size,
+def _synchronous_config(
+    *,
+    chunk_size: int = 8,
+    attention_backend: str = "per_query_reference",
+) -> BDREConfig:
+    return replace(
+        _config(
+            depth_mode="synchronous_prefix",
+            reader_step_cache="eager",
+            execution_mode="synchronous_prefix",
+            chunk_size=chunk_size,
+        ),
+        synchronous_attention_backend=attention_backend,
     )
 
 
@@ -403,11 +410,13 @@ def test_bdre_prefix_logits_are_suffix_invariant() -> None:
     assert torch.allclose(first_logits[:, :3], second_logits[:, :3], atol=1e-6, rtol=1e-6)
 
 
-def test_synchronous_prefix_is_chunk_boundary_and_incremental_invariant() -> None:
+@pytest.mark.parametrize("attention_backend", ["per_query_reference", "shared_padded_explicit"])
+def test_synchronous_prefix_is_chunk_boundary_and_incremental_invariant(attention_backend: str) -> None:
     torch.manual_seed(53)
-    full = BrianBDRERouteCore(_synchronous_config(chunk_size=8)).eval()
-    streamed = BrianBDRERouteCore(_synchronous_config(chunk_size=8)).eval()
-    incremental = BrianBDRERouteCore(_synchronous_config(chunk_size=8)).eval()
+    config = _synchronous_config(chunk_size=8, attention_backend=attention_backend)
+    full = BrianBDRERouteCore(config).eval()
+    streamed = BrianBDRERouteCore(config).eval()
+    incremental = BrianBDRERouteCore(config).eval()
     streamed.load_state_dict(full.state_dict())
     incremental.load_state_dict(full.state_dict())
     input_ids = torch.randint(0, 64, (3, 7))
@@ -468,6 +477,42 @@ def test_synchronous_prefix_forward_backward_is_finite() -> None:
     assert torch.isfinite(output["loss"])
     assert model.bdre_projections[0].key_write.weight.grad is not None
     assert torch.isfinite(model.bdre_projections[0].key_write.weight.grad).all()
+
+
+def test_shared_padded_explicit_matches_per_query_reference_gradients() -> None:
+    torch.manual_seed(67)
+    reference = BrianBDRERouteCore(_synchronous_config(chunk_size=8)).train()
+    optimized = BrianBDRERouteCore(
+        _synchronous_config(chunk_size=8, attention_backend="shared_padded_explicit")
+    ).train()
+    optimized.load_state_dict(reference.state_dict())
+    input_ids = torch.randint(0, 64, (3, 7))
+
+    reference_output = reference(
+        input_ids,
+        targets=input_ids,
+        route_mode="fixed",
+        pseudo_policy="sequential",
+    )
+    optimized_output = optimized(
+        input_ids,
+        targets=input_ids,
+        route_mode="fixed",
+        pseudo_policy="sequential",
+    )
+    reference_output["loss"].backward()
+    optimized_output["loss"].backward()
+
+    assert torch.allclose(reference_output["logits"], optimized_output["logits"], atol=2e-5, rtol=2e-5)
+    assert torch.allclose(reference_output["loss"], optimized_output["loss"], atol=2e-6, rtol=2e-6)
+    for reference_parameter, optimized_parameter in (
+        (reference.token_embedding.weight, optimized.token_embedding.weight),
+        (reference.route_blocks[0].block.attn.qkv.weight, optimized.route_blocks[0].block.attn.qkv.weight),
+        (reference.bdre_projections[0].key_read, optimized.bdre_projections[0].key_read),
+        (reference.bdre_projections[0].value_read, optimized.bdre_projections[0].value_read),
+    ):
+        assert reference_parameter.grad is not None and optimized_parameter.grad is not None
+        assert torch.allclose(reference_parameter.grad, optimized_parameter.grad, atol=2e-5, rtol=2e-5)
 
 
 def test_synchronous_prefix_visualization_masks_future_writer_steps() -> None:
@@ -584,8 +629,11 @@ def test_bdre_cuda_bf16_forward_backward_is_finite() -> None:
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is required")
-def test_synchronous_prefix_cuda_bf16_forward_backward_is_finite() -> None:
-    model = BrianBDRERouteCore(_synchronous_config(chunk_size=4)).cuda().train()
+@pytest.mark.parametrize("attention_backend", ["per_query_reference", "shared_padded_explicit"])
+def test_synchronous_prefix_cuda_bf16_forward_backward_is_finite(attention_backend: str) -> None:
+    model = BrianBDRERouteCore(
+        _synchronous_config(chunk_size=4, attention_backend=attention_backend)
+    ).cuda().train()
     input_ids = torch.randint(0, 64, (2, 4), device="cuda")
     with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
         output = model(input_ids, targets=input_ids, route_mode="fixed", pseudo_policy="sequential")

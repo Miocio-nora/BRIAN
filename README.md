@@ -228,11 +228,16 @@ incremental execution agree under this new cache definition. Training detaches
 state between chunks, so chunk size changes the gradient horizon even though it
 does not change forward values.
 
-On one B200 at the formal 2048-token length, local batch 8 and chunk 128 measured
-447 tok/s with 55.1 GiB peak allocated and 100.9 GiB peak reserved memory.
-Chunk 256 reached 685 tok/s but reserved 177.4 GiB and is not a stable default.
-The synchronous backend is ready for bounded ablations, but projected single-GPU
-5B time is still about 129 days and the stateful trainer remains single-GPU.
+The original per-query reader remains the correctness backend. An additive
+`shared_padded_explicit` backend now shares each decoded batch history across
+selected queries and aggregates Values in compressed space. On one B200 at the
+formal 2,048-token length, a warmed same-workload comparison at batch 8 and
+chunk 256 measured 1,345 tok/s for the reference and 3,918 tok/s for the
+optimized backend, with identical reported loss. Peak allocated memory fell
+from 108.7 GiB to 26.7 GiB. The stable batch-12/chunk-512 candidate measured
+6,410 tok/s median with 83.2 GiB allocated and 129.2 GiB reserved. Its
+kernel-only single-GPU 5B estimate is about 9.0 days; real training remains
+slower, and the stateful trainer remains single-GPU.
 
 Key BDRE entrypoints:
 
@@ -246,6 +251,8 @@ configs/train/bdre_rckv_r125_5b_tbptt_bs32_legacyval.yaml
 configs/train/stage5_bdre_tiny_tbptt_debug.yaml
 configs/model/brian_r125_bdre_rckv_synchronous_prefix.yaml
 configs/train/bdre_rckv_r125_5b_synchronous_prefix_b8_c128_legacyval.yaml
+configs/model/brian_r125_bdre_rckv_synchronous_prefix_shared_explicit.yaml
+configs/train/bdre_rckv_r125_5b_synchronous_prefix_b12_c512_shared_explicit_legacyval.yaml
 configs/train/stage5_bdre_tiny_synchronous_prefix_debug.yaml
 ```
 
@@ -261,6 +268,9 @@ are recorded in
 The synchronous-prefix semantics, acceptance tests, B200 calibration, and
 remaining performance limits are recorded in
 [reports/bdre_synchronous_prefix_prefill_report.md](./reports/bdre_synchronous_prefix_prefill_report.md).
+The mathematically equivalent shared-history optimization, repeated B200 A/B,
+removed negative experiments, and current candidate are recorded in
+[reports/bdre_synchronous_prefix_kernel_optimization_report.md](./reports/bdre_synchronous_prefix_kernel_optimization_report.md).
 
 ## Live Route Sphere
 
@@ -367,12 +377,12 @@ CUDA_VISIBLE_DEVICES=<gpu> PYTHONPATH=src:. python scripts/benchmark_bdre_tbptt.
   --chunk-size 8
 ```
 
-Calibrate the stable synchronous-prefix candidate at the formal context length:
+Calibrate the optimized synchronous-prefix candidate at the formal context length:
 
 ```bash
 CUDA_VISIBLE_DEVICES=<gpu> PYTHONPATH=src:. python scripts/benchmark_bdre_tbptt.py \
-  --config configs/train/bdre_rckv_r125_5b_synchronous_prefix_b8_c128_legacyval.yaml \
-  --batch-size 8 --sequence-length 2048 --chunk-size 128
+  --config configs/train/bdre_rckv_r125_5b_synchronous_prefix_b12_c512_shared_explicit_legacyval.yaml \
+  --warmup-steps 1 --repeats 5
 ```
 
 Stateful TBPTT execution, including the synchronous-prefix backend, currently

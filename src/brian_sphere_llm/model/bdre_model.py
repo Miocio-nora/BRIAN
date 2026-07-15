@@ -66,6 +66,7 @@ class BDREConfig:
     dispatch_mode: str = "legacy_cuda_scan"
     chunk_size: int = 1
     normalize_step_distance: bool = False
+    synchronous_attention_backend: str = "per_query_reference"
 
     @classmethod
     def from_dict(cls, data: dict[str, Any], *, config_dir: str | Path | None = None) -> "BDREConfig":
@@ -126,6 +127,9 @@ class BDREConfig:
                 data.get("bdre_normalize_step_distance", False),
                 "bdre_normalize_step_distance",
             ),
+            synchronous_attention_backend=str(
+                execution.get("attention_backend", "per_query_reference")
+            ),
         )
         if str(geometry.get("internal_target", "regular_simplex")) != "regular_simplex":
             raise ValueError("BDRE v1 position_geometry.internal_target must be regular_simplex.")
@@ -149,6 +153,10 @@ class BDREConfig:
             raise ValueError("BDRE execution.mode must be 'token_by_token' or 'synchronous_prefix'.")
         if self.dispatch_mode not in {"legacy_cuda_scan", "grouped_host"}:
             raise ValueError("BDRE execution.dispatch must be 'legacy_cuda_scan' or 'grouped_host'.")
+        if self.synchronous_attention_backend not in {"per_query_reference", "shared_padded_explicit"}:
+            raise ValueError(
+                "BDRE execution.attention_backend must be 'per_query_reference' or 'shared_padded_explicit'."
+            )
         if self.execution_mode == "synchronous_prefix":
             if self.depth_mode != "synchronous_prefix":
                 raise ValueError("synchronous_prefix execution requires bdre_depth_mode=synchronous_prefix.")
@@ -160,6 +168,8 @@ class BDREConfig:
                 raise ValueError("synchronous_prefix execution requires hard_exit=true.")
         elif self.depth_mode == "synchronous_prefix":
             raise ValueError("bdre_depth_mode=synchronous_prefix requires synchronous_prefix execution.")
+        elif self.synchronous_attention_backend != "per_query_reference":
+            raise ValueError("Shared padded attention is available only for synchronous_prefix execution.")
         if not self.position_geometry_normalize:
             raise ValueError("BDRE v1 requires normalized position geometry.")
         if self.route.top_k != 1 or self.route.later_top_k != 1:
@@ -170,6 +180,15 @@ class BDREConfig:
             raise ValueError("BDRE v1 requires spherical_code with independent_input_position=true.")
         if self.compile_top_k is not None and self.compile_top_k > self.route.max_route_steps:
             raise ValueError("bdre_compile_top_k cannot exceed max_route_steps.")
+
+
+@dataclass(frozen=True)
+class _SynchronousActionGroup:
+    action: int
+    indexes: torch.Tensor
+    active_batches: torch.Tensor
+    flat_slots: torch.Tensor
+    max_selected: int
 
 
 class BDREBlockProjection(ModuleBase):
@@ -1047,10 +1066,27 @@ class BrianBDRERouteCore(BrianRouteCore):
             flat_valid = valid.reshape(-1)
             step_key: torch.Tensor | None = None
             step_value: torch.Tensor | None = None
-            prepared: list[tuple[int, torch.Tensor, torch.Tensor, torch.Tensor]] = []
-            action_groups, _ = self._active_action_groups(flat_selected, flat_valid)
+            prepared: list[
+                tuple[int, torch.Tensor, torch.Tensor, torch.Tensor, _SynchronousActionGroup | None]
+            ] = []
+            if self.bdre_config.synchronous_attention_backend == "shared_padded_explicit":
+                packed_groups = self._active_synchronous_action_groups(
+                    flat_selected,
+                    flat_valid,
+                    chunk=chunk,
+                )
+                action_groups = [
+                    (group.action, group.indexes, group)
+                    for group in packed_groups
+                ]
+            else:
+                reference_groups, _ = self._active_action_groups(flat_selected, flat_valid)
+                action_groups = [
+                    (action, indexes, None)
+                    for action, indexes in reference_groups
+                ]
 
-            for action, indexes in action_groups:
+            for action, indexes, pack_group in action_groups:
                 block = self.route_blocks[action]
                 projection = self.bdre_projections[action]
                 selected_hidden = flat_hidden[indexes].unsqueeze(1)
@@ -1070,7 +1106,7 @@ class BrianBDRERouteCore(BrianRouteCore):
                     step_value = canonical_value.new_zeros((batch * chunk, self.bdre_config.value_dim))
                 step_key = step_key.index_copy(0, indexes, canonical_key)
                 step_value = step_value.index_copy(0, indexes, canonical_value)
-                prepared.append((action, indexes, routed_input, query))
+                prepared.append((action, indexes, routed_input, query, pack_group))
 
             if step_key is None or step_value is None:
                 if not writer_keys or not writer_values:
@@ -1104,7 +1140,7 @@ class BrianBDRERouteCore(BrianRouteCore):
             )
 
             next_flat_hidden = flat_hidden
-            for action, indexes, routed_input, query in prepared:
+            for action, indexes, routed_input, query, pack_group in prepared:
                 block_output = self._finish_synchronous_prefix_block(
                     self.route_blocks[action],
                     self.bdre_projections[action],
@@ -1118,6 +1154,7 @@ class BrianBDRERouteCore(BrianRouteCore):
                     historical_state=state.cache,
                     current_keys=current_keys,
                     current_values=current_values,
+                    pack_group=pack_group,
                 )
                 next_flat_hidden = next_flat_hidden.index_copy(0, indexes, block_output.squeeze(1))
             hidden = next_flat_hidden.view(batch, chunk, -1)
@@ -1328,7 +1365,26 @@ class BrianBDRERouteCore(BrianRouteCore):
         historical_state: BDRECacheState,
         current_keys: torch.Tensor,
         current_values: torch.Tensor,
+        pack_group: _SynchronousActionGroup | None = None,
     ) -> torch.Tensor:
+        if self.bdre_config.synchronous_attention_backend == "shared_padded_explicit":
+            if pack_group is None:
+                raise ValueError("Shared padded attention requires synchronous action packing metadata.")
+            return self._finish_synchronous_prefix_block_shared_explicit(
+                block,
+                projection,
+                routed_input,
+                query,
+                indexes=indexes,
+                chunk=chunk,
+                start_position=start_position,
+                reader_action=reader_action,
+                reader_step=reader_step,
+                historical_state=historical_state,
+                current_keys=current_keys,
+                current_values=current_values,
+                pack_group=pack_group,
+            )
         batch_indexes = torch.div(indexes, chunk, rounding_mode="floor")
         local_positions = indexes % chunk
         key_parts: list[torch.Tensor] = []
@@ -1366,6 +1422,113 @@ class BrianBDRERouteCore(BrianRouteCore):
             weights,
             value_codes.to(dtype=weights.dtype),
         )
+        attended = torch.einsum(
+            "nhr,hrd->nhd",
+            latent_value.to(dtype=projection.value_read.dtype),
+            projection.value_read,
+        ).to(dtype=routed_input.dtype)
+        attended = attended.reshape(routed_input.size(0), 1, -1)
+        routed = routed_input + attention.out(attended)
+        return routed + block.block.ffn(block.block.ffn_norm(routed))
+
+    def _finish_synchronous_prefix_block_shared_explicit(
+        self,
+        block: Any,
+        projection: BDREBlockProjection,
+        routed_input: torch.Tensor,
+        query: torch.Tensor,
+        *,
+        indexes: torch.Tensor,
+        chunk: int,
+        start_position: int,
+        reader_action: int,
+        reader_step: int,
+        historical_state: BDRECacheState,
+        current_keys: torch.Tensor,
+        current_values: torch.Tensor,
+        pack_group: _SynchronousActionGroup,
+    ) -> torch.Tensor:
+        local_positions = indexes % chunk
+        active_batches = pack_group.active_batches
+        flat_slots = pack_group.flat_slots
+        max_selected = pack_group.max_selected
+
+        attention = block.block.attn
+        query_positions = start_position + local_positions
+        query_cosine = attention.rope.cos[0, 0, query_positions, :].to(device=query.device, dtype=query.dtype)
+        query_sine = attention.rope.sin[0, 0, query_positions, :].to(device=query.device, dtype=query.dtype)
+        query = apply_rotary(query, query_cosine.unsqueeze(1), query_sine.unsqueeze(1))
+        padded_query = query.new_zeros(
+            (active_batches.numel() * max_selected, attention.n_heads, attention.head_dim)
+        ).index_copy(0, flat_slots, query)
+        padded_query = padded_query.view(
+            active_batches.numel(),
+            max_selected,
+            attention.n_heads,
+            attention.head_dim,
+        ).transpose(1, 2)
+        padded_positions = torch.zeros(
+            active_batches.numel() * max_selected,
+            dtype=torch.long,
+            device=query.device,
+        ).index_copy(0, flat_slots, query_positions)
+        padded_positions = padded_positions.view(active_batches.numel(), max_selected)
+
+        key_parts: list[torch.Tensor] = []
+        value_parts: list[torch.Tensor] = []
+        if start_position:
+            if historical_state.step_keys is None or historical_state.step_values is None:
+                raise ValueError("Synchronous-prefix history is missing step cache tensors.")
+            historical_keys = historical_state.step_keys.index_select(0, active_batches)
+            historical_values = historical_state.step_values.index_select(0, active_batches)
+            key_parts.append(historical_keys[:, :, reader_step, reader_action, :])
+            value_parts.append(historical_values[:, :, reader_step, reader_action, :])
+        selected_current_keys = current_keys.index_select(0, active_batches)
+        selected_current_values = current_values.index_select(0, active_batches)
+        key_parts.append(selected_current_keys[:, :, reader_action, :])
+        value_parts.append(selected_current_values[:, :, reader_action, :])
+        key_codes = torch.cat(key_parts, dim=1)
+        value_codes = torch.cat(value_parts, dim=1)
+
+        key_read_weight = projection.key_read.permute(0, 2, 1).reshape(
+            attention.n_heads * attention.head_dim,
+            self.bdre_config.key_dim,
+        )
+        decoded_key = F.linear(
+            key_codes.to(dtype=projection.key_read.dtype),
+            key_read_weight,
+        ).view(
+            active_batches.numel(),
+            key_codes.size(1),
+            attention.n_heads,
+            attention.head_dim,
+        ).permute(0, 2, 1, 3).to(dtype=query.dtype)
+        key_positions = torch.arange(key_codes.size(1), device=query.device)
+        key_cosine = attention.rope.cos[:, :, key_positions, :].to(device=query.device, dtype=query.dtype)
+        key_sine = attention.rope.sin[:, :, key_positions, :].to(device=query.device, dtype=query.dtype)
+        decoded_key = apply_rotary(decoded_key, key_cosine, key_sine)
+        allowed = key_positions.view(1, 1, 1, -1) <= padded_positions.view(
+            active_batches.numel(),
+            1,
+            max_selected,
+            1,
+        )
+        scores = torch.einsum("bhqd,bhkd->bhqk", padded_query, decoded_key) * (
+            attention.head_dim**-0.5
+        )
+        scores = scores.masked_fill(~allowed, torch.finfo(scores.dtype).min)
+        weights = F.softmax(scores.float(), dim=-1).to(dtype=query.dtype)
+        weights = F.dropout(weights, p=attention.dropout, training=block.training)
+        latent_value = torch.einsum(
+            "bhqk,bkr->bhqr",
+            weights,
+            value_codes.to(dtype=weights.dtype),
+        )
+        latent_value = latent_value.transpose(1, 2).reshape(
+            active_batches.numel() * max_selected,
+            attention.n_heads,
+            self.bdre_config.value_dim,
+        ).index_select(0, flat_slots)
         attended = torch.einsum(
             "nhr,hrd->nhd",
             latent_value.to(dtype=projection.value_read.dtype),
@@ -1639,6 +1802,61 @@ class BrianBDRERouteCore(BrianRouteCore):
             "hard_exit_enabled": bool(hard_exit),
             "max_route_steps": self.config.max_route_steps,
         }
+
+    def _active_synchronous_action_groups(
+        self,
+        selected: torch.Tensor,
+        valid: torch.Tensor,
+        *,
+        chunk: int,
+    ) -> list[_SynchronousActionGroup]:
+        if self.bdre_config.dispatch_mode == "grouped_host":
+            selected_host = selected.detach().to(device="cpu")
+            active_host = selected_host != self.out_action
+            actions = torch.unique(selected_host[active_host], sorted=True).tolist()
+            groups: list[_SynchronousActionGroup] = []
+            for action_value in actions:
+                action = int(action_value)
+                indexes_host = torch.nonzero(selected_host == action, as_tuple=False).flatten()
+                batch_indexes = torch.div(indexes_host, chunk, rounding_mode="floor")
+                active_batches, counts = torch.unique_consecutive(batch_indexes, return_counts=True)
+                active_rows = torch.repeat_interleave(torch.arange(active_batches.numel()), counts)
+                row_starts = torch.cumsum(counts, dim=0) - counts
+                local_slots = torch.arange(indexes_host.numel()) - row_starts[active_rows]
+                max_selected = int(counts.max().item())
+                groups.append(
+                    _SynchronousActionGroup(
+                        action=action,
+                        indexes=indexes_host.to(device=selected.device),
+                        active_batches=active_batches.to(device=selected.device),
+                        flat_slots=(active_rows * max_selected + local_slots).to(device=selected.device),
+                        max_selected=max_selected,
+                    )
+                )
+            return groups
+
+        action_groups, _ = self._active_action_groups(selected, valid)
+        groups: list[_SynchronousActionGroup] = []
+        for action, indexes in action_groups:
+            batch_indexes = torch.div(indexes, chunk, rounding_mode="floor")
+            active_batches, counts = torch.unique_consecutive(batch_indexes, return_counts=True)
+            active_rows = torch.repeat_interleave(
+                torch.arange(active_batches.numel(), device=indexes.device),
+                counts,
+            )
+            row_starts = torch.cumsum(counts, dim=0) - counts
+            local_slots = torch.arange(indexes.numel(), device=indexes.device) - row_starts[active_rows]
+            max_selected = int(counts.max().item())
+            groups.append(
+                _SynchronousActionGroup(
+                    action=action,
+                    indexes=indexes,
+                    active_batches=active_batches,
+                    flat_slots=active_rows * max_selected + local_slots,
+                    max_selected=max_selected,
+                )
+            )
+        return groups
 
     def _active_action_groups(
         self,
@@ -2121,6 +2339,7 @@ class BrianBDRERouteCore(BrianRouteCore):
                 "bdre_dispatch_mode": self.bdre_config.dispatch_mode,
                 "bdre_chunk_size": self.bdre_config.chunk_size,
                 "bdre_normalize_step_distance": str(self.bdre_config.normalize_step_distance),
+                "bdre_synchronous_attention_backend": self.bdre_config.synchronous_attention_backend,
             }
         )
         return stats
