@@ -6,6 +6,7 @@ from typing import Any
 
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical
+from textual.events import Resize
 
 from tools.route_sphere_tui.source import DemoSource, EventSource, ReplaySource, TelemetrySource
 from tools.route_sphere_tui.state import DashboardState
@@ -17,6 +18,9 @@ from tools.route_sphere_tui.widgets import (
     TrainingHeader,
     TrainingProgress,
 )
+
+TERMINAL_CELL_HEIGHT_TO_WIDTH = 2.0
+MIN_LEFT_PANE_WIDTH = 32
 
 
 class RouteSphereApp(App[None]):
@@ -32,8 +36,8 @@ class RouteSphereApp(App[None]):
     }
 
     #left {
-        width: 39%;
-        min-width: 38;
+        width: 1fr;
+        min-width: __MIN_LEFT_PANE_WIDTH__;
         height: 100%;
         padding: 1 2;
         background: #181818;
@@ -74,7 +78,7 @@ class RouteSphereApp(App[None]):
         height: 100%;
         background: #111111;
     }
-    """
+    """.replace("__MIN_LEFT_PANE_WIDTH__", str(MIN_LEFT_PANE_WIDTH))
 
     BINDINGS = [
         ("q", "quit", "Quit"),
@@ -101,9 +105,13 @@ class RouteSphereApp(App[None]):
             yield RouteSphereWidget(id="sphere")
 
     def on_mount(self) -> None:
+        self._resize_panes(self.size.width, self.size.height)
         self._poll_source()
         self.set_interval(0.12, self._poll_source)
         self.set_interval(1.0 / self.fps, self._refresh_frame)
+
+    def on_resize(self, event: Resize) -> None:
+        self._resize_panes(event.size.width, event.size.height)
 
     def action_toggle_rotation(self) -> None:
         self.query_one(RouteSphereWidget).toggle_rotation()
@@ -125,6 +133,17 @@ class RouteSphereApp(App[None]):
         for widget in self.query("#left > *"):
             widget.refresh()
         self.query_one(RouteSphereWidget).refresh()
+
+    def _resize_panes(self, width: int, height: int) -> None:
+        pane_width = _sphere_pane_width(width, height)
+        for sphere in self.query(RouteSphereWidget):
+            sphere.styles.width = pane_width
+
+
+def _sphere_pane_width(width: int, height: int) -> int:
+    square_width = max(1, int(round(height * TERMINAL_CELL_HEIGHT_TO_WIDTH)))
+    available_width = max(1, width - MIN_LEFT_PANE_WIDTH)
+    return min(square_width, available_width)
 
 
 def build_source(args: argparse.Namespace) -> EventSource:

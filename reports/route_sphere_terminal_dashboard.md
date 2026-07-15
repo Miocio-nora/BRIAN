@@ -76,6 +76,11 @@ heavy-asterisk `✱` node glyph. A live route may still connect any two blocks:
 completed route edges persist as brighter dots, while the active transition
 uses a growing near-white dotted segment and a white leading point.
 
+The route pane is sized from terminal height to remain visually square under
+the standard 2:1 terminal cell aspect ratio. The left training pane consumes
+the remaining width. Sphere geometry occupies about 94% of the square in both
+visual axes, leaving only a small margin for the rotating node glyphs.
+
 ## Entry Points
 
 ```text

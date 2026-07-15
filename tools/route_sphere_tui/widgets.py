@@ -463,8 +463,8 @@ def _project(points: np.ndarray, width: int, height: int) -> np.ndarray:
 
 
 def _projection_radii(width: int, height: int) -> tuple[float, float]:
-    radius_x = max(4.0, min(width * 0.235, height * 0.47))
-    return radius_x, max(2.0, radius_x * 0.5)
+    radius_x = max(1.5, min(width * 0.47, height * 0.94))
+    return radius_x, max(0.75, radius_x * 0.5)
 
 
 def _gauge(label: str, value: float | None, width: int, color: RGB) -> Text:

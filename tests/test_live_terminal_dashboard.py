@@ -14,7 +14,7 @@ from brian_sphere_llm.train.live_telemetry import (
     extract_route_trace,
 )
 from brian_sphere_llm.utils.config import load_config
-from tools.route_sphere_tui.app import RouteSphereApp
+from tools.route_sphere_tui.app import RouteSphereApp, _sphere_pane_width
 from tools.route_sphere_tui.canvas import BrailleCanvas
 from tools.route_sphere_tui.source import DemoSource, JsonlTail, ReplaySource
 from tools.route_sphere_tui.state import DashboardState
@@ -23,6 +23,7 @@ from tools.route_sphere_tui.widgets import (
     RouteSphereWidget,
     _connection_pairs,
     _learned_position_layout,
+    _projection_radii,
     _sphere_nodes,
     _triangulated_sphere_mesh,
 )
@@ -189,6 +190,19 @@ def test_learned_position_layout_is_finite_and_aligned() -> None:
     assert np.linalg.norm(layout, axis=1).max() == pytest.approx(1.0)
 
 
+def test_sphere_pane_tracks_a_visual_square_and_preserves_compact_left_pane() -> None:
+    assert _sphere_pane_width(140, 44) == 88
+    assert _sphere_pane_width(120, 40) == 80
+    assert _sphere_pane_width(80, 24) == 48
+    assert _sphere_pane_width(64, 24) == 32
+
+
+def test_sphere_projection_fills_most_of_its_square_pane() -> None:
+    radius_x, radius_y = _projection_radii(88, 44)
+    assert (2.0 * radius_x) / 88 == pytest.approx(0.94)
+    assert (2.0 * radius_y) / 44 == pytest.approx(0.94)
+
+
 def test_braille_canvas_preserves_ascii_node_overlay() -> None:
     canvas = BrailleCanvas(20, 8)
     canvas.line(1, 1, 18, 6, color=(60, 80, 100), intensity=0.2)
@@ -220,7 +234,10 @@ def test_textual_dashboard_mounts_and_sphere_is_text_free() -> None:
         async with app.run_test(size=(140, 44)) as pilot:
             await pilot.pause(0.25)
             sphere = app.query_one(RouteSphereWidget)
+            left = app.query_one("#left")
             text = sphere.render().plain
+            assert sphere.region.width == 88
+            assert left.region.width == 52
             assert text.count(NODE_GLYPH) == 8
             assert app.dashboard.route_revision > 0
             assert all(
@@ -232,6 +249,10 @@ def test_textual_dashboard_mounts_and_sphere_is_text_free() -> None:
             assert not any(0x2580 <= ord(char) <= 0x259F for char in text)
             assert any(0x2800 <= ord(char) <= 0x28FF for char in text)
 
+            await pilot.resize_terminal(120, 40)
+            assert sphere.region.width == 80
+            assert left.region.width == 40
+
     asyncio.run(run())
 
 
@@ -240,6 +261,9 @@ def test_textual_dashboard_keeps_all_nodes_in_compact_terminal() -> None:
         app = RouteSphereApp(DemoSource(interval=0.0), fps=8)
         async with app.run_test(size=(80, 24)) as pilot:
             await pilot.pause(0.2)
-            assert app.query_one(RouteSphereWidget).render().plain.count(NODE_GLYPH) == 8
+            sphere = app.query_one(RouteSphereWidget)
+            assert sphere.region.width == 48
+            assert app.query_one("#left").region.width == 32
+            assert sphere.render().plain.count(NODE_GLYPH) == 8
 
     asyncio.run(run())
