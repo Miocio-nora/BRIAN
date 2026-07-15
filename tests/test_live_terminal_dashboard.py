@@ -185,6 +185,14 @@ def test_braille_canvas_preserves_ascii_node_overlay() -> None:
     assert any(0x2800 <= ord(char) <= 0x28FF for char in rendered)
 
 
+def test_quadrant_canvas_renders_solid_subcell_lines() -> None:
+    canvas = BrailleCanvas(20, 8, render_mode="quadrant")
+    canvas.line(1, 1, 18, 6, color=(120, 120, 120), intensity=0.2)
+    rendered = canvas.text().plain
+    assert any(0x2580 <= ord(char) <= 0x259F for char in rendered)
+    assert not any(0x2800 <= ord(char) <= 0x28FF for char in rendered)
+
+
 def test_textual_dashboard_mounts_and_sphere_is_text_free() -> None:
     async def run() -> None:
         app = RouteSphereApp(DemoSource(interval=0.0), fps=12)
@@ -194,7 +202,11 @@ def test_textual_dashboard_mounts_and_sphere_is_text_free() -> None:
             text = sphere.render().plain
             assert text.count("*") == 8
             assert app.dashboard.route_revision > 0
-            assert all(char in {" ", "\n", "*"} or 0x2800 <= ord(char) <= 0x28FF for char in text)
+            assert all(
+                char in {" ", "\n", "*", "●"} or 0x2580 <= ord(char) <= 0x259F
+                for char in text
+            )
+            assert not any(0x2800 <= ord(char) <= 0x28FF for char in text)
 
     asyncio.run(run())
 

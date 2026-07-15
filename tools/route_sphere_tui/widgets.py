@@ -20,7 +20,6 @@ MUTED = (124, 124, 124)
 DIM = (42, 42, 42)
 BRIGHT = (244, 244, 244)
 MID = (170, 170, 170)
-SOFT = (96, 96, 96)
 WHITE = (255, 255, 255)
 
 
@@ -173,7 +172,7 @@ class RouteSphereWidget(Widget):
     def render(self) -> Text:
         width = max(4, self.size.width)
         height = max(4, self.size.height)
-        canvas = BrailleCanvas(width, height)
+        canvas = BrailleCanvas(width, height, render_mode="quadrant")
         state = self.dashboard
         if state.route_revision != self._route_revision:
             self._route_revision = state.route_revision
@@ -226,7 +225,7 @@ class RouteSphereWidget(Widget):
             ],
             axis=1,
         )
-        canvas.polyline(points, color=(48, 48, 48), intensity=0.13)
+        canvas.polyline(points, color=(76, 76, 76), intensity=0.18)
 
     def _draw_connections(self, canvas: BrailleCanvas, points: np.ndarray, rotated: np.ndarray) -> None:
         ordered = sorted(
@@ -235,16 +234,14 @@ class RouteSphereWidget(Widget):
         )
         for first, second in ordered:
             depth = float((rotated[first, 2] + rotated[second, 2]) * 0.5)
-            intensity = 0.052 + 0.05 * (depth + 1.0) * 0.5
-            canvas.line(*points[first], *points[second], color=(66, 66, 66), intensity=intensity)
+            intensity = 0.13 + 0.06 * (depth + 1.0) * 0.5
+            canvas.line(*points[first], *points[second], color=(92, 92, 92), intensity=intensity)
 
     def _draw_route(self, canvas: BrailleCanvas, points: np.ndarray) -> set[int]:
         route = [value for value in self._route if 0 <= value < len(points)]
         if not route:
             return set()
         if len(route) == 1:
-            pulse = 0.5 + 0.5 * math.sin((time.monotonic() - self._route_started) * 5.0)
-            canvas.point(*points[route[0]], color=WHITE, intensity=0.38 + 0.42 * pulse, radius=1.5 + pulse)
             return {route[0]}
 
         segment_duration = 0.58
@@ -266,8 +263,7 @@ class RouteSphereWidget(Widget):
             first, second = route[completed], route[completed + 1]
             active_nodes.add(second)
             if first == second:
-                pulse = math.sin(active_fraction * math.pi)
-                canvas.point(*points[first], color=WHITE, intensity=0.75 + 0.25 * pulse, radius=1.0 + 2.0 * pulse)
+                active_nodes.add(first)
             else:
                 canvas.line(
                     *points[first],
@@ -287,7 +283,7 @@ class RouteSphereWidget(Widget):
                 )
                 x = points[first, 0] + (points[second, 0] - points[first, 0]) * active_fraction
                 y = points[first, 1] + (points[second, 1] - points[first, 1]) * active_fraction
-                canvas.point(x, y, color=WHITE, intensity=1.0, radius=0.8)
+                canvas.glyph(x, y, "●", color=WHITE, bold=True, priority=3.0)
         else:
             active_nodes.update(route)
             for first, second in zip(route[:-1], route[1:]):
@@ -305,16 +301,9 @@ class RouteSphereWidget(Widget):
         for index in np.argsort(rotated[:, 2]):
             depth = float((rotated[index, 2] + 1.0) * 0.5)
             active = int(index) in active_nodes
-            glow_color = BRIGHT if active else SOFT
-            canvas.point(
-                *points[index],
-                color=glow_color,
-                intensity=(0.28 + 0.2 * depth) if active else (0.1 + 0.08 * depth),
-                radius=1.5 if active else 0.8,
-            )
             level = int(132 + 62 * depth)
             color = WHITE if active else (level, level, level)
-            canvas.glyph(*points[index], "*", color=color, bold=active, priority=2.0 + depth)
+            canvas.glyph(*points[index], "*", color=color, bold=active, priority=4.0 + depth)
 
 
 def _draw_history(
@@ -424,7 +413,8 @@ def _project(points: np.ndarray, width: int, height: int) -> np.ndarray:
 
 
 def _projection_radii(width: int, height: int) -> tuple[float, float]:
-    return max(2.0, width * 0.35), max(2.0, height * 0.41)
+    radius_x = max(4.0, min(width * 0.235, height * 0.47))
+    return radius_x, max(2.0, radius_x * 0.5)
 
 
 def _gauge(label: str, value: float | None, width: int, color: RGB) -> Text:

@@ -22,7 +22,7 @@ from tools.route_sphere_tui.widgets import (
 class RouteSphereApp(App[None]):
     CSS = """
     Screen {
-        background: #000000;
+        background: #111111;
         color: #e2e2e2;
     }
 
@@ -36,8 +36,8 @@ class RouteSphereApp(App[None]):
         min-width: 38;
         height: 100%;
         padding: 1 2;
-        background: #080808;
-        border-right: solid #282828;
+        background: #181818;
+        border-right: solid #343434;
     }
 
     #header {
@@ -54,14 +54,14 @@ class RouteSphereApp(App[None]):
         height: 5;
         margin-bottom: 1;
         padding: 0 1;
-        background: #080808;
+        background: #181818;
     }
 
     .chart {
         height: 1fr;
         min-height: 6;
         margin-top: 1;
-        background: #080808;
+        background: #181818;
     }
 
     #health {
@@ -72,7 +72,7 @@ class RouteSphereApp(App[None]):
     #sphere {
         width: 1fr;
         height: 100%;
-        background: #000000;
+        background: #111111;
     }
     """
 

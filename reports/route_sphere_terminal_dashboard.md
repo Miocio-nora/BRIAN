@@ -67,11 +67,12 @@ orthogonally aligned to the previous frame with Procrustes alignment to prevent
 arbitrary sign and axis flips. The stable spherical layout remains the default.
 
 Each block node has three faint base connections, forming the 12 edges of the
-inscribed cube. The entire dashboard uses a black, gray, and white palette. A
-single low-intensity sphere contour and the sparse wireframe provide structure
-without competing with the route. A live route may still connect any two
-blocks: completed route edges brighten to gray, while the active transition
-uses a growing white line and a white leading point.
+inscribed cube. The dashboard uses a neutral graphite, gray, and white palette
+without a pure-black background. The compact sphere contour and sparse
+wireframe use solid quadrant subpixels instead of a dotted Braille raster. A
+live route may still connect any two blocks: completed route edges brighten to
+gray, while the active transition uses a growing white line and a white leading
+point.
 
 ## Entry Points
 

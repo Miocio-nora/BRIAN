@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import math
-from typing import Iterable
+from typing import Iterable, Literal
 
 import numpy as np
 from rich.style import Style
@@ -20,6 +20,25 @@ _BRAILLE_BITS = np.asarray(
     dtype=np.uint16,
 )
 
+_QUADRANT_CHARS = (
+    " ",
+    "▘",
+    "▝",
+    "▀",
+    "▖",
+    "▌",
+    "▞",
+    "▛",
+    "▗",
+    "▚",
+    "▐",
+    "▜",
+    "▄",
+    "▙",
+    "▟",
+    "█",
+)
+
 
 @dataclass(frozen=True)
 class Glyph:
@@ -30,13 +49,24 @@ class Glyph:
 
 
 class BrailleCanvas:
-    """True-color 2x4 sub-cell canvas with ASCII glyph overlays."""
+    """True-color sub-cell canvas with foreground glyph overlays."""
 
-    def __init__(self, width: int, height: int) -> None:
+    def __init__(
+        self,
+        width: int,
+        height: int,
+        *,
+        render_mode: Literal["braille", "quadrant"] = "braille",
+    ) -> None:
+        if render_mode not in ("braille", "quadrant"):
+            raise ValueError(f"Unsupported render mode: {render_mode}")
         self.width = max(1, int(width))
         self.height = max(1, int(height))
-        self.pixel_width = self.width * 2
-        self.pixel_height = self.height * 4
+        self.render_mode = render_mode
+        self.subpixel_width = 2
+        self.subpixel_height = 4 if render_mode == "braille" else 2
+        self.pixel_width = self.width * self.subpixel_width
+        self.pixel_height = self.height * self.subpixel_height
         self.intensity = np.zeros((self.pixel_height, self.pixel_width), dtype=np.float32)
         self.color = np.zeros((self.pixel_height, self.pixel_width, 3), dtype=np.float32)
         self.glyphs: dict[tuple[int, int], Glyph] = {}
@@ -50,12 +80,13 @@ class BrailleCanvas:
         intensity: float = 1.0,
         radius: float = 0.0,
     ) -> None:
-        px = int(round(x * 2.0))
-        py = int(round(y * 4.0))
+        px = int(round(x * self.subpixel_width))
+        py = int(round(y * self.subpixel_height))
         pixel_radius = max(0, int(round(radius * 2.0)))
         for dy in range(-pixel_radius, pixel_radius + 1):
             for dx in range(-pixel_radius, pixel_radius + 1):
-                distance = math.sqrt(dx * dx + (dy * 0.5) ** 2)
+                y_scale = self.subpixel_width / self.subpixel_height
+                distance = math.sqrt(dx * dx + (dy * y_scale) ** 2)
                 if distance > max(0.5, pixel_radius):
                     continue
                 fade = 1.0 if pixel_radius == 0 else max(0.0, 1.0 - distance / (pixel_radius + 0.5))
@@ -80,13 +111,27 @@ class BrailleCanvas:
         ay = y0 + (y1 - y0) * start
         bx = x0 + (x1 - x0) * end
         by = y0 + (y1 - y0) * end
-        samples = max(2, int(max(abs(bx - ax) * 2.0, abs(by - ay) * 4.0)) + 1)
+        samples = max(
+            2,
+            int(
+                max(
+                    abs(bx - ax) * self.subpixel_width,
+                    abs(by - ay) * self.subpixel_height,
+                )
+            )
+            + 1,
+        )
         for index, value in enumerate(np.linspace(0.0, 1.0, samples)):
             if dashed and (index // 2) % 2:
                 continue
             x = ax + (bx - ax) * float(value)
             y = ay + (by - ay) * float(value)
-            self._pixel(int(round(x * 2.0)), int(round(y * 4.0)), color, intensity)
+            self._pixel(
+                int(round(x * self.subpixel_width)),
+                int(round(y * self.subpixel_height)),
+                color,
+                intensity,
+            )
 
     def polyline(
         self,
@@ -135,27 +180,45 @@ class BrailleCanvas:
                         Style(color=_rich_color(glyph.color), bold=glyph.bold),
                     )
                     continue
-                y0 = cell_y * 4
-                x0 = cell_x * 2
-                block = self.intensity[y0 : y0 + 4, x0 : x0 + 2]
+                y0 = cell_y * self.subpixel_height
+                x0 = cell_x * self.subpixel_width
+                block = self.intensity[
+                    y0 : y0 + self.subpixel_height,
+                    x0 : x0 + self.subpixel_width,
+                ]
                 active = block > 0.008
                 if not bool(active.any()):
                     output.append(" ")
                     continue
-                code = 0
-                for dot_y in range(4):
-                    for dot_x in range(2):
-                        if active[dot_y, dot_x]:
-                            code |= int(_BRAILLE_BITS[dot_y, dot_x])
-                weighted = block[..., None] * self.color[y0 : y0 + 4, x0 : x0 + 2]
+                char = self._subcell_char(active)
+                weighted = block[..., None] * self.color[
+                    y0 : y0 + self.subpixel_height,
+                    x0 : x0 + self.subpixel_width,
+                ]
                 denominator = max(1e-6, float(block.sum()))
                 rgb = np.clip(weighted.sum(axis=(0, 1)) / denominator, 0.0, 255.0)
                 strength = min(1.0, max(0.18, float(block.max())))
                 visible = tuple(int(round(float(channel) * (0.45 + 0.55 * strength))) for channel in rgb)
-                output.append(chr(0x2800 + code), Style(color=_rich_color(visible)))
+                output.append(char, Style(color=_rich_color(visible)))
             if cell_y + 1 < self.height:
                 output.append("\n")
         return output
+
+    def _subcell_char(self, active: np.ndarray) -> str:
+        if self.render_mode == "quadrant":
+            mask = (
+                int(active[0, 0])
+                | (int(active[0, 1]) << 1)
+                | (int(active[1, 0]) << 2)
+                | (int(active[1, 1]) << 3)
+            )
+            return _QUADRANT_CHARS[mask]
+        code = 0
+        for dot_y in range(4):
+            for dot_x in range(2):
+                if active[dot_y, dot_x]:
+                    code |= int(_BRAILLE_BITS[dot_y, dot_x])
+        return chr(0x2800 + code)
 
     def _pixel(self, px: int, py: int, color: RGB, intensity: float) -> None:
         if not (0 <= px < self.pixel_width and 0 <= py < self.pixel_height):
