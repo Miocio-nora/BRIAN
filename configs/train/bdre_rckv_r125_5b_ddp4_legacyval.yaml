@@ -1,0 +1,28 @@
+extends: bdre_rckv_r125_5b_ddp2_legacyval.yaml
+run_name: bdre_rckv_r125_5b_ddp4_legacyval
+
+# Preserve the DDP2 configuration's effective global batch of 32 sequences.
+gradient_accumulation_steps: 8
+
+checkpoint_benchmarks:
+  label: bdre_rckv_r125_5b_ddp4_legacyval
+
+wandb:
+  group: bdre_rckv_r125_5b_ddp4_legacyval
+  tags:
+    - bdre
+    - reader_compiled_kv
+    - exact_token_by_token
+    - r125
+    - 5b
+    - balanced_data
+    - legacy_val
+    - ddp4
+    - slow_noise
+    - random_route_override
+    - self_recur_cap
+    - selected_balance_002
+    - coverage_floor
+    - strong_length
+    - no_location_bias
+    - no_route_imitation
