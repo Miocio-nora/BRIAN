@@ -1,0 +1,34 @@
+extends: brian_tiny.yaml
+model_name: brian_tiny_bdre_rckv
+max_route_steps: 3
+top_k: 1
+later_top_k: 1
+hard_exit: true
+location_bias_weight: 0.0
+block_position_mode: spherical_code
+independent_input_position: true
+
+bdre_shared_kv: true
+bdre_key_dim: 8
+bdre_value_dim: 8
+bdre_depth_mode: none
+bdre_step_lambda: 0.0
+bdre_position_tau: 1.0
+bdre_late_step_weight: 0.0
+bdre_compile_top_k: null
+bdre_key_temperature: 0.5
+bdre_value_temperature: 1.0
+bdre_reader_step_cache: lazy
+bdre_self_kv_mode: bdre_prefix
+bdre_key_read_mode: explicit_decode_rope
+bdre_value_read_mode: latent_aggregate
+
+position_geometry:
+  enabled: true
+  weight: 0.001
+  normalize: true
+  internal_target: regular_simplex
+  in_out_target: antipodal_orthogonal
+
+execution:
+  mode: token_by_token

@@ -1,6 +1,6 @@
 # BRIAN BDRE Reader-Compiled Shared KV Implementation Report
 
-**Status:** implementation specification
+**Status:** exact-reference implementation complete; approximate prefill remains future work
 **Date:** 2026-07-15
 **Working model name:** `BRIAN-R125-BDRE-RCKV-v1`
 **Base reference:** `BRIAN-R125 Global KV Cache-Only v1`
@@ -31,6 +31,76 @@ clarifications:
 Existing Non-Global, hidden-state Global KV, attention-summary Global KV, and
 pure-factorized cache-only implementations must remain available and unchanged.
 The BDRE path is additive and selected by a separate model configuration.
+
+## 1.1 Implementation Outcome
+
+The exact `BRIAN-R125-BDRE-RCKV-v1` reference is implemented on branch
+`bdre-reader-compiled-kv`. The implementation uses the existing
+`brian_route_core` architecture dispatch plus `bdre_shared_kv: true`; legacy
+configs still instantiate `BrianRouteCore`, while BDRE configs instantiate
+`BrianBDRERouteCore`.
+
+Primary implementation files:
+
+```text
+src/brian_sphere_llm/model/bdre_model.py
+src/brian_sphere_llm/memory/bdre_shared_kv.py
+src/brian_sphere_llm/routing/block_position.py
+src/brian_sphere_llm/eval/bdre_cache_visualization.py
+src/brian_sphere_llm/train/stage_runner.py
+src/brian_sphere_llm/train/trainer.py
+tests/test_bdre_shared_kv.py
+```
+
+Prepared configs:
+
+```text
+configs/model/brian_r125_bdre_rckv_v1.yaml
+configs/model/brian_tiny_bdre_rckv.yaml
+configs/train/bdre_rckv_r125_5b_ddp2_legacyval.yaml
+configs/train/stage5_bdre_tiny_debug.yaml
+configs/train/stage5_bdre_tiny_ddp2_debug.yaml
+```
+
+Implemented execution and state contracts:
+
+- stateful one-token `forward_incremental` without prefix recomputation;
+- token-serial teacher-forced training using the same incremental kernel;
+- conventional per-layer incremental KV for fixed pre/post blocks;
+- one persistent canonical K/V pair per completed token and free reader block;
+- independent block/head Q/K/V, block-specific writer canonicalizers, and
+  block/head-specific reader decoders;
+- exact decoded-Key RoPE and exact low-dimensional Value aggregation;
+- block-only compilation plus eager, persistent-lazy, and dynamic reader-step
+  modes;
+- `bdre_prefix`, `current_step`, and `none` self-KV modes;
+- optional hard compile top-k and separate Key/Value temperatures;
+- spherical IN/internal/OUT initialization and weak Gram loss;
+- all required scalar diagnostics in train/eval logs;
+- HTML/W&B visualization for position geometry, writer route, and per-reader
+  Key/Value compile weights.
+
+Validation completed on 2026-07-15:
+
+| Check | Result |
+| --- | --- |
+| New BDRE unit/integration tests | 16 passed |
+| Prefix suffix-invariance | passed |
+| Full exact forward vs stateful incremental | max logits difference `0.0` |
+| Reader-step eager/lazy/dynamic equivalence | passed at `atol=rtol=1e-6` |
+| CUDA BF16 forward/backward | passed on B200 |
+| Tiny 3-step train/eval/checkpoint smoke | passed |
+| Tiny DDP2 train/eval/checkpoint smoke | passed on B200 GPUs 4-5 |
+| Legacy position/loss/routing/global/sparse regressions | passed |
+| R125 BF16 exact forward/backward smoke | passed |
+
+The R125 smoke used batch 1, sequence length 4, and fixed sequential routing.
+It produced eight valid writer steps per token, finite loss and gradients, about
+`1.31 GiB` peak allocated CUDA memory, and about `2.47 s` wall time. This is a
+correctness measurement only and must not be extrapolated to 5B training.
+
+Approximate/wavefront prefill is intentionally not implemented. The exact
+token-by-token implementation remains the oracle required by Section 16.
 
 ## 2. Model Scope
 
@@ -393,8 +463,9 @@ routing:
 ```
 
 The corrected selected-balance, coverage-floor, weak cost, and exit-boundary
-losses remain enabled. Route imitation remains disabled after the existing
-short execution curriculum.
+losses remain enabled. The route-position location loss is explicitly disabled:
+position geometry affects BDRE compilation but does not prescribe a route path.
+Route imitation remains disabled after the existing short execution curriculum.
 
 Top-2 and weighted route fusion are out of scope for BDRE v1.
 
@@ -672,6 +743,7 @@ Position initialization:
   IN/OUT antipodal poles
   eight internal blocks as orthogonal-subspace regular simplex
 Position geometry loss: enabled, weak
+Route-position location loss: disabled
 
 Approximate prefill: disabled until exact-reference validation
 ```

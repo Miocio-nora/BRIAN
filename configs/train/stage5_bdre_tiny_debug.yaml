@@ -1,0 +1,53 @@
+extends: stage3_tiny_debug.yaml
+stage: stage5_bdre_shared_kv
+run_name: stage5_bdre_tiny_debug
+model_config: ../model/brian_tiny_bdre_rckv.yaml
+max_steps: 3
+eval_interval: 1
+save_interval: 3
+routing:
+  mode: scheduled
+  pseudo_policy: sequential
+  hard_exit: true
+  logit_noise_std: 0.08
+  logit_noise_decay_steps: 3
+  logit_noise_min_std: 0.008
+  random_route_probability: 0.25
+  random_route_decay_steps: 3
+  random_route_min_probability: 0.03
+  constraints:
+    min_exit_step: 2
+    exit_ramp_start: 3
+    early_exit_logit_penalty: 8.0
+    exit_ramp_logit_bias: 3.0
+    final_exit_logit_bias: 6.0
+    force_final_exit: true
+    self_recur_max_consecutive: 2
+    coverage_floor_min: 0.1
+  schedule:
+    - max_step: 1
+      router_probability: 0.25
+      lambda_route: 0.0
+    - max_step: 2
+      router_probability: 0.75
+      lambda_route: 0.0
+    - max_step: 3
+      router_probability: 1.0
+      lambda_route: 0.0
+loss_weights:
+  route: 0.0
+  balance: 0.0
+  cost: 0.0002
+  location: 0.0
+  selected_balance: 0.02
+  coverage_floor: 0.05
+  transition_diversity: 0.0
+  exit_boundary: 0.01
+route_path_visualization:
+  enabled: false
+router_space_visualization:
+  enabled: false
+bdre_cache_visualization:
+  enabled: false
+wandb:
+  enabled: false

@@ -1,0 +1,7 @@
+extends: stage5_bdre_tiny_debug.yaml
+run_name: stage5_bdre_tiny_ddp2_debug
+batch_size: 1
+gradient_accumulation_steps: 1
+max_steps: 1
+eval_interval: 1
+save_interval: 1

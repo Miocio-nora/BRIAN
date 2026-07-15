@@ -31,6 +31,9 @@ Implemented v0.1 pieces:
 - minimal canonical Global KV path with sink + sliding window retention for Stage 5;
 - route-only attention-level Global KV path that lets route-pool attention read
   shared compressed K/V memory directly;
+- exact token-by-token BDRE reader-compiled shared KV path with independent
+  writer/reader projections, spherical IN/internal/OUT positions, and a
+  stateful incremental API;
 - experimental Stage 6 parallel passing with beam scoring, pruning, shared base Global KV, and per-branch delta memory;
 - JSONL train/eval logs with throughput, latency, CUDA memory diagnostics, model stats, data manifest references, checkpoint save/resume, and routing report generation;
 - B200-compatible conda environment using PyTorch CUDA 12.8 wheels.
@@ -200,6 +203,31 @@ They project the router MLP hidden state and the router scoring-layer expert
 vectors into PCA space to inspect block expert separation, domination, and
 self-recurrent collapse.
 
+The additive BDRE reference is implemented as
+`BRIAN-R125-BDRE-RCKV-v1`. Each completed token stores one compressed K/V pair
+for each of the eight possible free-block readers. During a route, each block
+uses its own K/V writer and per-head reader projections; fixed pre/post blocks
+retain conventional incremental KV caches. The exact implementation processes
+tokens serially and is the correctness oracle for a later approximate prefill,
+not yet a throughput-optimized replacement for the existing full-sequence
+models.
+
+Key BDRE entrypoints:
+
+```text
+configs/model/brian_r125_bdre_rckv_v1.yaml
+configs/train/bdre_rckv_r125_5b_ddp2_legacyval.yaml
+configs/train/stage5_bdre_tiny_debug.yaml
+configs/train/stage5_bdre_tiny_ddp2_debug.yaml
+```
+
+Training logs include compile timing, writer-step counts, K/V compile entropy,
+last-step mass, geometry error, cache size, and lazy-cache hit rate. The formal
+config also emits a W&B HTML view with 3D position/writer paths and switchable
+Key/Value reader-weight heatmaps. Design, defaults, validation results, and
+remaining prefill work are recorded in
+[reports/bdre_shared_kv_implementation_report.md](./reports/bdre_shared_kv_implementation_report.md).
+
 See [BRIAN-Sphere-LLM_PROJECT_PLAN.md](./BRIAN-Sphere-LLM_PROJECT_PLAN.md) for the full technical plan.
 See [CODEX_GUIDANCE.md](./CODEX_GUIDANCE.md) for implementation guidance.
 
@@ -257,7 +285,15 @@ python scripts/train.py --config configs/train/stage3_tiny_debug.yaml
 python scripts/train.py --config configs/train/stage3_top2_tiny_debug.yaml
 python scripts/train.py --config configs/train/stage4_tiny_debug.yaml
 python scripts/train.py --config configs/train/stage5_tiny_debug.yaml
+python scripts/train.py --config configs/train/stage5_bdre_tiny_debug.yaml
 python scripts/train.py --config configs/train/stage6_tiny_debug.yaml
+```
+
+Run the BDRE DDP smoke on two GPUs:
+
+```bash
+torchrun --nproc_per_node=2 scripts/train.py \
+  --config configs/train/stage5_bdre_tiny_ddp2_debug.yaml
 ```
 
 For multi-GPU jobs, launch the same training entrypoint with `torchrun`; the trainer reads `WORLD_SIZE`, `RANK`, and `LOCAL_RANK`, uses a distributed train sampler, wraps the model with DDP, applies `no_sync()` during accumulated non-final microbatches, records train token throughput in global-token units while retaining `local_*` token diagnostics, averages train loss/routing scalars across ranks, and writes checkpoints/reports only from rank 0:

@@ -1,0 +1,76 @@
+extends: corrected_package_a_r125_5b_a0_selected_random_explore_no_location_bias_covfloor_stronglen.yaml
+stage: stage5_bdre_shared_kv
+run_name: bdre_rckv_r125_5b_ddp2_legacyval
+model_config: ../model/brian_r125_bdre_rckv_v1.yaml
+data_config: ../data/r125_main_5b_balanced.yaml
+batch_size: 1
+gradient_accumulation_steps: 16
+eval_split: val_legacy
+float32_matmul_precision: high
+loss_weights:
+  # Position affects BDRE cache compilation, but does not prescribe a route path.
+  location: 0.0
+routing:
+  pseudo_policy: random_internal
+  hard_exit: true
+  logit_noise_std: 0.08
+  logit_noise_decay_steps: 50000
+  logit_noise_min_std: 0.008
+  random_route_probability: 0.25
+  random_route_decay_steps: 50000
+  random_route_min_probability: 0.03
+  constraints:
+    min_exit_step: 4
+    exit_ramp_start: 12
+    early_exit_logit_penalty: 8.0
+    exit_ramp_logit_bias: 3.0
+    final_exit_logit_bias: 6.0
+    force_final_exit: true
+    self_recur_max_consecutive: 2
+    coverage_floor_min: 0.04
+checkpoint_retention:
+  enabled: true
+  interval: 5000
+  keep_last: 20
+  include_optimizer: false
+  include_rng_state: false
+bdre_cache_visualization:
+  enabled: true
+  interval: 2500
+  sample_index: 0
+  output_dir: bdre_cache_visualizations
+  wandb_key: bdre_cache
+  upload_to_wandb: true
+checkpoint_benchmarks:
+  enabled: true
+  interval: 15000
+  output_dir: reports/package_a_benchmarks
+  label: bdre_rckv_r125_5b_ddp2_legacyval
+  fail_on_error: false
+  reasoning:
+    enabled: true
+    config: configs/eval/reasoning_eval_s600.yaml
+  public:
+    enabled: true
+    config: configs/eval/public_benchmark_s600.yaml
+post_train_benchmarks:
+  label: bdre_rckv_r125_5b_ddp2_legacyval
+wandb:
+  group: bdre_rckv_r125_5b_ddp2_legacyval
+  tags:
+    - bdre
+    - reader_compiled_kv
+    - exact_token_by_token
+    - r125
+    - 5b
+    - balanced_data
+    - legacy_val
+    - ddp2
+    - slow_noise
+    - random_route_override
+    - self_recur_cap
+    - selected_balance_002
+    - coverage_floor
+    - strong_length
+    - no_location_bias
+    - no_route_imitation

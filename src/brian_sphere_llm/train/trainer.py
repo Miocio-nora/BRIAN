@@ -12,6 +12,7 @@ from typing import Any
 
 from brian_sphere_llm.data.dataloader import build_dataloader
 from brian_sphere_llm.data.manifest import sha256_text
+from brian_sphere_llm.eval.bdre_cache_visualization import make_bdre_cache_visualization_from_payload
 from brian_sphere_llm.eval.post_train_benchmarks import run_checkpoint_benchmarks
 from brian_sphere_llm.eval.router_space_visualization import make_router_space_visualization_from_payload
 from brian_sphere_llm.eval.route_path_visualization import make_route_path_visualization_from_train_log
@@ -223,6 +224,7 @@ def train_from_config(config_path: str | Path) -> Path:
     write_routing_report = _bool_config(config, "write_routing_report_on_checkpoint", default=True)
     route_path_visualization = _route_path_visualization_config(config, default_interval=save_interval)
     router_space_visualization = _router_space_visualization_config(config, default_interval=save_interval)
+    bdre_cache_visualization = _bdre_cache_visualization_config(config, default_interval=save_interval)
     checkpoint_retention = _checkpoint_retention_config(config, default_interval=save_interval)
     checkpoint_benchmarks = _checkpoint_benchmark_config(config, default_interval=save_interval)
     benchmark_log = JsonlLogger(run_dir / "benchmark_log.jsonl") if is_main_process and checkpoint_benchmarks["enabled"] else None
@@ -259,6 +261,7 @@ def train_from_config(config_path: str | Path) -> Path:
         routing_summary: dict[str, Any] = {}
         routing_numeric_values: dict[str, list[float]] = {}
         router_space_payload: dict[str, Any] | None = None
+        bdre_cache_payload: dict[str, Any] | None = None
         summarize_routing = _routing_summary_due(config, global_step=step) or _visualization_due(
             route_path_visualization,
             step=step,
@@ -266,6 +269,11 @@ def train_from_config(config_path: str | Path) -> Path:
         )
         collect_router_space = is_main_process and _visualization_due(
             router_space_visualization,
+            step=step,
+            max_steps=max_steps,
+        )
+        collect_bdre_visualization = is_main_process and _visualization_due(
+            bdre_cache_visualization,
             step=step,
             max_steps=max_steps,
         )
@@ -287,6 +295,7 @@ def train_from_config(config_path: str | Path) -> Path:
                         route_mode=stage_mode,
                         global_step=step,
                         collect_router_space=collect_router_space and should_sync_gradients,
+                        collect_bdre_visualization=collect_bdre_visualization and should_sync_gradients,
                         summarize_routing=summarize_routing,
                     )
                     loss = outputs["loss"]
@@ -300,6 +309,8 @@ def train_from_config(config_path: str | Path) -> Path:
             _accumulate_routing_summary(routing_summary, routing_numeric_values, outputs.get("routing_summary", {}))
             if collect_router_space and should_sync_gradients and "router_space" in outputs:
                 router_space_payload = outputs["router_space"]
+            if collect_bdre_visualization and should_sync_gradients and "bdre_visualization" in outputs:
+                bdre_cache_payload = outputs["bdre_visualization"]
         if config.get("grad_clip") is not None:
             torch.nn.utils.clip_grad_norm_(model.parameters(), _float_config(config, "grad_clip", minimum=0.0))
         optimizer.step()
@@ -366,6 +377,15 @@ def train_from_config(config_path: str | Path) -> Path:
                 step=step,
                 max_steps=max_steps,
                 config=router_space_visualization,
+            )
+            _maybe_log_bdre_cache_visualization(
+                wandb_run,
+                run_dir=run_dir,
+                model=dist_utils.unwrap_model(model),
+                payload=bdre_cache_payload,
+                step=step,
+                max_steps=max_steps,
+                config=bdre_cache_visualization,
             )
 
         if step % eval_interval == 0 or step == max_steps:
@@ -480,6 +500,7 @@ def _forward_for_stage(
     route_mode: str,
     global_step: int,
     collect_router_space: bool = False,
+    collect_bdre_visualization: bool = False,
     summarize_routing: bool = True,
 ) -> dict:
     if route_mode == "baseline":
@@ -513,6 +534,7 @@ def _forward_for_stage(
         router_probability=router_probability,
         global_step=global_step,
         collect_router_space=collect_router_space,
+        collect_bdre_visualization=collect_bdre_visualization,
         summarize_routing=summarize_routing,
     )
     if schedule_values:
@@ -704,6 +726,35 @@ def _router_space_visualization_config(config: dict[str, Any], *, default_interv
         "enabled": enabled,
         "interval": interval,
         "max_points": max_points,
+        "upload_to_wandb": upload_to_wandb,
+        "output_dir": output_dir,
+        "wandb_key": wandb_key,
+    }
+
+
+def _bdre_cache_visualization_config(config: dict[str, Any], *, default_interval: int) -> dict[str, Any]:
+    cfg = dict(_mapping_config(config, "bdre_cache_visualization"))
+    enabled = _bool_value(cfg.get("enabled", False), "bdre_cache_visualization.enabled")
+    interval = _int_config(
+        {"interval": cfg.get("interval", default_interval)},
+        "interval",
+        minimum=1,
+    )
+    sample_index = _int_config({"sample_index": cfg.get("sample_index", 0)}, "sample_index", minimum=0)
+    upload_to_wandb = _bool_value(
+        cfg.get("upload_to_wandb", True),
+        "bdre_cache_visualization.upload_to_wandb",
+    )
+    output_dir = str(cfg.get("output_dir", "bdre_cache_visualizations"))
+    if not output_dir:
+        raise ValueError("bdre_cache_visualization.output_dir must be a non-empty string.")
+    wandb_key = str(cfg.get("wandb_key", "bdre_cache"))
+    if not wandb_key:
+        raise ValueError("bdre_cache_visualization.wandb_key must be a non-empty string.")
+    return {
+        "enabled": enabled,
+        "interval": interval,
+        "sample_index": sample_index,
         "upload_to_wandb": upload_to_wandb,
         "output_dir": output_dir,
         "wandb_key": wandb_key,
@@ -919,6 +970,48 @@ def _maybe_log_router_space_visualization(
         }
         JsonlLogger(run_dir / "router_space_visualization_errors.jsonl").write(error)
         _wandb_log_named_visualization_error(wandb_run, "router_space", error)
+        return None
+    if config.get("upload_to_wandb"):
+        _wandb_log_html(
+            wandb_run,
+            key=str(config["wandb_key"]),
+            html_path=html_path,
+            step=step,
+        )
+    return html_path
+
+
+def _maybe_log_bdre_cache_visualization(
+    wandb_run: Any | None,
+    *,
+    run_dir: Path,
+    model: Any,
+    payload: dict[str, Any] | None,
+    step: int,
+    max_steps: int,
+    config: Mapping[str, Any],
+) -> Path | None:
+    if not _visualization_due(config, step=step, max_steps=max_steps) or payload is None:
+        return None
+    output_dir = run_dir / str(config["output_dir"])
+    output_path = output_dir / f"bdre_cache_step_{step:08d}.html"
+    try:
+        html_path = make_bdre_cache_visualization_from_payload(
+            payload,
+            model,
+            output_path=output_path,
+            step=step,
+            sample_index=int(config["sample_index"]),
+            metadata={"run_dir": str(run_dir), "source": "train_step"},
+        )
+    except Exception as exc:  # pragma: no cover - visualization must not kill training.
+        error = {
+            "step": step,
+            "error_type": type(exc).__name__,
+            "error": str(exc),
+        }
+        JsonlLogger(run_dir / "bdre_cache_visualization_errors.jsonl").write(error)
+        _wandb_log_named_visualization_error(wandb_run, "bdre_cache", error)
         return None
     if config.get("upload_to_wandb"):
         _wandb_log_html(

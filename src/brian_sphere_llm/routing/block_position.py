@@ -32,10 +32,16 @@ class BlockPositionTable(ModuleBase):
         self.out_action = num_internal_blocks
         self.mode = mode
         self.independent_input_position = independent_input_position
-        init = self._init_embeddings(mode)
+        if mode == "spherical_code":
+            if not independent_input_position:
+                raise ValueError("spherical_code requires independent_input_position=true")
+            init, input_init = self._spherical_code_init()
+        else:
+            init = self._init_embeddings(mode)
+            input_init = init[0]
         self.embeddings = nn.Parameter(init, requires_grad=mode != "none")
         if independent_input_position:
-            self.input_position = nn.Parameter(init[0].clone(), requires_grad=mode != "none")
+            self.input_position = nn.Parameter(input_init.clone(), requires_grad=mode != "none")
         else:
             self.register_parameter("input_position", None)
 
@@ -49,6 +55,36 @@ class BlockPositionTable(ModuleBase):
         if mode == "circular":
             return self._sinusoidal_init(open_arc=False)
         raise ValueError(f"Unsupported block_position_mode: {mode}")
+
+    def _spherical_code_init(self) -> tuple[torch.Tensor, torch.Tensor]:
+        # One pole dimension plus the standard n-vertex simplex construction.
+        required_dim = self.num_internal_blocks + 1
+        if self.position_dim < required_dim:
+            raise ValueError(
+                "spherical_code position_dim must be at least num_internal_blocks + 1 "
+                f"({required_dim})"
+            )
+        points = torch.zeros(self.num_internal_blocks + 2, self.position_dim, dtype=torch.float32)
+        points[0, 0] = 1.0
+        points[-1, 0] = -1.0
+        simplex = torch.eye(self.num_internal_blocks, dtype=torch.float32)
+        simplex = simplex - torch.full_like(simplex, 1.0 / self.num_internal_blocks)
+        simplex = F.normalize(simplex, dim=-1)
+        points[1 : self.num_internal_blocks + 1, 1 : self.num_internal_blocks + 1] = simplex
+
+        generator = torch.Generator(device="cpu")
+        generator.manual_seed(1729)
+        rotation, triangular = torch.linalg.qr(
+            torch.randn(self.position_dim, self.position_dim, generator=generator, dtype=torch.float32)
+        )
+        signs = torch.where(torch.diag(triangular) < 0, -torch.ones(self.position_dim), torch.ones(self.position_dim))
+        rotation = rotation * signs.unsqueeze(0)
+        points = F.normalize(points @ rotation, dim=-1)
+        action_points = torch.cat(
+            [points[1 : self.num_internal_blocks + 1], points[-1:]],
+            dim=0,
+        )
+        return action_points, points[0]
 
     def _sinusoidal_init(self, open_arc: bool) -> torch.Tensor:
         denom = self.num_actions if open_arc else max(1, self.num_actions - 1)
@@ -94,6 +130,53 @@ class BlockPositionTable(ModuleBase):
         internal_positions = F.normalize(self.embeddings[: self.num_internal_blocks], dim=-1)
         centroid = internal_positions.mean(dim=0).detach()
         return (input_position - centroid).pow(2).sum()
+
+    def geometry_loss(self) -> torch.Tensor:
+        if self.mode != "spherical_code" or self.input_position is None:
+            return torch.zeros((), dtype=self.embeddings.dtype, device=self.embeddings.device)
+        points = self._ordered_spherical_points()
+        target = self._spherical_target_gram(device=points.device, dtype=points.dtype)
+        return (points @ points.transpose(0, 1) - target).pow(2).mean()
+
+    def geometry_metrics(self) -> dict[str, torch.Tensor]:
+        zero = torch.zeros((), dtype=self.embeddings.dtype, device=self.embeddings.device)
+        if self.mode != "spherical_code" or self.input_position is None:
+            return {
+                "position_gram_error": zero,
+                "internal_position_min_angle": zero,
+            }
+        points = self._ordered_spherical_points()
+        internal = points[1 : self.num_internal_blocks + 1]
+        cosine = (internal @ internal.transpose(0, 1)).clamp(-1.0, 1.0)
+        diagonal = torch.eye(self.num_internal_blocks, dtype=torch.bool, device=cosine.device)
+        min_angle = torch.acos(cosine.masked_fill(diagonal, -1.0).max()) * (180.0 / math.pi)
+        return {
+            "position_gram_error": self.geometry_loss(),
+            "internal_position_min_angle": min_angle,
+        }
+
+    def _ordered_spherical_points(self) -> torch.Tensor:
+        assert self.input_position is not None
+        internal = self.embeddings[: self.num_internal_blocks]
+        out = self.embeddings[self.out_action : self.out_action + 1]
+        return F.normalize(torch.cat([self.input_position.unsqueeze(0), internal, out], dim=0), dim=-1)
+
+    def _spherical_target_gram(self, *, device: torch.device, dtype: torch.dtype) -> torch.Tensor:
+        count = self.num_internal_blocks + 2
+        target = torch.zeros(count, count, device=device, dtype=dtype)
+        target.fill_diagonal_(1.0)
+        target[0, -1] = -1.0
+        target[-1, 0] = -1.0
+        if self.num_internal_blocks > 1:
+            internal_target = torch.full(
+                (self.num_internal_blocks, self.num_internal_blocks),
+                -1.0 / (self.num_internal_blocks - 1),
+                device=device,
+                dtype=dtype,
+            )
+            internal_target.fill_diagonal_(1.0)
+            target[1:-1, 1:-1] = internal_target
+        return target
 
     def action_distances(self, position: torch.Tensor) -> torch.Tensor:
         if self.mode == "none":

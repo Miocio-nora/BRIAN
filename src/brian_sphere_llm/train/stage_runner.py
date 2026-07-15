@@ -5,6 +5,7 @@ from typing import Any
 
 from brian_sphere_llm.model.baseline import BaselineConfig, BaselineLM
 from brian_sphere_llm.model.brian_model import BrianRouteConfig, BrianRouteCore
+from brian_sphere_llm.model.bdre_model import BDREConfig, BrianBDRERouteCore
 from brian_sphere_llm.utils.config import load_config
 
 
@@ -15,6 +16,8 @@ def build_model_from_config(model_config_path: str | Path) -> Any:
     if architecture == "decoder_only_llama_like":
         return BaselineLM(BaselineConfig.from_dict(config))
     if architecture == "brian_route_core":
+        if config.get("bdre_shared_kv") is True:
+            return BrianBDRERouteCore(BDREConfig.from_dict(config, config_dir=model_config_path.parent))
         return BrianRouteCore(BrianRouteConfig.from_dict(config, config_dir=model_config_path.parent))
     raise ValueError(f"Unknown architecture: {architecture}")
 
@@ -34,6 +37,7 @@ def train_mode_for_stage(stage: str) -> str:
         "stage5_output_action",
         "stage5_global_kv",
         "stage5_attention_global_kv",
+        "stage5_bdre_shared_kv",
     }:
         return "scheduled"
     if stage == "stage4_pure_free_sphere":

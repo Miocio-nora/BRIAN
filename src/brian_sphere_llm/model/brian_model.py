@@ -332,6 +332,7 @@ class BrianRouteCore(ModuleBase):
         router_probability: float | None = None,
         global_step: int = 0,
         collect_router_space: bool = False,
+        collect_bdre_visualization: bool = False,
         summarize_routing: bool = True,
     ) -> dict[str, Any]:
         loss_weights = _loss_weights_mapping(loss_weights)
