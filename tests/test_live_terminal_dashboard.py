@@ -18,7 +18,12 @@ from tools.route_sphere_tui.app import RouteSphereApp
 from tools.route_sphere_tui.canvas import BrailleCanvas
 from tools.route_sphere_tui.source import DemoSource, JsonlTail, ReplaySource
 from tools.route_sphere_tui.state import DashboardState
-from tools.route_sphere_tui.widgets import RouteSphereWidget, _learned_position_layout, _sphere_nodes
+from tools.route_sphere_tui.widgets import (
+    RouteSphereWidget,
+    _connection_pairs,
+    _learned_position_layout,
+    _sphere_nodes,
+)
 
 
 def test_terminal_dashboard_config_defaults_off_and_validates() -> None:
@@ -147,11 +152,19 @@ def test_dashboard_state_accumulates_metrics_and_route() -> None:
     assert list(state.eval_loss_history) == [(25, 2.3)]
 
 
-def test_sphere_layout_is_unit_norm_and_not_a_ring() -> None:
+def test_sphere_layout_is_a_symmetric_inscribed_cube() -> None:
     nodes = _sphere_nodes(8)
     assert nodes.shape == (8, 3)
     assert np.linalg.norm(nodes, axis=1) == pytest.approx(np.ones(8))
-    assert len({round(float(value), 3) for value in nodes[:, 2]}) == 2
+    assert np.abs(nodes) == pytest.approx(np.full((8, 3), 1.0 / np.sqrt(3.0)))
+    assert nodes.mean(axis=0) == pytest.approx(np.zeros(3))
+
+
+def test_cube_wireframe_has_three_edges_per_node() -> None:
+    pairs = _connection_pairs(_sphere_nodes(8))
+    degrees = [sum(index in pair for pair in pairs) for index in range(8)]
+    assert len(pairs) == 12
+    assert degrees == [3] * 8
 
 
 def test_learned_position_layout_is_finite_and_aligned() -> None:

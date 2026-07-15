@@ -22,8 +22,8 @@ from tools.route_sphere_tui.widgets import (
 class RouteSphereApp(App[None]):
     CSS = """
     Screen {
-        background: #030609;
-        color: #cad9e4;
+        background: #000000;
+        color: #e2e2e2;
     }
 
     #body {
@@ -32,12 +32,12 @@ class RouteSphereApp(App[None]):
     }
 
     #left {
-        width: 41%;
+        width: 39%;
         min-width: 38;
         height: 100%;
         padding: 1 2;
-        background: #070b10;
-        border-right: solid #1b2933;
+        background: #080808;
+        border-right: solid #282828;
     }
 
     #header {
@@ -54,14 +54,14 @@ class RouteSphereApp(App[None]):
         height: 5;
         margin-bottom: 1;
         padding: 0 1;
-        background: #0a1017;
+        background: #080808;
     }
 
     .chart {
         height: 1fr;
         min-height: 6;
         margin-top: 1;
-        background: #060a0f;
+        background: #080808;
     }
 
     #health {
@@ -72,7 +72,7 @@ class RouteSphereApp(App[None]):
     #sphere {
         width: 1fr;
         height: 100%;
-        background: #030609;
+        background: #000000;
     }
     """
 
@@ -95,8 +95,8 @@ class RouteSphereApp(App[None]):
                 yield TrainingHeader(id="header")
                 yield TrainingProgress(id="progress")
                 yield MetricGrid(id="metrics")
-                yield HistoryChart("loss", "TRAIN / VALIDATION LOSS", (73, 204, 246), id="loss", classes="chart")
-                yield HistoryChart("lr", "LEARNING RATE", (86, 211, 158), id="lr", classes="chart")
+                yield HistoryChart("loss", "TRAIN / VALIDATION LOSS", (238, 238, 238), id="loss", classes="chart")
+                yield HistoryChart("lr", "LEARNING RATE", (176, 176, 176), id="lr", classes="chart")
                 yield RouteHealth(id="health")
             yield RouteSphereWidget(id="sphere")
 

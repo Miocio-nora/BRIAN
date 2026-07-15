@@ -56,20 +56,22 @@ terminal_dashboard:
 
 ## Route Geometry
 
-The default screen layout uses a slowly rotating square-antiprism spherical
-code for eight blocks. This gives the terminal rendering stable depth and
-avoids PCA axis flips. The displayed block identities and transitions are
-real; the display layout is not presented as a lossless projection of learned
-64-dimensional positions.
+The default screen layout uses a slowly rotating cube inscribed in the route
+sphere for eight blocks. Its strict symmetry and orthographic projection keep
+node spacing stable while avoiding PCA axis flips. The displayed block
+identities and transitions are real; the display layout is not presented as a
+lossless projection of learned 64-dimensional positions.
 
 Pressing `p` switches to the latest learned-position PCA. Each refreshed PCA is
 orthogonally aligned to the previous frame with Procrustes alignment to prevent
 arbitrary sign and axis flips. The stable spherical layout remains the default.
 
-Every pair of block nodes is connected. Base edges and sphere guides use very
-low-intensity blue-gray Braille pixels. Completed route edges use a brighter
-blue trail. The currently active transition uses a growing white line and a
-white leading point.
+Each block node has three faint base connections, forming the 12 edges of the
+inscribed cube. The entire dashboard uses a black, gray, and white palette. A
+single low-intensity sphere contour and the sparse wireframe provide structure
+without competing with the route. A live route may still connect any two
+blocks: completed route edges brighten to gray, while the active transition
+uses a growing white line and a white leading point.
 
 ## Entry Points
 

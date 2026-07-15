@@ -2,9 +2,10 @@
 
 This directory contains a detached terminal UI for BRIAN training. The left
 pane renders optimizer progress, loss and learning-rate curves, throughput,
-memory, and route-health metrics. The right pane is deliberately text-free: it
-contains only a rotating route sphere, eight `*` block nodes, faint spatial
-connections, the current path trail, and a white in-flight transition.
+memory, and route-health metrics. The interface is monochrome throughout. The
+right pane is deliberately text-free: it contains only a rotating route
+sphere, eight `*` block nodes on an inscribed cube, a faint 12-edge wireframe,
+the current path trail, and a white in-flight transition.
 
 ## Demo
 

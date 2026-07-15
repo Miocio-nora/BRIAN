@@ -15,13 +15,12 @@ from textual.widgets import Static
 from tools.route_sphere_tui.canvas import BrailleCanvas, RGB
 from tools.route_sphere_tui.state import DashboardState, compact_number, format_duration
 
-INK = (202, 218, 230)
-MUTED = (91, 112, 128)
-DIM = (48, 66, 79)
-CYAN = (73, 204, 246)
-ICE = (116, 225, 255)
-GREEN = (86, 211, 158)
-AMBER = (242, 180, 76)
+INK = (226, 226, 226)
+MUTED = (124, 124, 124)
+DIM = (42, 42, 42)
+BRIGHT = (244, 244, 244)
+MID = (170, 170, 170)
+SOFT = (96, 96, 96)
 WHITE = (255, 255, 255)
 
 
@@ -35,11 +34,9 @@ class TrainingHeader(StateWidget):
     def render(self) -> Text:
         state = self.dashboard
         status = "STALE" if state.stale else state.status.upper()
-        status_color = AMBER if state.stale else GREEN if state.status == "running" else CYAN
+        status_color = MUTED if state.stale else BRIGHT if state.status == "running" else MID
         title = Text()
-        title.append("BRIAN", Style(color=_color(ICE), bold=True))
-        title.append("  /  ", Style(color=_color(DIM)))
-        title.append(state.run_name, Style(color=_color(INK), bold=True))
+        title.append(state.run_name, Style(color=_color(BRIGHT), bold=True))
         title.append("\n")
         title.append("● ", Style(color=_color(status_color), bold=True))
         title.append(status, Style(color=_color(status_color), bold=True))
@@ -57,9 +54,9 @@ class TrainingProgress(StateWidget):
         filled = min(bar_width, int(round(bar_width * state.progress)))
         output = Text()
         output.append(f"STEP  {state.step:,} / {state.max_steps:,}", Style(color=_color(INK), bold=True))
-        output.append(f"   {state.progress * 100:5.1f}%", Style(color=_color(CYAN), bold=True))
+        output.append(f"   {state.progress * 100:5.1f}%", Style(color=_color(BRIGHT), bold=True))
         output.append("\n")
-        output.append("━" * filled, Style(color=_color(CYAN), bold=True))
+        output.append("━" * filled, Style(color=_color(BRIGHT), bold=True))
         output.append("━" * (bar_width - filled), Style(color=_color(DIM)))
         output.append("\n")
         output.append("ETA  ", Style(color=_color(MUTED)))
@@ -87,13 +84,13 @@ class MetricGrid(StateWidget):
         throughput = state.metrics.get("tokens_per_second")
         memory = state.metrics.get("cuda_max_memory_allocated_mb")
         table.add_row(
-            _metric("LOSS", compact_number(loss, decimals=4), CYAN),
-            _metric("VAL", compact_number(validation, decimals=4), AMBER),
-            _metric("LR", compact_number(lr), GREEN),
+            _metric("LOSS", compact_number(loss, decimals=4), BRIGHT),
+            _metric("VAL", compact_number(validation, decimals=4), MID),
+            _metric("LR", compact_number(lr), INK),
         )
         table.add_row(
-            _metric("TOK / S", compact_number(throughput, decimals=1), ICE),
-            _metric("GPU PEAK", _memory(memory), ICE),
+            _metric("TOK / S", compact_number(throughput, decimals=1), INK),
+            _metric("GPU PEAK", _memory(memory), INK),
             _metric("WORLD", str(state.world_size), MUTED),
         )
         return table
@@ -144,14 +141,14 @@ class RouteHealth(StateWidget):
         if memory is not None and state.device_memory_mb:
             memory_ratio = memory / state.device_memory_mb
         output = Text()
-        output.append_text(_gauge("BLOCK BALANCE", load, width, CYAN))
+        output.append_text(_gauge("BLOCK BALANCE", load, width, BRIGHT))
         output.append("\n")
-        output.append_text(_gauge("GPU MEMORY", memory_ratio, width, GREEN))
+        output.append_text(_gauge("GPU MEMORY", memory_ratio, width, MID))
         output.append("\n")
         output.append("ROUTE ENTROPY  ", Style(color=_color(MUTED)))
-        output.append(compact_number(route_entropy, decimals=3), Style(color=_color(ICE), bold=True))
+        output.append(compact_number(route_entropy, decimals=3), Style(color=_color(INK), bold=True))
         output.append("      DEPTH  ", Style(color=_color(MUTED)))
-        output.append(compact_number(depth, decimals=2), Style(color=_color(AMBER), bold=True))
+        output.append(compact_number(depth, decimals=2), Style(color=_color(MID), bold=True))
         return output
 
 
@@ -184,9 +181,9 @@ class RouteSphereWidget(Widget):
             self._route_started = time.monotonic()
 
         phase = time.monotonic() - self._phase_origin
-        yaw = 0.56 + (phase * 0.075 if self.rotation_enabled else 0.0)
-        pitch = -0.24 + 0.055 * math.sin(phase * 0.17)
-        roll = 0.04 * math.sin(phase * 0.11)
+        yaw = 0.38 + (phase * 0.045 if self.rotation_enabled else 0.0)
+        pitch = -0.22 + 0.025 * math.sin(phase * 0.14)
+        roll = 0.018 * math.sin(phase * 0.09)
         rotation = _rotation_matrix(yaw, pitch, roll)
         raw_nodes = self._layout_nodes(state)
         rotated = raw_nodes @ rotation.T
@@ -219,30 +216,27 @@ class RouteSphereWidget(Widget):
         return self._learned_nodes if self._learned_nodes is not None else _sphere_nodes(state.num_blocks)
 
     def _draw_shell(self, canvas: BrailleCanvas, rotation: np.ndarray, width: int, height: int) -> None:
-        samples = np.linspace(0.0, 2.0 * math.pi, 96, endpoint=True)
-        circles = [
-            np.stack([np.cos(samples), np.sin(samples), np.zeros_like(samples)], axis=1),
-            np.stack([np.cos(samples), np.zeros_like(samples), np.sin(samples)], axis=1),
-            np.stack([np.zeros_like(samples), np.cos(samples), np.sin(samples)], axis=1),
-        ]
-        for index, circle in enumerate(circles):
-            rotated = circle @ rotation.T
-            points = _project(rotated, width, height)
-            for point_index in range(len(points) - 1):
-                depth = float((rotated[point_index, 2] + rotated[point_index + 1, 2]) * 0.5)
-                intensity = 0.055 + 0.035 * (depth + 1.0) * 0.5
-                color = (38 + index * 3, 55 + index * 4, 67 + index * 5)
-                canvas.line(*points[point_index], *points[point_index + 1], color=color, intensity=intensity)
+        del rotation
+        samples = np.linspace(0.0, 2.0 * math.pi, 128, endpoint=True)
+        radius_x, radius_y = _projection_radii(width, height)
+        points = np.stack(
+            [
+                width * 0.5 + np.cos(samples) * radius_x,
+                height * 0.5 - np.sin(samples) * radius_y,
+            ],
+            axis=1,
+        )
+        canvas.polyline(points, color=(48, 48, 48), intensity=0.13)
 
     def _draw_connections(self, canvas: BrailleCanvas, points: np.ndarray, rotated: np.ndarray) -> None:
         ordered = sorted(
-            combinations(range(len(points)), 2),
+            _connection_pairs(rotated),
             key=lambda pair: float(rotated[pair[0], 2] + rotated[pair[1], 2]),
         )
         for first, second in ordered:
             depth = float((rotated[first, 2] + rotated[second, 2]) * 0.5)
-            intensity = 0.075 + 0.055 * (depth + 1.0) * 0.5
-            canvas.line(*points[first], *points[second], color=(52, 75, 91), intensity=intensity)
+            intensity = 0.052 + 0.05 * (depth + 1.0) * 0.5
+            canvas.line(*points[first], *points[second], color=(66, 66, 66), intensity=intensity)
 
     def _draw_route(self, canvas: BrailleCanvas, points: np.ndarray) -> set[int]:
         route = [value for value in self._route if 0 <= value < len(points)]
@@ -265,7 +259,7 @@ class RouteSphereWidget(Widget):
             first, second = route[index], route[index + 1]
             if first == second:
                 continue
-            canvas.line(*points[first], *points[second], color=(66, 169, 220), intensity=0.62)
+            canvas.line(*points[first], *points[second], color=(174, 174, 174), intensity=0.58)
 
         active_nodes = set(route[: completed + 1])
         if completed < segment_count:
@@ -278,8 +272,8 @@ class RouteSphereWidget(Widget):
                 canvas.line(
                     *points[first],
                     *points[second],
-                    color=(82, 186, 232),
-                    intensity=0.58,
+                    color=(190, 190, 190),
+                    intensity=0.55,
                     end=active_fraction,
                 )
                 tail_start = max(0.0, active_fraction - 0.24)
@@ -298,7 +292,7 @@ class RouteSphereWidget(Widget):
             active_nodes.update(route)
             for first, second in zip(route[:-1], route[1:]):
                 if first != second:
-                    canvas.line(*points[first], *points[second], color=(66, 169, 220), intensity=0.62)
+                    canvas.line(*points[first], *points[second], color=(174, 174, 174), intensity=0.58)
         return active_nodes
 
     def _draw_nodes(
@@ -311,18 +305,15 @@ class RouteSphereWidget(Widget):
         for index in np.argsort(rotated[:, 2]):
             depth = float((rotated[index, 2] + 1.0) * 0.5)
             active = int(index) in active_nodes
-            glow_color = ICE if active else (87, 117, 137)
+            glow_color = BRIGHT if active else SOFT
             canvas.point(
                 *points[index],
                 color=glow_color,
                 intensity=(0.28 + 0.2 * depth) if active else (0.1 + 0.08 * depth),
                 radius=1.5 if active else 0.8,
             )
-            color = WHITE if active else (
-                int(128 + 45 * depth),
-                int(151 + 48 * depth),
-                int(168 + 55 * depth),
-            )
+            level = int(132 + 62 * depth)
+            color = WHITE if active else (level, level, level)
             canvas.glyph(*points[index], "*", color=color, bold=active, priority=2.0 + depth)
 
 
@@ -356,21 +347,19 @@ def _draw_history(
     if secondary:
         secondary_points = [point(item) for item in secondary]
         for x, y in secondary_points:
-            canvas.point(x, y, color=AMBER, intensity=1.0, radius=0.4)
+            canvas.point(x, y, color=MID, intensity=1.0, radius=0.4)
 
 
 def _sphere_nodes(count: int) -> np.ndarray:
     count = max(1, int(count))
     if count == 8:
-        height = 0.48
-        radius = math.sqrt(1.0 - height * height)
-        rows: list[tuple[float, float, float]] = []
-        for index in range(4):
-            angle = 2.0 * math.pi * index / 4.0 + math.pi / 8.0
-            rows.append((radius * math.cos(angle), radius * math.sin(angle), height))
-        for index in range(4):
-            angle = 2.0 * math.pi * index / 4.0 + 3.0 * math.pi / 8.0
-            rows.append((radius * math.cos(angle), radius * math.sin(angle), -height))
+        scale = 1.0 / math.sqrt(3.0)
+        rows = [
+            (x * scale, y * scale, z * scale)
+            for z in (-1.0, 1.0)
+            for y in (-1.0, 1.0)
+            for x in (-1.0, 1.0)
+        ]
         return np.asarray(rows, dtype=np.float64)
     golden_angle = math.pi * (3.0 - math.sqrt(5.0))
     rows = []
@@ -380,6 +369,21 @@ def _sphere_nodes(count: int) -> np.ndarray:
         angle = golden_angle * index
         rows.append((radius * math.cos(angle), y, radius * math.sin(angle)))
     return np.asarray(rows, dtype=np.float64)
+
+
+def _connection_pairs(nodes: np.ndarray) -> list[tuple[int, int]]:
+    count = len(nodes)
+    if count == 8:
+        return [pair for pair in combinations(range(8), 2) if pair[0] ^ pair[1] in (1, 2, 4)]
+    if count < 2:
+        return []
+    neighbors = min(3, count - 1)
+    distances = np.linalg.norm(nodes[:, None, :] - nodes[None, :, :], axis=2)
+    pairs: set[tuple[int, int]] = set()
+    for index in range(count):
+        nearest = np.argsort(distances[index])[1 : neighbors + 1]
+        pairs.update((min(index, int(other)), max(index, int(other))) for other in nearest)
+    return sorted(pairs)
 
 
 def _learned_position_layout(positions: list[list[float]], *, reference: np.ndarray) -> np.ndarray:
@@ -413,13 +417,14 @@ def _rotation_matrix(yaw: float, pitch: float, roll: float) -> np.ndarray:
 
 
 def _project(points: np.ndarray, width: int, height: int) -> np.ndarray:
-    camera = 3.6
-    perspective = camera / np.maximum(1.8, camera - points[:, 2])
-    radius_x = max(2.0, width * 0.34)
-    radius_y = max(2.0, height * 0.38)
-    x = width * 0.5 + points[:, 0] * perspective * radius_x
-    y = height * 0.5 - points[:, 1] * perspective * radius_y
+    radius_x, radius_y = _projection_radii(width, height)
+    x = width * 0.5 + points[:, 0] * radius_x
+    y = height * 0.5 - points[:, 1] * radius_y
     return np.stack([x, y], axis=1)
+
+
+def _projection_radii(width: int, height: int) -> tuple[float, float]:
+    return max(2.0, width * 0.35), max(2.0, height * 0.41)
 
 
 def _gauge(label: str, value: float | None, width: int, color: RGB) -> Text:
