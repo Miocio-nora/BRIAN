@@ -70,11 +70,11 @@ The eight block nodes remain the vertices of an inscribed cube. Six unmarked
 axis support vertices turn that structure into a 24-face triangular spherical
 mesh; support vertices are display geometry, not model blocks. The dashboard
 uses a neutral graphite background and white depth shading throughout. The
-compact contour and mesh use connected light box-drawing strokes instead of a
-dotted or thick subpixel raster. Blocks use a larger heavy-asterisk `✱` node
-glyph. A live route may still connect any two blocks: completed route edges
-brighten toward white, while the active transition uses a growing white line
-and a white leading point.
+compact sphere omits a separate outer contour; its triangular mesh uses
+low-contrast 2x4 Braille subpixels for finer geometry. Blocks use a larger
+heavy-asterisk `✱` node glyph. A live route may still connect any two blocks:
+completed route edges brighten toward white, while the active transition uses
+a growing connected white line and a white leading point.
 
 ## Entry Points
 

@@ -7,8 +7,9 @@ gray, and white palette. The right pane is deliberately text-free: it contains
 only a compact rotating route sphere, eight `✱` block nodes on an inscribed
 cube, a triangulated spherical wireframe, the current path trail, and a white
 in-flight transition. Six unmarked support vertices round out the mesh without
-being presented as model blocks. Sphere lines use connected light box-drawing
-strokes instead of a dotted or thick subpixel raster.
+being presented as model blocks. The sphere has no separate outer contour. Its
+static triangular mesh uses low-contrast 2x4 Braille subpixels, while the live
+route remains a brighter connected stroke above it.
 
 ## Demo
 

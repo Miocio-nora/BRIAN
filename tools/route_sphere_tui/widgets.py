@@ -189,7 +189,6 @@ class RouteSphereWidget(Widget):
         rotated = raw_nodes @ rotation.T
         projected = _project(rotated, width, height)
 
-        self._draw_shell(canvas, rotation, width, height)
         self._draw_connections(canvas, raw_nodes, rotation, width, height)
         active_nodes = self._draw_route(canvas, projected)
         self._draw_nodes(canvas, projected, rotated, active_nodes)
@@ -214,19 +213,6 @@ class RouteSphereWidget(Widget):
                 reference=reference,
             )
         return self._learned_nodes if self._learned_nodes is not None else _sphere_nodes(state.num_blocks)
-
-    def _draw_shell(self, canvas: BrailleCanvas, rotation: np.ndarray, width: int, height: int) -> None:
-        del rotation
-        samples = np.linspace(0.0, 2.0 * math.pi, 128, endpoint=True)
-        radius_x, radius_y = _projection_radii(width, height)
-        points = np.stack(
-            [
-                width * 0.5 + np.cos(samples) * radius_x,
-                height * 0.5 - np.sin(samples) * radius_y,
-            ],
-            axis=1,
-        )
-        canvas.thin_polyline(points, color=(126, 126, 126), priority=0.1, closed=True)
 
     def _draw_connections(
         self,
@@ -260,11 +246,12 @@ class RouteSphereWidget(Widget):
                 level = int(38 + 42 * (depth + 0.15) / 0.15)
             else:
                 level = int(96 + 62 * min(1.0, depth))
-            canvas.thin_line(
+            intensity = 0.34 if depth < 0.0 else 0.48
+            canvas.line(
                 *points[first],
                 *points[second],
                 color=(level, level, level),
-                priority=0.2,
+                intensity=intensity,
             )
 
     def _draw_route(self, canvas: BrailleCanvas, points: np.ndarray) -> set[int]:
