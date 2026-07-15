@@ -273,11 +273,11 @@ class RouteSphereWidget(Widget):
             first, second = route[index], route[index + 1]
             if first == second:
                 continue
-            canvas.thin_line(
+            canvas.line(
                 *points[first],
                 *points[second],
-                color=(174, 174, 174),
-                priority=1.0,
+                color=(210, 210, 210),
+                intensity=0.74,
             )
 
         active_nodes = set(route[: completed + 1])
@@ -287,20 +287,19 @@ class RouteSphereWidget(Widget):
             if first == second:
                 active_nodes.add(first)
             else:
-                canvas.thin_line(
+                canvas.line(
                     *points[first],
                     *points[second],
-                    color=(190, 190, 190),
-                    priority=1.5,
+                    color=(232, 232, 232),
+                    intensity=0.86,
                     end=active_fraction,
                 )
                 tail_start = max(0.0, active_fraction - 0.24)
-                canvas.thin_line(
+                canvas.line(
                     *points[first],
                     *points[second],
                     color=WHITE,
-                    priority=2.0,
-                    bold=True,
+                    intensity=1.0,
                     start=tail_start,
                     end=active_fraction,
                 )
@@ -311,11 +310,11 @@ class RouteSphereWidget(Widget):
             active_nodes.update(route)
             for first, second in zip(route[:-1], route[1:]):
                 if first != second:
-                    canvas.thin_line(
+                    canvas.line(
                         *points[first],
                         *points[second],
-                        color=(174, 174, 174),
-                        priority=1.0,
+                        color=(210, 210, 210),
+                        intensity=0.74,
                     )
         return active_nodes
 

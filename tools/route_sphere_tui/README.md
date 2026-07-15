@@ -9,7 +9,9 @@ cube, a triangulated spherical wireframe, the current path trail, and a white
 in-flight transition. Six unmarked support vertices round out the mesh without
 being presented as model blocks. The sphere has no separate outer contour. Its
 static triangular mesh uses low-contrast 2x4 Braille subpixels, while the live
-route remains a brighter connected stroke above it.
+route uses the same dot raster at higher brightness. Completed route segments
+remain visibly brighter than the static mesh, and the active leading segment
+approaches white.
 
 ## Demo
 

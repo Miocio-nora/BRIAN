@@ -225,10 +225,10 @@ def test_textual_dashboard_mounts_and_sphere_is_text_free() -> None:
             assert app.dashboard.route_revision > 0
             assert all(
                 char in {" ", "\n", NODE_GLYPH, "●"}
-                or 0x2500 <= ord(char) <= 0x257F
                 or 0x2800 <= ord(char) <= 0x28FF
                 for char in text
             )
+            assert not any(0x2500 <= ord(char) <= 0x257F for char in text)
             assert not any(0x2580 <= ord(char) <= 0x259F for char in text)
             assert any(0x2800 <= ord(char) <= 0x28FF for char in text)
 
