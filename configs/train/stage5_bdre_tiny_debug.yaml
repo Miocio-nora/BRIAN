@@ -43,6 +43,12 @@ loss_weights:
   coverage_floor: 0.05
   transition_diversity: 0.0
   exit_boundary: 0.01
+terminal_dashboard:
+  enabled: true
+  interval: 1
+  position_interval: 1
+  sample_index: 0
+  output_dir: terminal_dashboard
 route_path_visualization:
   enabled: false
 router_space_visualization:

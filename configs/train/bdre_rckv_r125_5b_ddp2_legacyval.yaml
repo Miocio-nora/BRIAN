@@ -41,6 +41,12 @@ bdre_cache_visualization:
   output_dir: bdre_cache_visualizations
   wandb_key: bdre_cache
   upload_to_wandb: true
+terminal_dashboard:
+  enabled: true
+  interval: 1
+  position_interval: 100
+  sample_index: 0
+  output_dir: terminal_dashboard
 checkpoint_benchmarks:
   enabled: true
   interval: 15000

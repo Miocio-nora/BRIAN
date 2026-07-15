@@ -24,6 +24,13 @@ from brian_sphere_llm.train.checkpoint import (
     save_checkpoint,
     save_rank_state,
 )
+from brian_sphere_llm.train.live_telemetry import (
+    LiveTelemetryWriter,
+    TerminalDashboardConfig,
+    cuda_device_metadata,
+    extract_route_trace,
+    internal_position_snapshot,
+)
 from brian_sphere_llm.train.stage_runner import build_model_from_config, train_mode_for_stage
 from brian_sphere_llm.routing.schedule import scheduled_value
 from brian_sphere_llm.utils.config import load_config, save_yaml
@@ -89,6 +96,7 @@ def train_from_config(config_path: str | Path) -> Path:
     if min_learning_rate > learning_rate:
         raise ValueError("min_learning_rate must be <= learning_rate.")
     weight_decay = _float_config(config, "weight_decay", default=0.0, minimum=0.0)
+    terminal_dashboard_config = TerminalDashboardConfig.from_train_config(config)
     stage_mode = train_mode_for_stage(config["stage"])
     ddp_find_unused_parameters = _bool_config(
         config,
@@ -221,6 +229,21 @@ def train_from_config(config_path: str | Path) -> Path:
 
     train_log = JsonlLogger(run_dir / "train_log.jsonl") if is_main_process else None
     eval_log = JsonlLogger(run_dir / "eval_log.jsonl") if is_main_process else None
+    terminal_dashboard_writer: LiveTelemetryWriter | None = None
+    if is_main_process and terminal_dashboard_config.enabled:
+        device_name, device_memory_mb = cuda_device_metadata(device)
+        terminal_dashboard_writer = LiveTelemetryWriter(
+            run_dir,
+            terminal_dashboard_config,
+            run_name=run_dir.name,
+            max_steps=max_steps,
+            start_step=start_step,
+            num_blocks=int(model_config.get("route_pool_blocks", 0)),
+            model_name=str(model_config["model_name"]),
+            world_size=dist_utils.world_size(),
+            device_name=device_name,
+            device_memory_mb=device_memory_mb,
+        )
     write_routing_report = _bool_config(config, "write_routing_report_on_checkpoint", default=True)
     route_path_visualization = _route_path_visualization_config(config, default_interval=save_interval)
     router_space_visualization = _router_space_visualization_config(config, default_interval=save_interval)
@@ -360,6 +383,27 @@ def train_from_config(config_path: str | Path) -> Path:
         if train_log is not None:
             train_log.write(row)
         _wandb_log(wandb_run, "train", row)
+        if terminal_dashboard_writer is not None and terminal_dashboard_config.train_due(step, max_steps):
+            unwrapped_model = dist_utils.unwrap_model(model)
+            num_internal_blocks = int(getattr(unwrapped_model.config, "route_pool_blocks", 0))
+            route_trace = extract_route_trace(
+                outputs,
+                num_internal_blocks=num_internal_blocks,
+                sample_index=terminal_dashboard_config.sample_index,
+            )
+            positions = (
+                internal_position_snapshot(unwrapped_model, num_internal_blocks=num_internal_blocks)
+                if terminal_dashboard_config.positions_due(step, max_steps)
+                else None
+            )
+            terminal_dashboard_writer.write_train(
+                row,
+                step=step,
+                max_steps=max_steps,
+                route=route_trace,
+                token_index=max(0, int(batch.shape[1]) - 1),
+                positions=positions,
+            )
         if is_main_process:
             _maybe_log_route_path_visualization(
                 wandb_run,
@@ -394,6 +438,8 @@ def train_from_config(config_path: str | Path) -> Path:
             if eval_log is not None:
                 eval_log.write(eval_row)
             _wandb_log(wandb_run, "eval", eval_row)
+            if terminal_dashboard_writer is not None:
+                terminal_dashboard_writer.write_eval(eval_row, step=step)
             eval_loss = float(eval_row["validation_loss"])
             if best_eval_loss is None or eval_loss < best_eval_loss:
                 best_eval_loss = eval_loss
@@ -486,6 +532,8 @@ def train_from_config(config_path: str | Path) -> Path:
                 dist_utils.barrier()
     if is_main_process and not (run_dir / "routing_report.json").exists():
         make_routing_report(run_dir)
+    if terminal_dashboard_writer is not None:
+        terminal_dashboard_writer.write_status("complete", step=max_steps)
     _finish_wandb(wandb_run, final_step=max_steps, best_eval_loss=best_eval_loss)
     dist_utils.barrier()
     dist_utils.destroy_distributed()

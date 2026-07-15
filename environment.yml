@@ -19,3 +19,4 @@ dependencies:
       - datasets>=2.20
       - wandb>=0.17
       - plotly>=5.22
+      - textual>=8.2,<9

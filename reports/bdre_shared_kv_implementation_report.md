@@ -79,8 +79,11 @@ Implemented execution and state contracts:
 - all required scalar diagnostics in train/eval logs;
 - HTML/W&B visualization for position geometry, writer route, and per-reader
   Key/Value compile weights.
+- detached terminal telemetry for a real sampled token route, consumed by the
+  text-free animated sphere in `tools/route_sphere_tui/`.
 
-Validation completed on 2026-07-15:
+Core BDRE validation completed on 2026-07-15; terminal dashboard validation was
+added on 2026-07-16:
 
 | Check | Result |
 | --- | --- |
@@ -93,6 +96,7 @@ Validation completed on 2026-07-15:
 | Tiny DDP2 train/eval/checkpoint smoke | passed on B200 GPUs 4-5 |
 | Legacy position/loss/routing/global/sparse regressions | passed |
 | R125 BF16 exact forward/backward smoke | passed |
+| Route Sphere single-GPU and DDP2 telemetry smoke | passed |
 
 The R125 smoke used batch 1, sequence length 4, and fixed sequential routing.
 It produced eight valid writer steps per token, finite loss and gradients, about
@@ -101,6 +105,8 @@ correctness measurement only and must not be extrapolated to 5B training.
 
 Approximate/wavefront prefill is intentionally not implemented. The exact
 token-by-token implementation remains the oracle required by Section 16.
+The terminal visualization architecture and validation are recorded separately
+in `reports/route_sphere_terminal_dashboard.md`.
 
 ## 2. Model Scope
 

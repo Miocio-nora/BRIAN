@@ -228,6 +228,33 @@ Key/Value reader-weight heatmaps. Design, defaults, validation results, and
 remaining prefill work are recorded in
 [reports/bdre_shared_kv_implementation_report.md](./reports/bdre_shared_kv_implementation_report.md).
 
+## Live Route Sphere
+
+BDRE training can emit a detached terminal telemetry stream. The accompanying
+Textual application shows progress and live curves on the left and a text-free
+animated route sphere on the right. The sphere contains one `*` per free block,
+faint all-to-all edges, a brighter route trail, and a white in-flight
+transition. IN/OUT are not rendered.
+
+Run the self-contained visual demo:
+
+```bash
+PYTHONPATH=src:. python tools/route_sphere_tui/run.py --demo
+```
+
+Attach to the prepared formal BDRE run from a second terminal:
+
+```bash
+PYTHONPATH=src:. python tools/route_sphere_tui/run.py \
+  --run-dir runs/bdre_rckv_r125_5b_ddp2_legacyval
+```
+
+The UI is process-isolated. Rank 0 writes one compact route event only after a
+configured optimizer step has completed; the terminal process performs the
+24-FPS animation locally. Implementation, controls, telemetry overhead, and
+validation are documented in
+[reports/route_sphere_terminal_dashboard.md](./reports/route_sphere_terminal_dashboard.md).
+
 See [BRIAN-Sphere-LLM_PROJECT_PLAN.md](./BRIAN-Sphere-LLM_PROJECT_PLAN.md) for the full technical plan.
 See [CODEX_GUIDANCE.md](./CODEX_GUIDANCE.md) for implementation guidance.
 
