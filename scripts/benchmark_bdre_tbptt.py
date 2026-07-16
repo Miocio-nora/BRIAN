@@ -6,6 +6,7 @@ import json
 import statistics
 import sys
 import time
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -27,6 +28,7 @@ def main() -> None:
     parser.add_argument("--chunk-size", type=int, default=None)
     parser.add_argument("--detach-interval-chunks", type=int, default=None)
     parser.add_argument("--global-step", type=int, default=1)
+    parser.add_argument("--flex-kernel-variant", default=None)
     parser.add_argument("--seed", type=int, default=123)
     parser.add_argument("--warmup-steps", type=int, default=0)
     parser.add_argument("--repeats", type=int, default=1)
@@ -65,6 +67,12 @@ def main() -> None:
     torch.set_float32_matmul_precision(str(config.get("float32_matmul_precision", "high")))
     device = torch.device("cuda")
     model = build_model_from_config(model_config_path).to(device).train()
+    if args.flex_kernel_variant is not None:
+        model.bdre_config = replace(
+            model.bdre_config,
+            flex_kernel_variant=args.flex_kernel_variant,
+        )
+        model.bdre_config.validate()
     vocab_size = int(model.config.base.vocab_size)
     batch = torch.randint(0, vocab_size, (batch_size, sequence_length), device=device)
 
@@ -109,6 +117,10 @@ def main() -> None:
                     "peak_allocated_mb": torch.cuda.max_memory_allocated(device) / (1024.0 * 1024.0),
                     "peak_reserved_mb": torch.cuda.max_memory_reserved(device) / (1024.0 * 1024.0),
                     "loss": float(result["loss"].cpu()),
+                    "loss_components": {
+                        name: float(value.cpu())
+                        for name, value in result.get("loss_components", {}).items()
+                    },
                 }
             )
         return result
@@ -141,6 +153,7 @@ def main() -> None:
             chunk_size * detach_interval_chunks,
         ),
         "global_step": args.global_step,
+        "flex_kernel_variant": model.bdre_config.flex_kernel_variant,
         "warmup_steps": args.warmup_steps,
         "repeats": args.repeats,
         "elapsed_seconds": median_elapsed,

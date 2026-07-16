@@ -276,6 +276,18 @@ CPBC-DP cache/attention values are chunk-boundary invariant. C2048 still changes
 the U1 gradient horizon from 512 to 2,048 tokens, and stochastic routing consumes
 RNG in different tensor groupings, so it is not an identical training trajectory.
 
+The current C2048 path replaces the dense per-score causal callback with an
+exact FlexAttention `BlockMask` and uses a calibrated 32-token backward tile.
+It preserves the same absolute-position causal rule while increasing the
+single-B200 BS16/T2048 rate from 23,246 to 48,956 tok/s at 66,016 MiB peak
+allocated. A two-B200 smoke with global BS32 reached 90.8k and 97.4k global
+tok/s on its two compiled steps, cutting the historical gap to the same-shape
+baseline from 13.6x to about 6.6x. Single-process and DDP2 legacy evaluation
+produced the identical validation loss and routing statistics. Ragged
+multi-reader attention and GPU-resident dispatch are also available as
+experimental backends; GPU dispatch improved the ragged path to 28,050 tok/s,
+but its all-reader K/V expansion costs about 83.6 GiB and is not recommended.
+
 Key BDRE entrypoints:
 
 ```text
@@ -297,6 +309,7 @@ configs/model/brian_r125_bdre_cpbc_dp_c512_shared_explicit.yaml
 configs/model/brian_r125_bdre_cpbc_dp_c512_grouped_mm.yaml
 configs/model/brian_r125_bdre_cpbc_dp_c512_grouped_mm_flex.yaml
 configs/model/brian_r125_bdre_cpbc_dp_c2048_grouped_mm_flex.yaml
+configs/model/brian_r125_bdre_cpbc_dp_c2048_grouped_mm_flex_blockmask.yaml
 configs/model/brian_r125_bdre_cpbc_fb_shared_explicit.yaml
 configs/model/brian_r125_bdre_cpbc_fb_c128_grouped_mm_flex.yaml
 configs/train/baseline_r125_5b_balanced_ddp2_legacyval.yaml
@@ -304,6 +317,7 @@ configs/train/cpbc_r125_5b_dp_u1_c128_ddp2_legacyval.yaml
 configs/train/cpbc_r125_5b_dp_u1_c512_ddp2_legacyval.yaml
 configs/train/cpbc_r125_5b_dp_u1_c512_grouped_mm_ddp2_legacyval.yaml
 configs/train/cpbc_r125_5b_dp_u1_c2048_grouped_mm_flex_ddp2_legacyval.yaml
+configs/train/cpbc_r125_5b_dp_u1_c2048_grouped_mm_flex_blockmask_ddp2_legacyval.yaml
 configs/train/cpbc_r125_5b_fb_u1_c128_grouped_mm_flex_ddp2_legacyval.yaml
 configs/train/smoke_cpbc_r125_5b_dp_u1_c512_grouped_mm_ddp2_legacyval.yaml
 configs/train/cpbc_r125_5b_dp_u1_c512_ddp4_legacyval.yaml
@@ -337,6 +351,9 @@ and final B200/DDP2 acceptance are recorded in
 The exact fused reader, vectorized FB compiler, large-chunk DP measurements,
 negative reader-grouping results, and current DDP2 acceptance are recorded in
 [reports/rc_kv_exact_fused_reader_report.md](./reports/rc_kv_exact_fused_reader_report.md).
+The exact BlockMask implementation, backward-kernel calibration, ragged/GPU
+dispatch experiments, and updated C2048/DDP2 acceptance are recorded in
+[reports/rc_kv_c2048_blockmask_dispatch_report.md](./reports/rc_kv_c2048_blockmask_dispatch_report.md).
 
 ## Live Route Sphere
 

@@ -6,6 +6,11 @@
 
 **Branch:** `rc-kv-fused-exact`
 
+> **Superseded performance note:** the model and semantic acceptance in this
+> report remain valid, but the C2048 throughput numbers have been superseded by
+> the exact BlockMask work in
+> [rc_kv_c2048_blockmask_dispatch_report.md](./rc_kv_c2048_blockmask_dispatch_report.md).
+
 ## 1. Scope and Safety
 
 This work accelerates the existing RC-KV/CPBC implementation without creating

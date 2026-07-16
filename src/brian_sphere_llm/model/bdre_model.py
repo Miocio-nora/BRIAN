@@ -35,17 +35,86 @@ try:
     import torch
     import torch.nn as nn
     import torch.nn.functional as F
-    from torch.nn.attention.flex_attention import flex_attention
+    from torch.nn.attention.flex_attention import create_block_mask, flex_attention
 except ModuleNotFoundError:  # pragma: no cover
     torch = None
     nn = None
     F = None
+    create_block_mask = None
     flex_attention = None
 
 ModuleBase = nn.Module if nn is not None else object
 
 
 if torch is not None and flex_attention is not None:
+
+    def _create_bdre_causal_block_mask(
+        query_positions: torch.Tensor,
+        key_length: int,
+    ) -> Any:
+        """Build an exact block-sparse mask for packed, absolute-position queries."""
+
+        def causal_mask_mod(
+            batch_index: torch.Tensor,
+            head_index: torch.Tensor,
+            query_index: torch.Tensor,
+            key_index: torch.Tensor,
+        ) -> torch.Tensor:
+            del head_index
+            return key_index <= query_positions[batch_index, query_index]
+
+        return create_block_mask(
+            causal_mask_mod,
+            B=query_positions.size(0),
+            H=None,
+            Q_LEN=query_positions.size(1),
+            KV_LEN=key_length,
+            device=query_positions.device,
+            BLOCK_SIZE=(128, 128),
+            _compile=True,
+        )
+
+    def _create_bdre_ragged_block_mask(
+        query_actions: torch.Tensor,
+        query_batches: torch.Tensor,
+        query_positions: torch.Tensor,
+        *,
+        readers: int,
+        batch: int,
+        key_length: int,
+    ) -> Any:
+        """Build the exact reader, batch, and causal mask for flat ragged queries."""
+
+        reader_stride = batch * key_length
+
+        def ragged_mask_mod(
+            batch_index: torch.Tensor,
+            head_index: torch.Tensor,
+            query_index: torch.Tensor,
+            key_index: torch.Tensor,
+        ) -> torch.Tensor:
+            del batch_index, head_index
+            key_action = torch.div(key_index, reader_stride, rounding_mode="floor")
+            reader_offset = key_index % reader_stride
+            key_batch = torch.div(reader_offset, key_length, rounding_mode="floor")
+            key_position = reader_offset % key_length
+            return (
+                (key_action < readers)
+                & (key_action == query_actions[query_index])
+                & (key_batch == query_batches[query_index])
+                & (key_position <= query_positions[query_index])
+            )
+
+        return create_block_mask(
+            ragged_mask_mod,
+            B=1,
+            H=None,
+            Q_LEN=query_positions.numel(),
+            KV_LEN=readers * reader_stride,
+            device=query_positions.device,
+            BLOCK_SIZE=(128, 128),
+            _compile=True,
+        )
 
     @torch.compile(fullgraph=True, dynamic=True)
     def _compiled_bdre_flex_reader(
@@ -149,9 +218,78 @@ if torch is not None and flex_attention is not None:
             head_dim,
         )
 
+    @torch.compile(fullgraph=True, dynamic=True)
+    def _compiled_bdre_blockmask_flex_reader(
+        query: torch.Tensor,
+        key_codes: torch.Tensor,
+        value_codes: torch.Tensor,
+        key_read: torch.Tensor,
+        value_read: torch.Tensor,
+        key_cosine: torch.Tensor,
+        key_sine: torch.Tensor,
+        block_mask: Any,
+        kernel_variant: str,
+    ) -> torch.Tensor:
+        batch, key_length, _ = key_codes.shape
+        heads, _, head_dim = key_read.shape
+        key_read_weight = key_read.permute(0, 2, 1).reshape(
+            heads * head_dim,
+            key_read.size(1),
+        )
+        decoded_key = F.linear(key_codes, key_read_weight).view(
+            batch,
+            key_length,
+            heads,
+            head_dim,
+        ).permute(0, 2, 1, 3)
+        decoded_key = apply_rotary(decoded_key, key_cosine, key_sine)
+        expanded_values = value_codes.unsqueeze(1).expand(-1, heads, -1, -1)
+        kernel_options: dict[str, Any] | None = None
+        if kernel_variant == "bwd32":
+            kernel_options = {
+                "bwd_BLOCK_M1": 32,
+                "bwd_BLOCK_N1": 32,
+                "bwd_BLOCK_M2": 32,
+                "bwd_BLOCK_N2": 32,
+            }
+        latent_value = flex_attention(
+            query,
+            decoded_key,
+            expanded_values,
+            block_mask=block_mask,
+            scale=query.shape[-1] ** -0.5,
+            kernel_options=kernel_options,
+        )
+        attended = torch.einsum("bhqr,hrd->bhqd", latent_value, value_read)
+        return attended.transpose(1, 2).reshape(
+            query.size(0) * query.size(2),
+            heads,
+            head_dim,
+        )
+
+    @torch.compile(fullgraph=True, dynamic=True)
+    def _compiled_bdre_ragged_flex_reader(
+        query: torch.Tensor,
+        decoded_key: torch.Tensor,
+        expanded_values: torch.Tensor,
+        block_mask: Any,
+    ) -> torch.Tensor:
+        latent_value = flex_attention(
+            query,
+            decoded_key,
+            expanded_values,
+            block_mask=block_mask,
+            scale=query.shape[-1] ** -0.5,
+        )
+        return latent_value
+
 else:  # pragma: no cover - exercised only without PyTorch/FlexAttention.
+    _create_bdre_causal_block_mask = None
+    _create_bdre_ragged_block_mask = None
     _compiled_bdre_flex_reader = None
     _compiled_bdre_batched_flex_reader = None
+    _compiled_bdre_blockmask_flex_reader = None
+    _compiled_bdre_ragged_flex_reader = None
 
 
 @dataclass(frozen=True)
@@ -179,6 +317,7 @@ class BDREConfig:
     normalize_step_distance: bool = False
     synchronous_attention_backend: str = "per_query_reference"
     flex_reader_group_size: int = 1
+    flex_kernel_variant: str = "auto"
     depth_visibility_policy: str = "depth_prefix"
     full_bank_compile_mode: str = "loop"
 
@@ -249,6 +388,7 @@ class BDREConfig:
                 "execution.flex_reader_group_size",
                 minimum=1,
             ),
+            flex_kernel_variant=str(execution.get("flex_kernel_variant", "auto")),
             depth_visibility_policy=str(
                 execution.get("depth_visibility_policy", "depth_prefix")
             ),
@@ -280,24 +420,30 @@ class BDREConfig:
             "legacy_cuda_scan",
             "grouped_host",
             "grouped_mm",
+            "grouped_mm_gpu",
         }:
             raise ValueError(
                 "BDRE execution.dispatch must be 'legacy_cuda_scan', 'grouped_host', "
-                "or 'grouped_mm'."
+                "'grouped_mm', or 'grouped_mm_gpu'."
             )
         if self.synchronous_attention_backend not in {
             "per_query_reference",
             "shared_padded_explicit",
             "shared_padded_flex",
+            "shared_padded_flex_blockmask",
+            "ragged_flex_blockmask",
         }:
             raise ValueError(
                 "BDRE execution.attention_backend must be 'per_query_reference', "
-                "'shared_padded_explicit', or 'shared_padded_flex'."
+                "'shared_padded_explicit', 'shared_padded_flex', "
+                "'shared_padded_flex_blockmask', or 'ragged_flex_blockmask'."
             )
         if self.flex_reader_group_size > self.route.route_pool_blocks:
             raise ValueError(
                 "BDRE execution.flex_reader_group_size cannot exceed route_pool_blocks."
             )
+        if self.flex_kernel_variant not in {"auto", "bwd32"}:
+            raise ValueError("Unsupported BDRE execution.flex_kernel_variant.")
         if (
             self.flex_reader_group_size > 1
             and self.synchronous_attention_backend != "shared_padded_flex"
@@ -328,15 +474,25 @@ class BDREConfig:
             raise ValueError("full_bank depth visibility is available only for synchronous_prefix execution.")
         elif self.synchronous_attention_backend != "per_query_reference":
             raise ValueError("Shared padded attention is available only for synchronous_prefix execution.")
-        if self.dispatch_mode == "grouped_mm" and (
+        if self.dispatch_mode in {"grouped_mm", "grouped_mm_gpu"} and (
             self.execution_mode != "synchronous_prefix"
             or self.synchronous_attention_backend
-            not in {"shared_padded_explicit", "shared_padded_flex"}
+            not in {
+                "shared_padded_explicit",
+                "shared_padded_flex",
+                "shared_padded_flex_blockmask",
+                "ragged_flex_blockmask",
+            }
         ):
             raise ValueError(
                 "Grouped MM dispatch requires synchronous_prefix execution with "
                 "shared padded attention."
             )
+        if (
+            self.dispatch_mode == "grouped_mm_gpu"
+            and self.synchronous_attention_backend != "ragged_flex_blockmask"
+        ):
+            raise ValueError("grouped_mm_gpu dispatch requires ragged_flex_blockmask attention.")
         if not self.position_geometry_normalize:
             raise ValueError("BDRE v1 requires normalized position geometry.")
         if self.route.top_k != 1 or self.route.later_top_k != 1:
@@ -364,6 +520,7 @@ class _SynchronousGroupedMMDispatch:
     actions: torch.Tensor
     offsets: torch.Tensor
     groups: tuple[_SynchronousActionGroup, ...]
+    valid: torch.Tensor | None = None
 
 
 @dataclass(frozen=True)
@@ -1183,7 +1340,7 @@ class BrianBDRERouteCore(BrianRouteCore):
         step_compile_outputs: list[BDRECompileOutput] = []
         grouped_mm_weights = (
             self._synchronous_grouped_mm_weights()
-            if self.bdre_config.dispatch_mode == "grouped_mm"
+            if self.bdre_config.dispatch_mode in {"grouped_mm", "grouped_mm_gpu"}
             else None
         )
 
@@ -1276,9 +1433,14 @@ class BrianBDRERouteCore(BrianRouteCore):
                 torch.Tensor,
             ] | None = None
             if grouped_mm_weights is not None:
-                dispatch = self._synchronous_grouped_mm_dispatch(
-                    flat_selected,
-                    chunk=chunk,
+                dispatch = (
+                    None
+                    if self.bdre_config.dispatch_mode == "grouped_mm_gpu"
+                    and self._force_final_exit(step, max_steps, routing_constraints)
+                    else self._synchronous_grouped_mm_dispatch(
+                        flat_selected,
+                        chunk=chunk,
+                    )
                 )
                 if dispatch is not None:
                     routed_input, query, canonical_key, canonical_value = self._prepare_synchronous_grouped_mm_step(
@@ -1288,6 +1450,10 @@ class BrianBDRERouteCore(BrianRouteCore):
                         dispatch,
                         grouped_mm_weights,
                     )
+                    if dispatch.valid is not None:
+                        writer_mask = dispatch.valid.unsqueeze(1)
+                        canonical_key = canonical_key * writer_mask
+                        canonical_value = canonical_value * writer_mask
                     step_key = canonical_key.new_zeros((batch * chunk, self.bdre_config.key_dim))
                     step_value = canonical_value.new_zeros((batch * chunk, self.bdre_config.value_dim))
                     step_key = step_key.index_copy(0, dispatch.indexes, canonical_key)
@@ -1382,7 +1548,12 @@ class BrianBDRERouteCore(BrianRouteCore):
                     current_keys=current_keys,
                     current_values=current_values,
                 )
-                next_flat_hidden = next_flat_hidden.index_copy(0, dispatch.indexes, block_output)
+                updated_hidden = next_flat_hidden.index_copy(0, dispatch.indexes, block_output)
+                next_flat_hidden = (
+                    torch.where(flat_valid.unsqueeze(1), updated_hidden, next_flat_hidden)
+                    if dispatch.valid is not None
+                    else updated_hidden
+                )
             else:
                 for action, indexes, routed_input, query, pack_group in prepared:
                     block_output = self._finish_synchronous_prefix_block(
@@ -1644,6 +1815,23 @@ class BrianBDRERouteCore(BrianRouteCore):
         *,
         chunk: int,
     ) -> _SynchronousGroupedMMDispatch | None:
+        if self.bdre_config.dispatch_mode == "grouped_mm_gpu":
+            actions = selected.clamp(max=self.config.route_pool_blocks - 1)
+            indexes = torch.argsort(actions, stable=True)
+            actions = actions.index_select(0, indexes)
+            valid = selected.index_select(0, indexes) < self.config.route_pool_blocks
+            offsets = torch.bincount(
+                actions,
+                minlength=self.config.route_pool_blocks,
+            ).cumsum(dim=0, dtype=torch.int32)
+            return _SynchronousGroupedMMDispatch(
+                indexes=indexes,
+                actions=actions,
+                offsets=offsets,
+                groups=(),
+                valid=valid,
+            )
+
         selected_host = selected.detach().to(device="cpu")
         index_parts: list[torch.Tensor] = []
         group_metadata: list[
@@ -1822,6 +2010,18 @@ class BrianBDRERouteCore(BrianRouteCore):
         current_keys: torch.Tensor,
         current_values: torch.Tensor,
     ) -> torch.Tensor:
+        if self.bdre_config.synchronous_attention_backend == "ragged_flex_blockmask":
+            return self._read_synchronous_prefix_grouped_mm_ragged_flex(
+                routed_input,
+                query,
+                dispatch=dispatch,
+                chunk=chunk,
+                start_position=start_position,
+                reader_step=reader_step,
+                historical_state=historical_state,
+                current_keys=current_keys,
+                current_values=current_values,
+            )
         if (
             self.bdre_config.synchronous_attention_backend == "shared_padded_flex"
             and self.bdre_config.flex_reader_group_size > 1
@@ -1876,6 +2076,108 @@ class BrianBDRERouteCore(BrianRouteCore):
             attended_parts.append(attended.squeeze(1))
             cursor = end
         return torch.cat(attended_parts, dim=0)
+
+    def _read_synchronous_prefix_grouped_mm_ragged_flex(
+        self,
+        routed_input: torch.Tensor,
+        query: torch.Tensor,
+        *,
+        dispatch: _SynchronousGroupedMMDispatch,
+        chunk: int,
+        start_position: int,
+        reader_step: int,
+        historical_state: BDRECacheState,
+        current_keys: torch.Tensor,
+        current_values: torch.Tensor,
+    ) -> torch.Tensor:
+        if not query.is_cuda or _compiled_bdre_ragged_flex_reader is None:
+            raise RuntimeError("ragged_flex_blockmask requires CUDA FlexAttention.")
+
+        attention = self.route_blocks[0].block.attn
+        readers = self.config.route_pool_blocks
+        batch = current_keys.size(0)
+        query_batches = torch.div(dispatch.indexes, chunk, rounding_mode="floor")
+        query_positions = start_position + (dispatch.indexes % chunk)
+        query_cosine = attention.rope.cos[0, 0, query_positions, :].to(
+            device=query.device,
+            dtype=query.dtype,
+        )
+        query_sine = attention.rope.sin[0, 0, query_positions, :].to(
+            device=query.device,
+            dtype=query.dtype,
+        )
+        query = apply_rotary(query, query_cosine.unsqueeze(1), query_sine.unsqueeze(1))
+
+        key_parts: list[torch.Tensor] = []
+        value_parts: list[torch.Tensor] = []
+        if start_position:
+            if historical_state.step_keys is None or historical_state.step_values is None:
+                raise ValueError("Synchronous-prefix history is missing step cache tensors.")
+            key_parts.append(
+                historical_state.step_keys[:, :, reader_step, :, :].permute(2, 0, 1, 3)
+            )
+            value_parts.append(
+                historical_state.step_values[:, :, reader_step, :, :].permute(2, 0, 1, 3)
+            )
+        key_parts.append(current_keys.permute(2, 0, 1, 3))
+        value_parts.append(current_values.permute(2, 0, 1, 3))
+        key_codes = torch.cat(key_parts, dim=2)
+        value_codes = torch.cat(value_parts, dim=2)
+        key_length = key_codes.size(2)
+        key_positions = torch.arange(key_length, device=query.device)
+        key_cosine = attention.rope.cos[:, :, key_positions, :].to(
+            device=query.device,
+            dtype=query.dtype,
+        )
+        key_sine = attention.rope.sin[:, :, key_positions, :].to(
+            device=query.device,
+            dtype=query.dtype,
+        )
+        key_read = torch.stack([projection.key_read for projection in self.bdre_projections]).to(
+            dtype=query.dtype
+        )
+        value_read = torch.stack(
+            [projection.value_read for projection in self.bdre_projections]
+        ).to(dtype=query.dtype)
+        block_mask = _create_bdre_ragged_block_mask(
+            dispatch.actions,
+            query_batches,
+            query_positions,
+            readers=readers,
+            batch=batch,
+            key_length=key_length,
+        )
+        decoded_key = torch.einsum(
+            "abkr,ahrd->abhkd",
+            key_codes.to(dtype=query.dtype),
+            key_read,
+        ).reshape(
+            readers * batch,
+            attention.n_heads,
+            key_length,
+            attention.head_dim,
+        )
+        decoded_key = apply_rotary(decoded_key, key_cosine, key_sine)
+        decoded_key = decoded_key.permute(1, 0, 2, 3).reshape(
+            1,
+            attention.n_heads,
+            readers * batch * key_length,
+            attention.head_dim,
+        )
+        expanded_values = value_codes.to(dtype=query.dtype).reshape(
+            1,
+            readers * batch * key_length,
+            self.bdre_config.value_dim,
+        ).unsqueeze(1).expand(-1, attention.n_heads, -1, -1)
+        latent_value = _compiled_bdre_ragged_flex_reader(
+            query.transpose(0, 1).unsqueeze(0),
+            decoded_key,
+            expanded_values,
+            block_mask,
+        ).squeeze(0).transpose(0, 1)
+        selected_value_read = value_read.index_select(0, dispatch.actions)
+        attended = torch.einsum("nhv,nhvd->nhd", latent_value, selected_value_read)
+        return attended.reshape(routed_input.size(0), -1).to(dtype=routed_input.dtype)
 
     def _read_synchronous_prefix_grouped_mm_batched_flex(
         self,
@@ -2049,6 +2351,8 @@ class BrianBDRERouteCore(BrianRouteCore):
         if self.bdre_config.synchronous_attention_backend in {
             "shared_padded_explicit",
             "shared_padded_flex",
+            "shared_padded_flex_blockmask",
+            "ragged_flex_blockmask",
         }:
             if pack_group is None:
                 raise ValueError("Shared padded attention requires synchronous action packing metadata.")
@@ -2224,7 +2528,11 @@ class BrianBDRERouteCore(BrianRouteCore):
         key_cosine = attention.rope.cos[:, :, key_positions, :].to(device=query.device, dtype=query.dtype)
         key_sine = attention.rope.sin[:, :, key_positions, :].to(device=query.device, dtype=query.dtype)
         use_flex = (
-            self.bdre_config.synchronous_attention_backend == "shared_padded_flex"
+            self.bdre_config.synchronous_attention_backend
+            in {
+                "shared_padded_flex",
+                "shared_padded_flex_blockmask",
+            }
             and query.is_cuda
             and _compiled_bdre_flex_reader is not None
             and attention.head_dim >= 16
@@ -2232,16 +2540,31 @@ class BrianBDRERouteCore(BrianRouteCore):
             and (not block.training or attention.dropout == 0.0)
         )
         if use_flex:
-            attended = _compiled_bdre_flex_reader(
-                padded_query,
-                key_codes.to(dtype=query.dtype),
-                value_codes.to(dtype=query.dtype),
-                projection.key_read.to(dtype=query.dtype),
-                projection.value_read.to(dtype=query.dtype),
-                key_cosine,
-                key_sine,
-                padded_positions,
-            ).index_select(0, flat_slots).to(dtype=routed_input.dtype)
+            if self.bdre_config.synchronous_attention_backend == "shared_padded_flex_blockmask":
+                block_mask = _create_bdre_causal_block_mask(padded_positions, key_codes.size(1))
+                attended = _compiled_bdre_blockmask_flex_reader(
+                    padded_query,
+                    key_codes.to(dtype=query.dtype),
+                    value_codes.to(dtype=query.dtype),
+                    projection.key_read.to(dtype=query.dtype),
+                    projection.value_read.to(dtype=query.dtype),
+                    key_cosine,
+                    key_sine,
+                    block_mask,
+                    self.bdre_config.flex_kernel_variant,
+                )
+            else:
+                attended = _compiled_bdre_flex_reader(
+                    padded_query,
+                    key_codes.to(dtype=query.dtype),
+                    value_codes.to(dtype=query.dtype),
+                    projection.key_read.to(dtype=query.dtype),
+                    projection.value_read.to(dtype=query.dtype),
+                    key_cosine,
+                    key_sine,
+                    padded_positions,
+                )
+            attended = attended.index_select(0, flat_slots).to(dtype=routed_input.dtype)
         else:
             key_read_weight = projection.key_read.permute(0, 2, 1).reshape(
                 attention.n_heads * attention.head_dim,

@@ -533,7 +533,7 @@ Hard validation rules include:
 | CPU DDP vs merged global batch | loss, gradients, and updates agree |
 | Rank-local unused parameter synchronization | passed |
 | B200 BF16 forward/backward and DDP2 smoke | finite; checkpoint state passed |
-| Full repository regression | `606 passed`, `15` pre-existing warnings |
+| Full repository regression | `609 passed`; PyTorch deprecation warnings only |
 
 These checks establish the implementation and causal interface. They do not
 show that CPBC-DP, CPBC-FB, or RC-KV improves language modeling or public
@@ -554,17 +554,21 @@ cache norms.
 | Formal CPBC-DP DDP2, grouped-MM | 32 global | 2048 | 512 | 28,638-30,609 token/s | 124.5 GiB/rank | accepted three-step smoke |
 | CPBC-DP fused reader, group 8 | 16 | 2048 | 512 | 19,139 token/s | 24,742 MiB | same cache/route definition |
 | CPBC-DP fused reader, group 1 | 16 | 2048 | 2048 | 23,246 token/s | 66,011 MiB | U1 gradient horizon 2048 |
+| CPBC-DP exact BlockMask, `bwd32` | 16 | 2048 | 2048 | **48,956 token/s** | **66,016 MiB** | current recommended path |
+| CPBC-DP ragged BlockMask + GPU dispatch | 16 | 2048 | 2048 | 28,050 token/s | 83,562 MiB | experimental negative |
 | CPBC-FB fused/vectorized, group 8 | 16 | 2048 | 128 | 9,013 token/s | 13,460 MiB | over 10x historical FB |
 | CPBC-DP C2048 DDP2 | 32 global | 2048 | 2048 | 45,443-45,648 token/s | 70.2 GiB/rank | steady smoke steps |
+| CPBC-DP C2048 exact BlockMask DDP2 | 32 global | 2048 | 2048 | **90,780-97,447 token/s** | 70.2 GiB/rank | current steady smoke steps |
 
 All DDP2 smokes preserve global batch 32 and 65,536 tokens per optimizer step.
 The accepted grouped-MM C512 reference averaged about `29,624 token/s`; the
 prepared fused C2048 shape averaged about `45,546 token/s` over its two steady
-steps. For identical route decisions, DP cache/attention is chunk-boundary
+steps; the exact BlockMask path averages about `94,114 token/s`. For identical
+route decisions, DP cache/attention is chunk-boundary
 invariant. C2048 is not a training-dynamics-equivalent replacement for C512:
 its U1 gradient horizon is 2,048 rather than 512 tokens, and stochastic routing
 consumes RNG in different tensor groupings. The matched Transformer baseline
-averaged `618,738 token/s`, so a large system-level gap remains.
+averaged `618,738 token/s`, so a large system-level gap of about 6.6x remains.
 
 The two models do not execute the same number of block evaluations, so this is
 not a pure attention-kernel ratio. The gap is nevertheless much larger than
@@ -574,7 +578,7 @@ route length alone can explain.
 
 Profiling and code inspection identify the dominant costs:
 
-1. each route step still copies selected actions from GPU to CPU for grouping;
+1. the recommended padded path still copies selected actions to CPU for grouping;
 2. routing and reader packing still launch many elementwise, copy, and index kernels;
 3. at C2048, fused attention forward/backward is the dominant GPU operation;
 4. route-dependent reader padding makes cross-reader batching shape-sensitive;
@@ -583,11 +587,13 @@ Profiling and code inspection identify the dominant costs:
 6. step-indexed banks, route-dependent padding, and variable group shapes add
    memory traffic.
 
-Grouped expert GEMM, narrow cache gathers, conditional compiler metrics, fused
-reader attention, bounded reader batching, and vectorized FB compilation are
-implemented. Remaining work should target GPU-resident grouping and routed
-RMSNorm/packing fusion while preserving logits, loss, cache, and gradient
-equivalence.
+Grouped expert GEMM, narrow cache gathers, conditional compiler metrics, exact
+BlockMask attention, calibrated backward tiles, bounded reader batching,
+vectorized FB compilation, ragged reader attention, and GPU-resident dispatch
+are implemented. GPU dispatch improves the ragged path by about 9.8%, but
+all-reader K/V expansion makes that path slower and larger than padded
+BlockMask attention. Remaining work should target a compact selected-reader
+kernel rather than moving the current expanded ragged layout wholesale to GPU.
 
 ## 15. Metrics and Visualization
 
@@ -639,9 +645,10 @@ should advance to 2B. A Cartesian product of 5B runs is not justified.
 
 ### 17.1 Training Speed
 
-CPBC improves serial throughput by hundreds of times, but remains about one
-order of magnitude or more behind the matched baseline. This is the primary
-practical limitation and makes broad long-run ablations expensive.
+CPBC improves serial throughput by hundreds of times. The current exact
+BlockMask C2048 DDP2 path remains about 6.6x behind the matched baseline. This
+is still the primary practical limitation and makes broad long-run ablations
+expensive.
 
 ### 17.2 CPBC Is an Explicit Approximation
 
@@ -683,9 +690,12 @@ exact causal oracle; and CPBC provides a trainable approximate prefill with
 explicit DP/FB visibility semantics. Stateful TBPTT and manual DDP gradient
 synchronization preserve cache lifecycle and optimizer consistency.
 
-Functionality, causality, incremental behavior, grouped expert compute, and
-distributed training have been validated. The next engineering priority is
-reducing the remaining host synchronization, small-kernel fragmentation, and
-explicit reader-attention overhead without changing RC-KV/CPBC semantics.
+Functionality, causality, incremental behavior, grouped expert compute, exact
+BlockMask attention, and distributed training have been validated. The next
+engineering priority is a compact selected-reader attention kernel that avoids
+both padded queries and all-reader K/V expansion. Host synchronization and
+small-kernel cleanup are secondary at C2048 because attention backward remains
+dominant. Detailed acceptance is in
+[rc_kv_c2048_blockmask_dispatch_report.md](./rc_kv_c2048_blockmask_dispatch_report.md).
 Quality claims must wait for the controlled benchmark and ablation sequence
 above.

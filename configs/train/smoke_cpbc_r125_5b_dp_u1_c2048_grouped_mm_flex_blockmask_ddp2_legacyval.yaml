@@ -1,0 +1,4 @@
+extends: smoke_cpbc_r125_5b_dp_u1_c2048_grouped_mm_flex_ddp2_legacyval.yaml
+run_name: smoke_cpbc_r125_5b_dp_u1_c2048_grouped_mm_flex_blockmask_ddp2_legacyval
+model_config: ../model/brian_r125_bdre_cpbc_dp_c2048_grouped_mm_flex_blockmask.yaml
+output_root: tmp/runs_cpbc_dp_c2048_grouped_mm_flex_blockmask_ddp2_smoke

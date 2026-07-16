@@ -1,0 +1,7 @@
+extends: brian_r125_bdre_cpbc_dp_c2048_grouped_mm_flex.yaml
+model_name: brian_r125_bdre_cpbc_dp_c2048_grouped_mm_flex_blockmask
+
+execution:
+  attention_backend: shared_padded_flex_blockmask
+  flex_reader_group_size: 1
+  flex_kernel_variant: bwd32

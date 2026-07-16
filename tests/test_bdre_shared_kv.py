@@ -872,6 +872,85 @@ def test_flex_reader_cuda_bf16_matches_explicit_reader_within_rounding() -> None
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is required")
+@pytest.mark.parametrize(
+    "attention_backend",
+    [
+        "shared_padded_flex_blockmask",
+        "ragged_flex_blockmask",
+    ],
+)
+def test_blockmask_readers_cuda_bf16_match_score_mod_reader_within_rounding(
+    attention_backend: str,
+) -> None:
+    torch.manual_seed(711)
+    reference_config = _cuda_flex_synchronous_config(
+        chunk_size=8,
+        flex_reader_group_size=1,
+    )
+    candidate_config = replace(
+        reference_config,
+        synchronous_attention_backend=attention_backend,
+        flex_kernel_variant=(
+            "bwd32" if attention_backend == "shared_padded_flex_blockmask" else "auto"
+        ),
+    )
+    reference = BrianBDRERouteCore(reference_config).cuda().train()
+    candidate = BrianBDRERouteCore(candidate_config).cuda().train()
+    candidate.load_state_dict(reference.state_dict())
+    input_ids = torch.randint(0, 64, (3, 8), device="cuda")
+
+    with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+        reference_output = reference(input_ids, targets=input_ids, route_mode="free")
+        candidate_output = candidate(input_ids, targets=input_ids, route_mode="free")
+    reference_output["loss"].backward()
+    candidate_output["loss"].backward()
+
+    logit_diff = (reference_output["logits"].float() - candidate_output["logits"].float()).abs()
+    assert logit_diff.max().item() <= 0.2
+    assert logit_diff.mean().item() <= 0.04
+    assert torch.allclose(reference_output["loss"], candidate_output["loss"], atol=3e-3, rtol=3e-3)
+    for reference_parameter, candidate_parameter in (
+        (reference.token_embedding.weight, candidate.token_embedding.weight),
+        (reference.bdre_projections[0].key_read, candidate.bdre_projections[0].key_read),
+        (reference.bdre_projections[1].value_read, candidate.bdre_projections[1].value_read),
+    ):
+        assert reference_parameter.grad is not None and candidate_parameter.grad is not None
+        assert torch.allclose(reference_parameter.grad, candidate_parameter.grad, atol=3e-2, rtol=3e-2)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is required")
+def test_gpu_fixed_dispatch_matches_compact_ragged_dispatch_within_rounding() -> None:
+    torch.manual_seed(712)
+    compact_config = replace(
+        _cuda_flex_synchronous_config(chunk_size=8, flex_reader_group_size=1),
+        synchronous_attention_backend="ragged_flex_blockmask",
+    )
+    gpu_config = replace(compact_config, dispatch_mode="grouped_mm_gpu")
+    compact = BrianBDRERouteCore(compact_config).cuda().train()
+    gpu = BrianBDRERouteCore(gpu_config).cuda().train()
+    gpu.load_state_dict(compact.state_dict())
+    input_ids = torch.randint(0, 64, (3, 8), device="cuda")
+
+    with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+        compact_output = compact(input_ids, targets=input_ids, route_mode="free")
+        gpu_output = gpu(input_ids, targets=input_ids, route_mode="free")
+    compact_output["loss"].backward()
+    gpu_output["loss"].backward()
+
+    logit_diff = (compact_output["logits"].float() - gpu_output["logits"].float()).abs()
+    assert logit_diff.max().item() <= 0.2
+    assert logit_diff.mean().item() <= 0.04
+    assert torch.allclose(compact_output["loss"], gpu_output["loss"], atol=3e-3, rtol=3e-3)
+    for compact_parameter, gpu_parameter in (
+        (compact.token_embedding.weight, gpu.token_embedding.weight),
+        (compact.bdre_projections[0].key_read, gpu.bdre_projections[0].key_read),
+        (compact.route_blocks[1].block.ffn.w1.weight, gpu.route_blocks[1].block.ffn.w1.weight),
+    ):
+        assert compact_parameter.grad is not None and gpu_parameter.grad is not None
+        assert torch.allclose(compact_parameter.grad, gpu_parameter.grad, atol=3e-2, rtol=3e-2)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is required")
 @pytest.mark.parametrize("depth_visibility_policy", ["depth_prefix", "full_bank"])
 def test_flex_reader_cuda_is_suffix_invariant_and_stream_consistent(
     depth_visibility_policy: str,
@@ -880,6 +959,12 @@ def test_flex_reader_cuda_is_suffix_invariant_and_stream_consistent(
     config = _cuda_flex_synchronous_config(
         chunk_size=4,
         depth_visibility_policy=depth_visibility_policy,
+        flex_reader_group_size=1,
+    )
+    config = replace(
+        config,
+        synchronous_attention_backend="shared_padded_flex_blockmask",
+        flex_kernel_variant="bwd32",
     )
     full = BrianBDRERouteCore(config).cuda().eval()
     streamed = BrianBDRERouteCore(config).cuda().eval()
@@ -1022,6 +1107,10 @@ def test_bdre_rejects_invalid_fused_reader_and_full_bank_execution_options() -> 
         ).validate()
     with pytest.raises(ValueError, match="requires full_bank"):
         replace(config, full_bank_compile_mode="vectorized").validate()
+    with pytest.raises(ValueError, match="flex_kernel_variant"):
+        replace(config, flex_kernel_variant="unsupported").validate()
+    with pytest.raises(ValueError, match="requires ragged_flex_blockmask"):
+        replace(config, dispatch_mode="grouped_mm_gpu").validate()
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is required")
