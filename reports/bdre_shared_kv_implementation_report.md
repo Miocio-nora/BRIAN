@@ -117,11 +117,12 @@ implementation remains available as the oracle required by Section 16. The
 terminal visualization architecture and validation are recorded separately in
 `reports/route_sphere_terminal_dashboard.md`.
 
-Stateful TBPTT is now available as a separate single-GPU training backend. It
-preserves exact token-serial forward and KV values while detaching cache history
-at explicit gradient boundaries; it is not approximate prefill. Implementation,
-configuration, validation, and remaining R125 memory calibration are recorded
-in `reports/bdre_stateful_tbptt_implementation_report.md`.
+Stateful TBPTT preserves exact token-serial forward and KV values while
+detaching cache history at explicit gradient boundaries; it is not approximate
+prefill. Stateful DDP and multi-chunk detach intervals were added later for the
+CPBC backend. Implementation, configuration, validation, and calibration are
+recorded in `reports/bdre_stateful_tbptt_implementation_report.md` and
+`reports/cpbc_prefill_ddp_ablation_report.md`.
 
 ## 2. Model Scope
 

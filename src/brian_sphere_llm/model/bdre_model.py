@@ -67,6 +67,7 @@ class BDREConfig:
     chunk_size: int = 1
     normalize_step_distance: bool = False
     synchronous_attention_backend: str = "per_query_reference"
+    depth_visibility_policy: str = "depth_prefix"
 
     @classmethod
     def from_dict(cls, data: dict[str, Any], *, config_dir: str | Path | None = None) -> "BDREConfig":
@@ -130,6 +131,9 @@ class BDREConfig:
             synchronous_attention_backend=str(
                 execution.get("attention_backend", "per_query_reference")
             ),
+            depth_visibility_policy=str(
+                execution.get("depth_visibility_policy", "depth_prefix")
+            ),
         )
         if str(geometry.get("internal_target", "regular_simplex")) != "regular_simplex":
             raise ValueError("BDRE v1 position_geometry.internal_target must be regular_simplex.")
@@ -157,6 +161,10 @@ class BDREConfig:
             raise ValueError(
                 "BDRE execution.attention_backend must be 'per_query_reference' or 'shared_padded_explicit'."
             )
+        if self.depth_visibility_policy not in {"depth_prefix", "full_bank"}:
+            raise ValueError(
+                "BDRE execution.depth_visibility_policy must be 'depth_prefix' or 'full_bank'."
+            )
         if self.execution_mode == "synchronous_prefix":
             if self.depth_mode != "synchronous_prefix":
                 raise ValueError("synchronous_prefix execution requires bdre_depth_mode=synchronous_prefix.")
@@ -168,6 +176,8 @@ class BDREConfig:
                 raise ValueError("synchronous_prefix execution requires hard_exit=true.")
         elif self.depth_mode == "synchronous_prefix":
             raise ValueError("bdre_depth_mode=synchronous_prefix requires synchronous_prefix execution.")
+        elif self.depth_visibility_policy != "depth_prefix":
+            raise ValueError("full_bank depth visibility is available only for synchronous_prefix execution.")
         elif self.synchronous_attention_backend != "per_query_reference":
             raise ValueError("Shared padded attention is available only for synchronous_prefix execution.")
         if not self.position_geometry_normalize:
@@ -448,7 +458,12 @@ class BrianBDRERouteCore(BrianRouteCore):
         collect_router_space: bool = False,
         collect_bdre_visualization: bool = False,
         summarize_routing: bool = True,
+        stream_chunk_options: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
+        if stream_chunk_options is not None:
+            if targets is not None:
+                raise ValueError("Streaming chunk forward does not accept full-sequence targets.")
+            return self.forward_stream_chunk(input_ids, **dict(stream_chunk_options))
         if self.bdre_config.execution_mode == "synchronous_prefix":
             return self._forward_synchronous_prefix(
                 input_ids,
@@ -1251,6 +1266,21 @@ class BrianBDRERouteCore(BrianRouteCore):
             self.config.route_pool_blocks,
             self.bdre_config.value_dim,
         )
+        historical_step_outputs = step_compile_outputs
+        if self.bdre_config.depth_visibility_policy == "full_bank":
+            historical_step_outputs = []
+            for reader_step in range(self.config.max_route_steps):
+                started = time.perf_counter()
+                output = self.bdre_compiler.compile(
+                    flat_key,
+                    flat_value,
+                    flat_block,
+                    flat_valid,
+                    self._internal_block_positions(),
+                    reader_step=reader_step,
+                )
+                diagnostics.record_compile(output, time.perf_counter() - started)
+                historical_step_outputs.append(output)
         step_keys = torch.stack(
             [
                 output.keys.view(
@@ -1259,7 +1289,7 @@ class BrianBDRERouteCore(BrianRouteCore):
                     self.config.route_pool_blocks,
                     self.bdre_config.key_dim,
                 )
-                for output in step_compile_outputs
+                for output in historical_step_outputs
             ],
             dim=2,
         )
@@ -1271,7 +1301,7 @@ class BrianBDRERouteCore(BrianRouteCore):
                     self.config.route_pool_blocks,
                     self.bdre_config.value_dim,
                 )
-                for output in step_compile_outputs
+                for output in historical_step_outputs
             ],
             dim=2,
         )
@@ -1296,6 +1326,15 @@ class BrianBDRERouteCore(BrianRouteCore):
                     [output.value_weights[last_rows] for output in step_compile_outputs],
                     dim=1,
                 ).detach().cpu(),
+                "historical_reader_step_key_weights": torch.stack(
+                    [output.key_weights[last_rows] for output in historical_step_outputs],
+                    dim=1,
+                ).detach().cpu(),
+                "historical_reader_step_value_weights": torch.stack(
+                    [output.value_weights[last_rows] for output in historical_step_outputs],
+                    dim=1,
+                ).detach().cpu(),
+                "depth_visibility_policy": self.bdre_config.depth_visibility_policy,
                 "block_positions": self._internal_block_positions().detach().cpu(),
             }
 

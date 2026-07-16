@@ -1,0 +1,23 @@
+extends: cpbc_r125_5b_dp_u1_c128_ddp2_legacyval.yaml
+run_name: cpbc_r125_5b_fb_u1_c128_ddp2_legacyval
+model_config: ../model/brian_r125_bdre_cpbc_fb_shared_explicit.yaml
+
+checkpoint_benchmarks:
+  label: cpbc_r125_5b_fb_u1_c128_ddp2_legacyval
+
+post_train_benchmarks:
+  label: cpbc_r125_5b_fb_u1_c128_ddp2_legacyval
+
+wandb:
+  tags:
+    - cpbc
+    - cpbc_fb
+    - full_bank_visibility
+    - u1
+    - chunk128
+    - ddp2
+    - global_batch32
+    - r125
+    - 5b
+    - balanced_data
+    - legacy_val

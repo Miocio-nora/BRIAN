@@ -1,0 +1,37 @@
+extends: bdre_rckv_r125_5b_synchronous_prefix_b8_c128_shared_explicit_legacyval.yaml
+run_name: cpbc_r125_5b_dp_u1_c128_ddp2_legacyval
+model_config: ../model/brian_r125_bdre_cpbc_dp_shared_explicit.yaml
+
+batch_size: 16
+gradient_accumulation_steps: 1
+expected_world_size: 2
+expected_global_batch_size: 32
+ddp_find_unused_parameters: false
+ddp_broadcast_buffers: false
+
+stateful_tbptt:
+  enabled: true
+  chunk_size: 128
+  detach_interval_chunks: 1
+  gradient_sync_bucket_mb: 64
+
+checkpoint_benchmarks:
+  label: cpbc_r125_5b_dp_u1_c128_ddp2_legacyval
+
+post_train_benchmarks:
+  label: cpbc_r125_5b_dp_u1_c128_ddp2_legacyval
+
+wandb:
+  group: cpbc_r125_5b_depth_visibility_ablation
+  tags:
+    - cpbc
+    - cpbc_dp
+    - depth_prefix_visibility
+    - u1
+    - chunk128
+    - ddp2
+    - global_batch32
+    - r125
+    - 5b
+    - balanced_data
+    - legacy_val

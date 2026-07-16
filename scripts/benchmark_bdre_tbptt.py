@@ -25,6 +25,7 @@ def main() -> None:
     parser.add_argument("--batch-size", type=int, default=None)
     parser.add_argument("--sequence-length", type=int, default=None)
     parser.add_argument("--chunk-size", type=int, default=None)
+    parser.add_argument("--detach-interval-chunks", type=int, default=None)
     parser.add_argument("--global-step", type=int, default=1)
     parser.add_argument("--seed", type=int, default=123)
     parser.add_argument("--warmup-steps", type=int, default=0)
@@ -46,8 +47,17 @@ def main() -> None:
     batch_size = int(args.batch_size or config["batch_size"])
     sequence_length = int(args.sequence_length or data_config["sequence_length"])
     chunk_size = int(args.chunk_size or tbptt["chunk_size"])
-    if min(batch_size, sequence_length, chunk_size) < 1 or sequence_length < 2:
-        raise SystemExit("batch size and chunk size must be positive; sequence length must be at least two.")
+    detach_interval_chunks = int(
+        args.detach_interval_chunks or tbptt.get("detach_interval_chunks", 1)
+    )
+    if (
+        min(batch_size, sequence_length, chunk_size, detach_interval_chunks) < 1
+        or sequence_length < 2
+    ):
+        raise SystemExit(
+            "Batch size, chunk size, and detach interval must be positive; "
+            "sequence length must be at least two."
+        )
     if args.warmup_steps < 0 or args.repeats < 1:
         raise SystemExit("warmup steps must be non-negative and repeats must be positive.")
 
@@ -79,6 +89,7 @@ def main() -> None:
                 route_mode=train_mode_for_stage(str(config["stage"])),
                 global_step=args.global_step,
                 chunk_size=chunk_size,
+                detach_interval_chunks=detach_interval_chunks,
                 gradient_scale=1.0,
                 device=device,
                 summarize_routing=False,
@@ -124,6 +135,11 @@ def main() -> None:
         "batch_size": batch_size,
         "sequence_length": sequence_length,
         "chunk_size": chunk_size,
+        "detach_interval_chunks": detach_interval_chunks,
+        "gradient_horizon_tokens": min(
+            sequence_length,
+            chunk_size * detach_interval_chunks,
+        ),
         "global_step": args.global_step,
         "warmup_steps": args.warmup_steps,
         "repeats": args.repeats,

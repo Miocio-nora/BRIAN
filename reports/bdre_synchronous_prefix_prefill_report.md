@@ -7,6 +7,11 @@ short-run ablations, not yet suitable for a formal 5B run
 
 **Branch:** `bdre-synchronous-prefix-prefill`
 
+**Follow-up:** the backend is now named Chunkwise Progressive Bank Completion
+(CPBC). Stateful DDP, CPBC-FB/DP Depth Visibility Policy, and `U=1/2/4`
+gradient-horizon ablations are documented in
+`reports/cpbc_prefill_ddp_ablation_report.md`.
+
 ## 1. Decision
 
 The token-serial BDRE backend remains the semantic and debugging reference, but
@@ -189,9 +194,11 @@ Actual wall time would be longer after optimizer, evaluation, checkpoint, and
 benchmark overhead. The current backend is therefore acceptable for smoke
 tests and bounded ablations, but not for a formal 5B run.
 
-The stateful trainer currently rejects distributed execution. Multi-GPU scaling
-must not be assumed from the table and needs a separate DDP implementation and
-equivalence test.
+Stateful DDP was implemented after this single-rank calibration. It uses
+rank-local cache state and one explicit gradient synchronization per optimizer
+step, and has passed merged-batch equivalence plus B200 DDP2 smoke tests. These
+older single-GPU timings still must not be multiplied by GPU count to estimate
+DDP throughput.
 
 ## 8. Remaining Bottlenecks
 
@@ -207,7 +214,8 @@ The next engineering priorities are:
 2. retain the low-dimensional Value aggregation but fuse or cache decoded Key
    transforms where causality permits;
 3. remove remaining host synchronization from action grouping;
-4. add and validate stateful DDP only after the single-rank kernel is stable.
+4. improve CPBC chunk-128 utilization before launching the prepared long-run
+   DDP quality ablation.
 
 No formal routing ablation should be launched from this report alone. The next
 ablation plan should account for both mechanism quality and the gradient-horizon

@@ -106,6 +106,11 @@ def train_from_config(config_path: str | Path) -> Path:
     )
     ddp_static_graph = _bool_config(config, "ddp_static_graph", default=False)
     ddp_gradient_as_bucket_view = _bool_config(config, "ddp_gradient_as_bucket_view", default=False)
+    ddp_broadcast_buffers = _bool_config(
+        config,
+        "ddp_broadcast_buffers",
+        default=not bool(stateful_tbptt["enabled"]),
+    )
     set_seed(seed)
     _set_float32_matmul_precision(config)
 
@@ -116,12 +121,21 @@ def train_from_config(config_path: str | Path) -> Path:
     tokenized_dir = Path(data_config["output_dir"])
     model = build_model_from_config(model_config_path)
     _set_activation_checkpointing(model, _bool_config(config, "activation_checkpointing", default=False))
+    _validate_stateful_chunk_semantics(model, stateful_tbptt)
     device = _device(str(config.get("device", "auto")))
     distributed = dist_utils.init_distributed(device)
+    try:
+        distributed_batch_contract = _distributed_batch_contract(
+            config,
+            batch_size=batch_size,
+            gradient_accumulation_steps=gradient_accumulation_steps,
+            world_size=dist_utils.world_size() if distributed else 1,
+        )
+    except Exception:
+        dist_utils.destroy_distributed()
+        raise
     is_main_process = dist_utils.is_main_process()
     if stateful_tbptt["enabled"]:
-        if distributed:
-            raise ValueError("stateful_tbptt currently supports single-GPU training only.")
         if not hasattr(model, "forward_stream_chunk") or not hasattr(
             model,
             "prepare_stream_route_targets",
@@ -148,6 +162,10 @@ def train_from_config(config_path: str | Path) -> Path:
             "find_unused_parameters": ddp_find_unused_parameters,
             "static_graph": ddp_static_graph,
             "gradient_as_bucket_view": ddp_gradient_as_bucket_view,
+            "broadcast_buffers": ddp_broadcast_buffers,
+            "stateful_manual_gradient_sync": bool(distributed and stateful_tbptt["enabled"]),
+            "stateful_gradient_sync_bucket_mb": int(stateful_tbptt["gradient_sync_bucket_mb"]),
+            "batch_contract": distributed_batch_contract,
         },
     }
     if is_main_process:
@@ -234,6 +252,7 @@ def train_from_config(config_path: str | Path) -> Path:
         find_unused_parameters=ddp_find_unused_parameters,
         static_graph=ddp_static_graph,
         gradient_as_bucket_view=ddp_gradient_as_bucket_view,
+        broadcast_buffers=ddp_broadcast_buffers,
     )
 
     train_log = JsonlLogger(run_dir / "train_log.jsonl") if is_main_process else None
@@ -260,10 +279,15 @@ def train_from_config(config_path: str | Path) -> Path:
     checkpoint_retention = _checkpoint_retention_config(config, default_interval=save_interval)
     checkpoint_benchmarks = _checkpoint_benchmark_config(config, default_interval=save_interval)
     benchmark_log = JsonlLogger(run_dir / "benchmark_log.jsonl") if is_main_process and checkpoint_benchmarks["enabled"] else None
-    ddp_no_sync_microbatches = _ddp_no_sync_microbatch_count(
-        model,
-        distributed=distributed,
-        gradient_accumulation_steps=gradient_accumulation_steps,
+    stateful_manual_gradient_sync = bool(distributed and stateful_tbptt["enabled"])
+    ddp_no_sync_microbatches = (
+        gradient_accumulation_steps
+        if stateful_manual_gradient_sync
+        else _ddp_no_sync_microbatch_count(
+            model,
+            distributed=distributed,
+            gradient_accumulation_steps=gradient_accumulation_steps,
+        )
     )
     iterator, data_epoch, microbatch_in_epoch = _restore_dataloader_position(
         train_loader,
@@ -294,6 +318,7 @@ def train_from_config(config_path: str | Path) -> Path:
         routing_numeric_values: dict[str, list[float]] = {}
         router_space_payload: dict[str, Any] | None = None
         bdre_cache_payload: dict[str, Any] | None = None
+        stateful_gradient_sync_stats = _empty_stateful_gradient_sync_stats()
         summarize_routing = _routing_summary_due(config, global_step=step) or _visualization_due(
             route_path_visualization,
             step=step,
@@ -317,7 +342,8 @@ def train_from_config(config_path: str | Path) -> Path:
                 microbatch_in_epoch=microbatch_in_epoch,
             )
             batch = batch.to(device)
-            should_sync_gradients = micro_step == gradient_accumulation_steps - 1
+            final_accumulation_microbatch = micro_step == gradient_accumulation_steps - 1
+            should_sync_gradients = final_accumulation_microbatch and not stateful_manual_gradient_sync
             with _gradient_sync_context(model, distributed=distributed, should_sync=should_sync_gradients):
                 if stateful_tbptt["enabled"]:
                     outputs = _backward_stateful_tbptt_microbatch(
@@ -327,10 +353,11 @@ def train_from_config(config_path: str | Path) -> Path:
                         route_mode=stage_mode,
                         global_step=step,
                         chunk_size=int(stateful_tbptt["chunk_size"]),
+                        detach_interval_chunks=int(stateful_tbptt["detach_interval_chunks"]),
                         gradient_scale=1.0 / gradient_accumulation_steps,
                         device=device,
-                        collect_router_space=collect_router_space and should_sync_gradients,
-                        collect_bdre_visualization=collect_bdre_visualization and should_sync_gradients,
+                        collect_router_space=collect_router_space and final_accumulation_microbatch,
+                        collect_bdre_visualization=collect_bdre_visualization and final_accumulation_microbatch,
                         summarize_routing=summarize_routing,
                     )
                     loss = outputs["loss"]
@@ -342,8 +369,8 @@ def train_from_config(config_path: str | Path) -> Path:
                             config=config,
                             route_mode=stage_mode,
                             global_step=step,
-                            collect_router_space=collect_router_space and should_sync_gradients,
-                            collect_bdre_visualization=collect_bdre_visualization and should_sync_gradients,
+                            collect_router_space=collect_router_space and final_accumulation_microbatch,
+                            collect_bdre_visualization=collect_bdre_visualization and final_accumulation_microbatch,
                             summarize_routing=summarize_routing,
                         )
                         loss = outputs["loss"]
@@ -355,10 +382,15 @@ def train_from_config(config_path: str | Path) -> Path:
             if "schedule_values" in outputs:
                 schedule_values.update(outputs["schedule_values"])
             _accumulate_routing_summary(routing_summary, routing_numeric_values, outputs.get("routing_summary", {}))
-            if collect_router_space and should_sync_gradients and "router_space" in outputs:
+            if collect_router_space and final_accumulation_microbatch and "router_space" in outputs:
                 router_space_payload = outputs["router_space"]
-            if collect_bdre_visualization and should_sync_gradients and "bdre_visualization" in outputs:
+            if collect_bdre_visualization and final_accumulation_microbatch and "bdre_visualization" in outputs:
                 bdre_cache_payload = outputs["bdre_visualization"]
+        if stateful_manual_gradient_sync:
+            stateful_gradient_sync_stats = _sync_stateful_ddp_gradients(
+                model,
+                bucket_cap_mb=int(stateful_tbptt["gradient_sync_bucket_mb"]),
+            )
         if config.get("grad_clip") is not None:
             torch.nn.utils.clip_grad_norm_(model.parameters(), _float_config(config, "grad_clip", minimum=0.0))
         optimizer.step()
@@ -385,6 +417,19 @@ def train_from_config(config_path: str | Path) -> Path:
                 int(stateful_tbptt["chunk_size"]) if stateful_tbptt["enabled"] else 0
             ),
             "stateful_tbptt_chunks": int(outputs.get("stateful_tbptt_chunks", 0)),
+            "stateful_tbptt_detach_interval_chunks": (
+                int(stateful_tbptt["detach_interval_chunks"])
+                if stateful_tbptt["enabled"]
+                else 0
+            ),
+            "stateful_tbptt_backward_groups": int(
+                outputs.get("stateful_tbptt_backward_groups", 0)
+            ),
+            "stateful_tbptt_gradient_horizon_tokens": int(
+                outputs.get("stateful_tbptt_gradient_horizon_tokens", 0)
+            ),
+            "stateful_ddp_manual_gradient_sync": stateful_manual_gradient_sync,
+            **stateful_gradient_sync_stats,
             "local_tokens_per_second": int(local_token_count / elapsed),
             "tokens_per_second": int(global_token_count / elapsed),
             "train_step_time_seconds": elapsed,
@@ -628,6 +673,7 @@ def _backward_stateful_tbptt_microbatch(
     route_mode: str,
     global_step: int,
     chunk_size: int,
+    detach_interval_chunks: int = 1,
     gradient_scale: float,
     device: "torch.device",
     collect_router_space: bool = False,
@@ -640,6 +686,8 @@ def _backward_stateful_tbptt_microbatch(
         raise ValueError("stateful_tbptt requires batches with at least two tokens per sequence.")
     if chunk_size < 1:
         raise ValueError("stateful_tbptt chunk_size must be positive.")
+    if detach_interval_chunks < 1:
+        raise ValueError("stateful_tbptt detach_interval_chunks must be positive.")
 
     routing_cfg = _mapping_config(config, "routing")
     loss_weights = dict(_mapping_config(config, "loss_weights"))
@@ -648,7 +696,8 @@ def _backward_stateful_tbptt_microbatch(
     if "scheduled_lambda_route" in schedule_values:
         loss_weights["route"] = schedule_values["scheduled_lambda_route"]
     pseudo_policy = str(routing_cfg.get("pseudo_policy", "sequential"))
-    route_targets = model.prepare_stream_route_targets(
+    route_model = dist_utils.unwrap_model(model)
+    route_targets = route_model.prepare_stream_route_targets(
         batch,
         route_mode=route_mode,
         pseudo_policy=pseudo_policy,
@@ -672,6 +721,9 @@ def _backward_stateful_tbptt_microbatch(
     total_loss = None
     total_components: dict[str, torch.Tensor] = {}
     final_outputs: dict[str, Any] | None = None
+    pending_loss: torch.Tensor | None = None
+    chunks_in_pending_graph = 0
+    backward_groups = 0
 
     for start in range(0, sequence_length, chunk_size):
         end = min(sequence_length, start + chunk_size)
@@ -683,44 +735,58 @@ def _backward_stateful_tbptt_microbatch(
             next_targets[:, :valid_tokens] = batch[:, start + 1 : start + 1 + valid_tokens]
 
         with _autocast_context(device, str(config.get("precision", "fp32"))):
-            outputs = model.forward_stream_chunk(
+            outputs = model(
                 input_chunk,
-                state,
-                next_token_targets=next_targets,
-                loss_token_count=loss_token_count,
-                include_auxiliary_losses=final_chunk,
-                route_targets=route_targets,
-                route_mode=route_mode,
-                pseudo_policy=pseudo_policy,
-                loss_weights=loss_weights,
-                routing_constraints=constraints,
-                routing_options=routing_cfg,
-                hard_exit=hard_exit,
-                log_path_counts=log_path_counts,
-                router_probability=router_probability,
-                global_step=global_step,
-                collect_router_space=collect_router_space and final_chunk,
-                collect_bdre_visualization=collect_bdre_visualization and final_chunk,
-                summarize_routing=summarize_routing and final_chunk,
+                stream_chunk_options={
+                    "state": state,
+                    "next_token_targets": next_targets,
+                    "loss_token_count": loss_token_count,
+                    "include_auxiliary_losses": final_chunk,
+                    "route_targets": route_targets,
+                    "route_mode": route_mode,
+                    "pseudo_policy": pseudo_policy,
+                    "loss_weights": loss_weights,
+                    "routing_constraints": constraints,
+                    "routing_options": routing_cfg,
+                    "hard_exit": hard_exit,
+                    "log_path_counts": log_path_counts,
+                    "router_probability": router_probability,
+                    "global_step": global_step,
+                    "collect_router_space": collect_router_space and final_chunk,
+                    "collect_bdre_visualization": collect_bdre_visualization and final_chunk,
+                    "summarize_routing": summarize_routing and final_chunk,
+                },
             )
             chunk_loss = outputs["loss"]
-            scaled_loss = chunk_loss * gradient_scale
-        scaled_loss.backward()
+        pending_loss = chunk_loss if pending_loss is None else pending_loss + chunk_loss
+        chunks_in_pending_graph += 1
 
         detached_loss = chunk_loss.detach()
         total_loss = detached_loss if total_loss is None else total_loss + detached_loss
         for name, value in outputs.get("loss_components", {}).items():
             detached = value.detach()
             total_components[name] = detached if name not in total_components else total_components[name] + detached
-        state = outputs["incremental_state"].detached()
+        state = outputs["incremental_state"]
+        detach_boundary = chunks_in_pending_graph == detach_interval_chunks or final_chunk
+        if detach_boundary:
+            (pending_loss * gradient_scale).backward()
+            state = state.detached()
+            pending_loss = None
+            chunks_in_pending_graph = 0
+            backward_groups += 1
         if final_chunk:
             final_outputs = outputs
 
-    assert final_outputs is not None and total_loss is not None
+    assert final_outputs is not None and total_loss is not None and pending_loss is None
     final_outputs.pop("incremental_state", None)
     final_outputs["loss"] = total_loss
     final_outputs["loss_components"] = total_components
     final_outputs["stateful_tbptt_chunks"] = math.ceil(sequence_length / chunk_size)
+    final_outputs["stateful_tbptt_backward_groups"] = backward_groups
+    final_outputs["stateful_tbptt_gradient_horizon_tokens"] = min(
+        sequence_length,
+        chunk_size * detach_interval_chunks,
+    )
     if schedule_values:
         final_outputs["schedule_values"] = schedule_values
     return final_outputs
@@ -745,6 +811,25 @@ def _set_activation_checkpointing(model: Any, enabled: bool) -> None:
         model.activation_checkpointing = enabled
 
 
+def _validate_stateful_chunk_semantics(
+    model: Any,
+    stateful_tbptt: Mapping[str, int | bool],
+) -> None:
+    if not bool(stateful_tbptt["enabled"]):
+        return
+    bdre_config = getattr(model, "bdre_config", None)
+    if bdre_config is None or getattr(bdre_config, "depth_visibility_policy", None) != "full_bank":
+        return
+    train_chunk_size = int(stateful_tbptt["chunk_size"])
+    model_chunk_size = int(bdre_config.chunk_size)
+    if train_chunk_size != model_chunk_size:
+        raise ValueError(
+            "CPBC-FB requires stateful_tbptt.chunk_size to equal execution.chunk_size "
+            f"so train and full-forward evaluation share completion boundaries; got "
+            f"{train_chunk_size} and {model_chunk_size}."
+        )
+
+
 def _set_float32_matmul_precision(config: Mapping[str, Any]) -> None:
     value = config.get("float32_matmul_precision")
     if value is None:
@@ -763,6 +848,7 @@ def _wrap_distributed_model(
     find_unused_parameters: bool,
     static_graph: bool,
     gradient_as_bucket_view: bool,
+    broadcast_buffers: bool,
 ) -> Any:
     if not distributed:
         return model
@@ -777,12 +863,14 @@ def _wrap_distributed_model(
             find_unused_parameters=find_unused_parameters,
             static_graph=static_graph,
             gradient_as_bucket_view=gradient_as_bucket_view,
+            broadcast_buffers=broadcast_buffers,
         )
     return DistributedDataParallel(
         model,
         find_unused_parameters=find_unused_parameters,
         static_graph=static_graph,
         gradient_as_bucket_view=gradient_as_bucket_view,
+        broadcast_buffers=broadcast_buffers,
     )
 
 
@@ -1269,6 +1357,95 @@ def _gradient_sync_context(model: Any, *, distributed: bool, should_sync: bool):
     return nullcontext()
 
 
+def _empty_stateful_gradient_sync_stats() -> dict[str, int]:
+    return {
+        "stateful_ddp_gradient_sync_buckets": 0,
+        "stateful_ddp_global_used_parameters": 0,
+        "stateful_ddp_local_missing_parameters": 0,
+        "stateful_ddp_gradient_sync_bytes": 0,
+    }
+
+
+def _sync_stateful_ddp_gradients(model: Any, *, bucket_cap_mb: int) -> dict[str, int]:
+    if bucket_cap_mb < 1:
+        raise ValueError("stateful DDP gradient bucket size must be positive.")
+    if not dist_utils.is_initialized():
+        raise RuntimeError("stateful DDP gradient synchronization requires an initialized process group.")
+
+    parameters = [
+        parameter
+        for parameter in dist_utils.unwrap_model(model).parameters()
+        if parameter.requires_grad
+    ]
+    stats = _empty_stateful_gradient_sync_stats()
+    if not parameters:
+        return stats
+
+    mask_device = parameters[0].device
+    local_used = torch.tensor(
+        [parameter.grad is not None for parameter in parameters],
+        dtype=torch.int32,
+        device=mask_device,
+    )
+    globally_used = local_used.clone()
+    torch.distributed.all_reduce(globally_used, op=torch.distributed.ReduceOp.MAX)
+    globally_used_flags = globally_used.bool().tolist()
+    world_size = torch.distributed.get_world_size()
+    bucket_cap_bytes = int(bucket_cap_mb) * 1024 * 1024
+    bucket: list[torch.Tensor] = []
+    bucket_parameters: list[torch.nn.Parameter] = []
+    bucket_bytes = 0
+    bucket_key: tuple[torch.device, torch.dtype] | None = None
+
+    def flush_bucket() -> None:
+        nonlocal bucket, bucket_parameters, bucket_bytes, bucket_key
+        if not bucket:
+            return
+        flat = torch.cat(bucket)
+        torch.distributed.all_reduce(flat, op=torch.distributed.ReduceOp.SUM)
+        flat.div_(world_size)
+        offset = 0
+        for parameter in bucket_parameters:
+            count = parameter.numel()
+            synchronized = flat.narrow(0, offset, count).view_as(parameter)
+            if parameter.grad is None:
+                parameter.grad = synchronized.clone()
+            else:
+                parameter.grad.detach().copy_(synchronized)
+            offset += count
+        stats["stateful_ddp_gradient_sync_buckets"] += 1
+        stats["stateful_ddp_gradient_sync_bytes"] += int(flat.numel() * flat.element_size())
+        bucket = []
+        bucket_parameters = []
+        bucket_bytes = 0
+        bucket_key = None
+
+    for parameter, global_used in zip(parameters, globally_used_flags):
+        if not global_used:
+            continue
+        stats["stateful_ddp_global_used_parameters"] += 1
+        if parameter.grad is None:
+            stats["stateful_ddp_local_missing_parameters"] += 1
+            gradient = torch.zeros_like(parameter, memory_format=torch.contiguous_format)
+        else:
+            gradient = parameter.grad.detach()
+            if gradient.is_sparse:
+                raise ValueError("stateful DDP does not support sparse parameter gradients.")
+            if gradient.dtype != parameter.dtype or gradient.device != parameter.device:
+                raise ValueError("stateful DDP gradients must match their parameter dtype and device.")
+        entry = gradient.reshape(-1)
+        entry_bytes = int(entry.numel() * entry.element_size())
+        entry_key = (entry.device, entry.dtype)
+        if bucket and (entry_key != bucket_key or bucket_bytes + entry_bytes > bucket_cap_bytes):
+            flush_bucket()
+        bucket.append(entry)
+        bucket_parameters.append(parameter)
+        bucket_bytes += entry_bytes
+        bucket_key = entry_key
+    flush_bucket()
+    return stats
+
+
 def _ddp_no_sync_microbatch_count(model: Any, *, distributed: bool, gradient_accumulation_steps: int) -> int:
     if distributed and gradient_accumulation_steps > 1 and hasattr(model, "no_sync"):
         return gradient_accumulation_steps - 1
@@ -1279,6 +1456,48 @@ def _global_train_token_count(local_token_count: int, *, distributed: bool) -> i
     if distributed:
         return local_token_count * dist_utils.world_size()
     return local_token_count
+
+
+def _distributed_batch_contract(
+    config: dict[str, Any],
+    *,
+    batch_size: int,
+    gradient_accumulation_steps: int,
+    world_size: int,
+) -> dict[str, int | None]:
+    if min(batch_size, gradient_accumulation_steps, world_size) < 1:
+        raise ValueError("batch size, gradient accumulation, and world size must be positive.")
+    expected_world_size = (
+        _int_config(config, "expected_world_size", minimum=1)
+        if "expected_world_size" in config
+        else None
+    )
+    expected_global_batch_size = (
+        _int_config(config, "expected_global_batch_size", minimum=1)
+        if "expected_global_batch_size" in config
+        else None
+    )
+    local_effective_batch_size = batch_size * gradient_accumulation_steps
+    effective_batch_size = local_effective_batch_size * world_size
+    if expected_world_size is not None and world_size != expected_world_size:
+        raise ValueError(
+            f"Expected world size {expected_world_size}, but the launch provided {world_size}."
+        )
+    if expected_global_batch_size is not None and effective_batch_size != expected_global_batch_size:
+        raise ValueError(
+            "Expected global batch size "
+            f"{expected_global_batch_size}, but local batch {batch_size} x accumulation "
+            f"{gradient_accumulation_steps} x world size {world_size} = {effective_batch_size}."
+        )
+    return {
+        "local_batch_size": batch_size,
+        "gradient_accumulation_steps": gradient_accumulation_steps,
+        "world_size": world_size,
+        "local_effective_batch_size": local_effective_batch_size,
+        "effective_batch_size": effective_batch_size,
+        "expected_world_size": expected_world_size,
+        "expected_global_batch_size": expected_global_batch_size,
+    }
 
 
 def _restore_dataloader_position(loader: Any, *, data_epoch: int, microbatch_in_epoch: int) -> tuple[Any, int, int]:
@@ -1699,7 +1918,19 @@ def _stateful_tbptt_config(config: dict[str, Any]) -> dict[str, int | bool]:
     raw = dict(_mapping_config(config, "stateful_tbptt"))
     enabled = _bool_config(raw, "enabled", default=False)
     chunk_size = _int_config(raw, "chunk_size", default=8, minimum=1)
-    return {"enabled": enabled, "chunk_size": chunk_size}
+    detach_interval_chunks = _int_config(
+        raw,
+        "detach_interval_chunks",
+        default=1,
+        minimum=1,
+    )
+    gradient_sync_bucket_mb = _int_config(raw, "gradient_sync_bucket_mb", default=64, minimum=1)
+    return {
+        "enabled": enabled,
+        "chunk_size": chunk_size,
+        "detach_interval_chunks": detach_interval_chunks,
+        "gradient_sync_bucket_mb": gradient_sync_bucket_mb,
+    }
 
 
 def _data_manifest_ref(data_config: dict[str, Any], tokenized_dir: Path) -> dict[str, Any]:

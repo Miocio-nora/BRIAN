@@ -17,6 +17,7 @@ from brian_sphere_llm.train.trainer import (
     _device,
     _distributed_mean_metrics,
     _distributed_mean_scalar,
+    _distributed_batch_contract,
     _float_config,
     _forward_for_stage,
     _gradient_sync_context,
@@ -36,6 +37,7 @@ from brian_sphere_llm.train.trainer import (
     _schedule_values,
     _set_sampler_epoch,
     _stateful_tbptt_config,
+    _validate_stateful_chunk_semantics,
     _wrap_distributed_model,
     _finish_wandb,
     _init_wandb,
@@ -134,12 +136,66 @@ def test_train_config_mapping_helper_rejects_non_mapping() -> None:
 
 
 def test_stateful_tbptt_config_is_explicit_and_validated() -> None:
-    assert _stateful_tbptt_config({}) == {"enabled": False, "chunk_size": 8}
+    assert _stateful_tbptt_config({}) == {
+        "enabled": False,
+        "chunk_size": 8,
+        "detach_interval_chunks": 1,
+        "gradient_sync_bucket_mb": 64,
+    }
     assert _stateful_tbptt_config(
-        {"stateful_tbptt": {"enabled": True, "chunk_size": 16}}
-    ) == {"enabled": True, "chunk_size": 16}
+        {
+            "stateful_tbptt": {
+                "enabled": True,
+                "chunk_size": 16,
+                "detach_interval_chunks": 4,
+                "gradient_sync_bucket_mb": 32,
+            }
+        }
+    ) == {
+        "enabled": True,
+        "chunk_size": 16,
+        "detach_interval_chunks": 4,
+        "gradient_sync_bucket_mb": 32,
+    }
     with pytest.raises(ValueError, match="chunk_size"):
         _stateful_tbptt_config({"stateful_tbptt": {"enabled": True, "chunk_size": 0}})
+    with pytest.raises(ValueError, match="gradient_sync_bucket_mb"):
+        _stateful_tbptt_config(
+            {"stateful_tbptt": {"enabled": True, "gradient_sync_bucket_mb": 0}}
+        )
+    with pytest.raises(ValueError, match="detach_interval_chunks"):
+        _stateful_tbptt_config(
+            {"stateful_tbptt": {"enabled": True, "detach_interval_chunks": 0}}
+        )
+
+
+def test_cpbc_full_bank_requires_matching_train_and_eval_chunk_boundaries() -> None:
+    full_bank = types.SimpleNamespace(
+        bdre_config=types.SimpleNamespace(
+            depth_visibility_policy="full_bank",
+            chunk_size=128,
+        )
+    )
+    depth_prefix = types.SimpleNamespace(
+        bdre_config=types.SimpleNamespace(
+            depth_visibility_policy="depth_prefix",
+            chunk_size=512,
+        )
+    )
+    stateful = {
+        "enabled": True,
+        "chunk_size": 128,
+        "detach_interval_chunks": 1,
+        "gradient_sync_bucket_mb": 64,
+    }
+
+    _validate_stateful_chunk_semantics(full_bank, stateful)
+    _validate_stateful_chunk_semantics(depth_prefix, stateful)
+    with pytest.raises(ValueError, match="share completion boundaries"):
+        _validate_stateful_chunk_semantics(
+            full_bank,
+            {**stateful, "chunk_size": 64},
+        )
 
 
 def test_wandb_logging_initializes_logs_and_finishes_on_main_process(
@@ -366,6 +422,31 @@ def test_global_train_token_count_uses_world_size_for_distributed(monkeypatch: p
     assert _global_train_token_count(128, distributed=False) == 128
 
 
+def test_distributed_batch_contract_enforces_fixed_global_batch() -> None:
+    contract = _distributed_batch_contract(
+        {"expected_world_size": 2, "expected_global_batch_size": 32},
+        batch_size=16,
+        gradient_accumulation_steps=1,
+        world_size=2,
+    )
+
+    assert contract["effective_batch_size"] == 32
+    with pytest.raises(ValueError, match="Expected world size 2"):
+        _distributed_batch_contract(
+            {"expected_world_size": 2, "expected_global_batch_size": 32},
+            batch_size=32,
+            gradient_accumulation_steps=1,
+            world_size=1,
+        )
+    with pytest.raises(ValueError, match="Expected global batch size 32"):
+        _distributed_batch_contract(
+            {"expected_global_batch_size": 32},
+            batch_size=8,
+            gradient_accumulation_steps=1,
+            world_size=2,
+        )
+
+
 def test_distributed_mean_metrics_reduce_numeric_values_only(monkeypatch: pytest.MonkeyPatch) -> None:
     import brian_sphere_llm.train.trainer as trainer_module
 
@@ -576,10 +657,12 @@ def test_wrap_distributed_model_passes_find_unused_parameters(monkeypatch: pytes
         find_unused_parameters=True,
         static_graph=False,
         gradient_as_bucket_view=False,
+        broadcast_buffers=False,
     )
 
     assert wrapped.module is model
     assert captured["find_unused_parameters"] is True
+    assert captured["broadcast_buffers"] is False
 
 
 def test_train_from_config_writes_routing_report_on_checkpoint(tmp_path: Path) -> None:

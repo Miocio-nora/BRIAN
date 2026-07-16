@@ -210,23 +210,24 @@ uses its own K/V writer and per-head reader projections; fixed pre/post blocks
 retain conventional incremental KV caches. The exact implementation processes
 tokens serially and is the correctness oracle for a later approximate prefill,
 not yet a throughput-optimized replacement for the existing full-sequence
-models. A separate single-GPU stateful-TBPTT backend retains the exact forward
-cache values but detaches their autograd history at configurable token
-boundaries. Its parallelism comes from `batch_size`, not from parallel tokens
-inside one sequence. An uncontended B200 calibration at `batch_size=32` measured
+models. A separate stateful-TBPTT backend retains the exact forward cache values
+but detaches their autograd history at configurable token boundaries. Its
+parallelism comes from `batch_size`, not from parallel tokens inside one
+sequence. An uncontended B200 calibration at `batch_size=32` measured
 28.18 tok/s for 128-token sequences and 25.53 tok/s for 256-token sequences.
 TBPTT solves the full-autograd memory growth but not token-serial throughput, so
 this backend is retained as a correctness/profiling oracle and is not a formal
 5B training path.
 
-The additive `synchronous_prefix` backend now parallelizes tokens inside a
-chunk while keeping route depth serial. At reader step `l`, every token compiles
-only writer steps `s <= l`; completed chunks persist one cache per
-`(token, reader_step, reader_block)`, and the current chunk constructs the same
-causal prefix cache on the fly. Full-chunk, streamed-chunk, and one-token
-incremental execution agree under this new cache definition. Training detaches
-state between chunks, so chunk size changes the gradient horizon even though it
-does not change forward values.
+The additive `synchronous_prefix` backend is now named **Chunkwise Progressive
+Bank Completion (CPBC)**. CPBC is an approximate prefill procedure in which each
+chunk is processed in parallel across tokens while each token's cache bank is
+progressively completed over recurrent route steps. CPBC-DP uses depth-prefix
+visibility for completed history; CPBC-FB promotes completed chunks to
+full-bank depth visibility while preserving strict token causality. CPBC-FB at
+chunk size 1 matches the exact BDRE-Serial forward in the tested configuration.
+Training can retain one autograd graph across `U` chunks before detaching, with
+prepared CPBC-FB values `U=1,2,4`.
 
 The original per-query reader remains the correctness backend. An additive
 `shared_padded_explicit` backend now shares each decoded batch history across
@@ -239,7 +240,10 @@ the same comparison measures 1,468 tok/s versus 4,696 tok/s. Peak allocated
 memory falls from 108.7 GiB to 26.7 GiB. The stable batch-14/chunk-512 candidate
 measures 11,659 tok/s median with 99.4 GiB allocated and 156.1 GiB reserved. Its
 kernel-only single-GPU 5B estimate is about 5.0 days; real training remains
-slower, and the stateful trainer remains single-GPU.
+slower. Stateful CPBC DDP is now validated with rank-local caches and one manual
+gradient synchronization per optimizer step. The fixed-global-batch CPBC-FB-U4
+smoke completed on two B200s at global batch 32 and chunk 128, but its measured
+1,896 global tok/s is not sufficient for an unbounded four-arm 5B ablation.
 
 Key BDRE entrypoints:
 
@@ -257,6 +261,12 @@ configs/model/brian_r125_bdre_rckv_synchronous_prefix_shared_explicit.yaml
 configs/train/bdre_rckv_r125_5b_synchronous_prefix_b12_c512_shared_explicit_legacyval.yaml
 configs/train/bdre_rckv_r125_5b_synchronous_prefix_b14_c512_shared_explicit_legacyval.yaml
 configs/train/stage5_bdre_tiny_synchronous_prefix_debug.yaml
+configs/model/brian_r125_bdre_cpbc_dp_shared_explicit.yaml
+configs/model/brian_r125_bdre_cpbc_fb_shared_explicit.yaml
+configs/train/cpbc_r125_5b_dp_u1_c128_ddp2_legacyval.yaml
+configs/train/cpbc_r125_5b_fb_u1_c128_ddp2_legacyval.yaml
+configs/train/cpbc_r125_5b_fb_u2_c128_ddp2_legacyval.yaml
+configs/train/cpbc_r125_5b_fb_u4_c128_ddp2_legacyval.yaml
 ```
 
 Training logs include compile timing, writer-step counts, K/V compile entropy,
@@ -274,6 +284,10 @@ remaining performance limits are recorded in
 The mathematically equivalent shared-history optimization, repeated B200 A/B,
 removed negative experiments, and current candidate are recorded in
 [reports/bdre_synchronous_prefix_kernel_optimization_report.md](./reports/bdre_synchronous_prefix_kernel_optimization_report.md).
+The CPBC name, FB/DP Depth Visibility Policy, `U` gradient horizon, stateful
+DDP contract, fixed-global-batch ablation matrix, and B200 smoke results are
+recorded in
+[reports/cpbc_prefill_ddp_ablation_report.md](./reports/cpbc_prefill_ddp_ablation_report.md).
 
 ## Live Route Sphere
 
@@ -372,6 +386,14 @@ torchrun --nproc_per_node=2 scripts/train.py \
   --config configs/train/stage5_bdre_tiny_ddp2_debug.yaml
 ```
 
+Run the stateful CPBC-FB-U2 DDP smoke on two GPUs:
+
+```bash
+CUDA_VISIBLE_DEVICES=0,1 torchrun --standalone --nproc_per_node=2 \
+  scripts/train.py \
+  --config configs/train/stage5_bdre_tiny_cpbc_fb_u2_ddp2_debug.yaml
+```
+
 Calibrate the exact stateful-TBPTT reference on one GPU:
 
 ```bash
@@ -388,8 +410,11 @@ CUDA_VISIBLE_DEVICES=<gpu> PYTHONPATH=src:. python scripts/benchmark_bdre_tbptt.
   --warmup-steps 1 --repeats 20
 ```
 
-Stateful TBPTT execution, including the synchronous-prefix backend, currently
-supports one GPU only. Do not launch these configs with `torchrun`.
+Stateful TBPTT and CPBC support DDP. Cache state remains rank-local; all chunk
+forwards run under `no_sync()`, then dense gradients are averaged once per
+optimizer step with rank-local unused parameters handled explicitly. CPBC
+ablation configs enforce `expected_world_size: 2` and
+`expected_global_batch_size: 32` so an incorrect launch fails before training.
 
 For multi-GPU jobs, launch the same training entrypoint with `torchrun`; the trainer reads `WORLD_SIZE`, `RANK`, and `LOCAL_RANK`, uses a distributed train sampler, wraps the model with DDP, applies `no_sync()` during accumulated non-final microbatches, records train token throughput in global-token units while retaining `local_*` token diagnostics, averages train loss/routing scalars across ranks, and writes checkpoints/reports only from rank 0:
 

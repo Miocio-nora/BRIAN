@@ -1,0 +1,5 @@
+extends: brian_tiny_bdre_rckv_synchronous_prefix.yaml
+model_name: brian_tiny_bdre_cpbc_fb
+
+execution:
+  depth_visibility_policy: full_bank

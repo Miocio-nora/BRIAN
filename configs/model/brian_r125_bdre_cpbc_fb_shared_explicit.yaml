@@ -1,0 +1,6 @@
+extends: brian_r125_bdre_rckv_synchronous_prefix_shared_explicit.yaml
+model_name: brian_r125_bdre_cpbc_fb_shared_explicit
+
+execution:
+  chunk_size: 128
+  depth_visibility_policy: full_bank

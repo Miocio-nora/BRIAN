@@ -1,0 +1,31 @@
+extends: stage5_bdre_tiny_synchronous_prefix_debug.yaml
+run_name: stage5_bdre_tiny_synchronous_prefix_ddp2_debug
+output_root: tmp/runs_stateful_ddp_smoke
+
+batch_size: 2
+gradient_accumulation_steps: 2
+expected_world_size: 2
+expected_global_batch_size: 8
+max_steps: 3
+eval_interval: 1
+save_interval: 3
+
+ddp_find_unused_parameters: false
+ddp_broadcast_buffers: false
+
+stateful_tbptt:
+  enabled: true
+  chunk_size: 8
+  gradient_sync_bucket_mb: 16
+
+routing:
+  summary_interval: 0
+
+terminal_dashboard:
+  enabled: false
+
+post_train_benchmarks:
+  enabled: false
+
+wandb:
+  enabled: false

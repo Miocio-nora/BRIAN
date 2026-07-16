@@ -67,6 +67,7 @@ def _synchronous_config(
     *,
     chunk_size: int = 8,
     attention_backend: str = "per_query_reference",
+    depth_visibility_policy: str = "depth_prefix",
 ) -> BDREConfig:
     return replace(
         _config(
@@ -76,6 +77,7 @@ def _synchronous_config(
             chunk_size=chunk_size,
         ),
         synchronous_attention_backend=attention_backend,
+        depth_visibility_policy=depth_visibility_policy,
     )
 
 
@@ -469,9 +471,99 @@ def test_synchronous_prefix_is_chunk_boundary_and_incremental_invariant(attentio
     assert torch.allclose(full_logits, torch.cat(incremental_logits, dim=1), atol=2e-5, rtol=2e-5)
 
 
-def test_synchronous_prefix_is_suffix_invariant() -> None:
+@pytest.mark.parametrize("attention_backend", ["per_query_reference", "shared_padded_explicit"])
+def test_cpbc_full_bank_chunk_one_matches_exact_token_serial(attention_backend: str) -> None:
+    torch.manual_seed(55)
+    serial_config = replace(
+        _config(
+            depth_mode="reader_step",
+            reader_step_cache="eager",
+            execution_mode="token_by_token",
+        ),
+        step_lambda=0.25,
+        normalize_step_distance=True,
+    )
+    cpbc_config = _synchronous_config(
+        chunk_size=1,
+        attention_backend=attention_backend,
+        depth_visibility_policy="full_bank",
+    )
+    serial = BrianBDRERouteCore(serial_config).eval()
+    cpbc = BrianBDRERouteCore(cpbc_config).eval()
+    cpbc.load_state_dict(serial.state_dict())
+    input_ids = torch.randint(0, 64, (3, 7))
+
+    with torch.no_grad():
+        serial_logits = serial(input_ids, route_mode="fixed", pseudo_policy="sequential")["logits"]
+        cpbc_logits = cpbc(input_ids, route_mode="fixed", pseudo_policy="sequential")["logits"]
+
+    assert torch.allclose(serial_logits, cpbc_logits, atol=2e-5, rtol=2e-5)
+
+
+def test_cpbc_depth_visibility_policies_share_current_chunk_and_diverge_on_history() -> None:
+    torch.manual_seed(57)
+    depth_prefix = BrianBDRERouteCore(
+        _synchronous_config(chunk_size=2, depth_visibility_policy="depth_prefix")
+    ).eval()
+    full_bank = BrianBDRERouteCore(
+        _synchronous_config(chunk_size=2, depth_visibility_policy="full_bank")
+    ).eval()
+    full_bank.load_state_dict(depth_prefix.state_dict())
+    input_ids = torch.randint(0, 64, (3, 6))
+
+    with torch.no_grad():
+        depth_prefix_logits = depth_prefix(
+            input_ids,
+            route_mode="fixed",
+            pseudo_policy="sequential",
+        )["logits"]
+        full_bank_logits = full_bank(
+            input_ids,
+            route_mode="fixed",
+            pseudo_policy="sequential",
+        )["logits"]
+
+    assert torch.allclose(depth_prefix_logits[:, :2], full_bank_logits[:, :2], atol=2e-5, rtol=2e-5)
+    assert not torch.allclose(depth_prefix_logits[:, 2:], full_bank_logits[:, 2:], atol=2e-5, rtol=2e-5)
+
+
+def test_cpbc_full_bank_full_and_streamed_forward_match_at_same_chunk_boundaries() -> None:
+    torch.manual_seed(58)
+    config = _synchronous_config(
+        chunk_size=2,
+        depth_visibility_policy="full_bank",
+    )
+    full = BrianBDRERouteCore(config).eval()
+    streamed = BrianBDRERouteCore(config).eval()
+    streamed.load_state_dict(full.state_dict())
+    input_ids = torch.randint(0, 64, (3, 6))
+
+    with torch.no_grad():
+        full_logits = full(input_ids, route_mode="fixed", pseudo_policy="sequential")["logits"]
+        state = None
+        streamed_logits = []
+        for start in range(0, input_ids.size(1), 2):
+            output = streamed.forward_stream_chunk(
+                input_ids[:, start : start + 2],
+                state,
+                route_mode="fixed",
+                pseudo_policy="sequential",
+            )
+            state = output["incremental_state"]
+            streamed_logits.append(output["logits"])
+
+    assert torch.allclose(full_logits, torch.cat(streamed_logits, dim=1), atol=2e-5, rtol=2e-5)
+
+
+@pytest.mark.parametrize("depth_visibility_policy", ["depth_prefix", "full_bank"])
+def test_synchronous_prefix_is_suffix_invariant(depth_visibility_policy: str) -> None:
     torch.manual_seed(59)
-    model = BrianBDRERouteCore(_synchronous_config(chunk_size=8)).eval()
+    model = BrianBDRERouteCore(
+        _synchronous_config(
+            chunk_size=8,
+            depth_visibility_policy=depth_visibility_policy,
+        )
+    ).eval()
     first = torch.tensor([[1, 2, 3, 4, 5, 6]])
     second = torch.tensor([[1, 2, 3, 22, 23, 24]])
     with torch.no_grad():

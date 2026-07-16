@@ -7,6 +7,11 @@ training backend because token-serial throughput is not viable
 
 **Branch:** `bdre-stateful-tbptt`
 
+**Follow-up:** stateful DDP and configurable detach intervals across multiple
+chunks are now implemented and validated. See
+`reports/cpbc_prefill_ddp_ablation_report.md`. The token-serial throughput
+decision in this report remains unchanged.
+
 ## 1. Scope
 
 This work adds a single-GPU training backend for exact token-serial BDRE
@@ -96,9 +101,9 @@ default for old model configs. Only the new optimized model config enables
 - Incremental cache objects are runtime-only and are not checkpoint payloads.
 - Existing exact `forward()` and evaluation continue to use full token-serial
   semantics without gradient truncation.
-- Stateful TBPTT currently rejects distributed execution. Dynamic routed DDP
-  requires separate treatment of parameters used only in non-final `no_sync`
-  chunks.
+- Stateful DDP now keeps cache state rank-local and explicitly synchronizes
+  globally used gradients after the complete optimizer-step accumulation,
+  including parameters used on only one rank.
 - The optimizer is never updated while a sequence still depends on KV values
   produced by the current parameter version.
 
