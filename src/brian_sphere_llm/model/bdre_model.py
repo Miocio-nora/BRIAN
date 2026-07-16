@@ -34,6 +34,11 @@ from brian_sphere_llm.model.brian_model import (
     _zero_loss_like,
 )
 from brian_sphere_llm.model.llama_backbone import apply_rotary, build_causal_lm_loss, count_parameters
+from brian_sphere_llm.model.bdre_triton_reader import (
+    build_compact_reader_metadata,
+    triton_compact_reader,
+    triton_reader_available,
+)
 from brian_sphere_llm.routing.metrics import summarize_routes
 
 try:
@@ -394,6 +399,7 @@ class BDREConfig:
     decoded_key_rope_mode: str = "eager"
     writer_projection_mode: str = "staged"
     route_pointwise_mode: str = "eager"
+    reader_kernel_mode: str = "flex"
     prefix_compile_mode: str = "recompute"
     depth_visibility_policy: str = "depth_prefix"
     full_bank_compile_mode: str = "loop"
@@ -469,6 +475,7 @@ class BDREConfig:
             decoded_key_rope_mode=str(execution.get("decoded_key_rope", "eager")),
             writer_projection_mode=str(execution.get("writer_projection", "staged")),
             route_pointwise_mode=str(execution.get("route_pointwise", "eager")),
+            reader_kernel_mode=str(execution.get("reader_kernel", "flex")),
             prefix_compile_mode=str(execution.get("prefix_compile", "recompute")),
             depth_visibility_policy=str(
                 execution.get("depth_visibility_policy", "depth_prefix")
@@ -537,6 +544,8 @@ class BDREConfig:
             )
         if self.route_pointwise_mode not in {"eager", "compiled"}:
             raise ValueError("BDRE execution.route_pointwise must be 'eager' or 'compiled'.")
+        if self.reader_kernel_mode not in {"flex", "triton_fused"}:
+            raise ValueError("BDRE execution.reader_kernel must be 'flex' or 'triton_fused'.")
         if self.prefix_compile_mode not in {"recompute", "incremental_exact"}:
             raise ValueError(
                 "BDRE execution.prefix_compile must be 'recompute' or 'incremental_exact'."
@@ -607,6 +616,15 @@ class BDREConfig:
             raise ValueError(
                 "Static grouped_mm_gpu BlockMask dispatch requires one reader group "
                 "covering route_pool_blocks."
+            )
+        if self.reader_kernel_mode == "triton_fused" and (
+            self.dispatch_mode != "grouped_mm_gpu"
+            or self.synchronous_attention_backend != "shared_padded_flex_blockmask"
+            or self.flex_reader_group_size != self.route.route_pool_blocks
+        ):
+            raise ValueError(
+                "The Triton fused reader requires static grouped_mm_gpu BlockMask dispatch "
+                "covering all route blocks."
             )
         if not self.position_geometry_normalize:
             raise ValueError("BDRE v1 requires normalized position geometry.")
@@ -2257,6 +2275,18 @@ class BrianBDRERouteCore(BrianRouteCore):
             self.bdre_config.synchronous_attention_backend == "shared_padded_flex_blockmask"
             and self.bdre_config.dispatch_mode == "grouped_mm_gpu"
         ):
+            if self.bdre_config.reader_kernel_mode == "triton_fused":
+                return self._read_synchronous_prefix_grouped_mm_triton(
+                    routed_input,
+                    query,
+                    dispatch=dispatch,
+                    chunk=chunk,
+                    start_position=start_position,
+                    reader_step=reader_step,
+                    historical_state=historical_state,
+                    current_keys=current_keys,
+                    current_values=current_values,
+                )
             return self._read_synchronous_prefix_grouped_mm_static_blockmask(
                 routed_input,
                 query,
@@ -2601,6 +2631,95 @@ class BrianBDRERouteCore(BrianRouteCore):
             dispatch.valid.view(-1, 1, 1),
             attended,
             torch.zeros_like(attended),
+        )
+        return attended.reshape(routed_input.size(0), -1).to(dtype=routed_input.dtype)
+
+    def _read_synchronous_prefix_grouped_mm_triton(
+        self,
+        routed_input: torch.Tensor,
+        query: torch.Tensor,
+        *,
+        dispatch: _SynchronousGroupedMMDispatch,
+        chunk: int,
+        start_position: int,
+        reader_step: int,
+        historical_state: BDRECacheState,
+        current_keys: torch.Tensor,
+        current_values: torch.Tensor,
+    ) -> torch.Tensor:
+        """Read compact routed queries without materializing decoded Keys."""
+
+        if dispatch.valid is None or not triton_reader_available():
+            raise RuntimeError("The fused Triton reader requires CUDA Triton dispatch.")
+        if query.dtype != torch.bfloat16 or not query.is_cuda:
+            # Training executes this reader under BF16 autocast. Evaluation keeps
+            # the repository's existing FP32 contract, so use the exact static
+            # Flex path instead of silently reducing evaluation precision.
+            return self._read_synchronous_prefix_grouped_mm_static_blockmask(
+                routed_input,
+                query,
+                dispatch=dispatch,
+                chunk=chunk,
+                start_position=start_position,
+                reader_step=reader_step,
+                historical_state=historical_state,
+                current_keys=current_keys,
+                current_values=current_values,
+            )
+        attention = self.route_blocks[0].block.attn
+        batch = current_keys.size(0)
+        readers = self.config.route_pool_blocks
+        key_parts: list[torch.Tensor] = []
+        value_parts: list[torch.Tensor] = []
+        if start_position:
+            if historical_state.step_keys is None or historical_state.step_values is None:
+                raise ValueError("Synchronous-prefix history is missing step cache tensors.")
+            key_parts.append(
+                historical_state.step_keys[:, :, reader_step, :, :].permute(2, 0, 1, 3)
+            )
+            value_parts.append(
+                historical_state.step_values[:, :, reader_step, :, :].permute(2, 0, 1, 3)
+            )
+        key_parts.append(current_keys.permute(2, 0, 1, 3))
+        value_parts.append(current_values.permute(2, 0, 1, 3))
+        key_codes = torch.cat(key_parts, dim=2)
+        value_codes = torch.cat(value_parts, dim=2)
+        key_read = torch.stack([projection.key_read for projection in self.bdre_projections]).to(
+            dtype=query.dtype
+        )
+        value_read = torch.stack(
+            [projection.value_read for projection in self.bdre_projections]
+        ).to(dtype=query.dtype)
+        metadata = build_compact_reader_metadata(
+            sorted_actions=dispatch.actions,
+            sorted_indexes=dispatch.indexes,
+            valid=dispatch.valid,
+            batch=batch,
+            chunk=chunk,
+            readers=readers,
+            block_m=64,
+        )
+        attended = triton_compact_reader(
+            query,
+            key_codes,
+            value_codes,
+            key_read,
+            value_read,
+            attention.rope.cos[:, :, : key_codes.size(2), :].to(
+                device=query.device,
+                dtype=query.dtype,
+            ),
+            attention.rope.sin[:, :, : key_codes.size(2), :].to(
+                device=query.device,
+                dtype=query.dtype,
+            ),
+            dispatch.indexes,
+            metadata,
+            batch=batch,
+            chunk=chunk,
+            start_position=start_position,
+            block_m=64,
+            block_n=32,
         )
         return attended.reshape(routed_input.size(0), -1).to(dtype=routed_input.dtype)
 

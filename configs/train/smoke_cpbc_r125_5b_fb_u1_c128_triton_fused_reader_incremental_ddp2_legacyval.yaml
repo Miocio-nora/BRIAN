@@ -1,0 +1,33 @@
+extends: cpbc_r125_5b_fb_u1_c128_triton_fused_reader_incremental_ddp2_legacyval.yaml
+run_name: smoke_cpbc_r125_5b_fb_u1_c128_triton_fused_reader_incremental_ddp2_legacyval
+output_root: tmp/runs_cpbc_fb_triton_fused_reader_c128_ddp2_smoke
+
+max_steps: 5
+eval_interval: 5
+eval_max_batches: 1
+save_interval: 5
+save_best_checkpoint: false
+
+checkpoint_retention:
+  enabled: false
+
+checkpoint_benchmarks:
+  enabled: false
+
+post_train_benchmarks:
+  enabled: false
+
+route_path_visualization:
+  enabled: false
+
+router_space_visualization:
+  enabled: false
+
+bdre_cache_visualization:
+  enabled: false
+
+terminal_dashboard:
+  enabled: false
+
+wandb:
+  enabled: false

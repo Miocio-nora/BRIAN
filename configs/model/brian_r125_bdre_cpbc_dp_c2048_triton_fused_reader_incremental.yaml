@@ -1,0 +1,5 @@
+extends: brian_r125_bdre_cpbc_dp_c2048_grouped_mm_gpu_static_blockmask_incremental.yaml
+model_name: brian_r125_bdre_cpbc_dp_c2048_triton_fused_reader_incremental
+
+execution:
+  reader_kernel: triton_fused
