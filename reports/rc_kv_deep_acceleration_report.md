@@ -2,6 +2,11 @@
 
 Date: 2026-07-16
 
+Follow-up: the exact fused reader, vectorized FB compiler, and DP-C2048
+measurements are documented in
+[`rc_kv_exact_fused_reader_report.md`](./rc_kv_exact_fused_reader_report.md).
+This report remains the accepted grouped-MM reference.
+
 ## 1. Scope and Safety
 
 This work accelerates the existing CPBC-DP RC-KV training implementation. It

@@ -301,6 +301,111 @@ class BDRECompiler(ModuleBase):
             torch.stack([output.values for output in outputs], dim=1),
         )
 
+    def compile_all_reader_steps_vectorized(
+        self,
+        writer_keys: torch.Tensor,
+        writer_values: torch.Tensor,
+        writer_blocks: torch.Tensor,
+        writer_valid: torch.Tensor,
+        block_positions: torch.Tensor,
+        *,
+        collect_metrics: bool = True,
+    ) -> tuple[BDRECompileOutput, ...]:
+        """Compile every reader depth in one batched, full-bank operation."""
+
+        if writer_keys.dim() != 3 or writer_values.dim() != 3:
+            raise ValueError("BDRE writer codes must have shape [batch, steps, code_dim].")
+        if writer_blocks.shape != writer_valid.shape or writer_blocks.shape != writer_keys.shape[:2]:
+            raise ValueError("BDRE writer block and validity tensors must match [batch, steps].")
+        if writer_keys.size(1) > self.max_route_steps:
+            raise ValueError("BDRE writer history exceeds max_route_steps.")
+        if not bool(writer_valid.any(dim=-1).all()):
+            raise ValueError("Every full-bank token must have at least one valid writer.")
+
+        normalized_positions = F.normalize(block_positions, dim=-1)
+        safe_blocks = writer_blocks.clamp(min=0, max=normalized_positions.size(0) - 1)
+        writer_positions = F.embedding(safe_blocks, normalized_positions)
+        base_scores = self.position_tau * torch.einsum(
+            "rp,bsp->brs",
+            normalized_positions,
+            writer_positions,
+        )
+        reader_steps = torch.arange(
+            self.max_route_steps,
+            device=writer_keys.device,
+            dtype=base_scores.dtype,
+        )
+        writer_steps = torch.arange(
+            writer_keys.size(1),
+            device=writer_keys.device,
+            dtype=base_scores.dtype,
+        )
+        scores = base_scores.unsqueeze(1).expand(-1, self.max_route_steps, -1, -1)
+        if self.step_lambda != 0.0:
+            distance = (reader_steps[:, None] - writer_steps[None, :]).abs()
+            if self.normalize_step_distance and self.max_route_steps > 1:
+                distance = distance / float(self.max_route_steps - 1)
+            scores = scores - self.step_lambda * distance.view(
+                1,
+                self.max_route_steps,
+                1,
+                writer_keys.size(1),
+            )
+        if self.late_step_weight != 0.0:
+            late = (writer_steps + 1.0) / float(self.max_route_steps)
+            scores = scores + self.late_step_weight * late.view(
+                1,
+                1,
+                1,
+                writer_keys.size(1),
+            )
+
+        batch = writer_keys.size(0)
+        readers = normalized_positions.size(0)
+        flat_scores = scores.reshape(batch * self.max_route_steps, readers, writer_keys.size(1))
+        flat_valid = writer_valid[:, None, :].expand(
+            -1,
+            self.max_route_steps,
+            -1,
+        ).reshape(batch * self.max_route_steps, writer_keys.size(1))
+        flat_support = self._support_mask(flat_scores, flat_valid)
+        key_weights = self._weights(
+            flat_scores,
+            flat_support,
+            self.key_temperature,
+        ).view(batch, self.max_route_steps, readers, writer_keys.size(1))
+        value_weights = self._weights(
+            flat_scores,
+            flat_support,
+            self.value_temperature,
+        ).view(batch, self.max_route_steps, readers, writer_keys.size(1))
+        support = flat_support.view(batch, self.max_route_steps, readers, writer_keys.size(1))
+        keys = torch.einsum("blrs,bsk->blrk", key_weights.to(writer_keys.dtype), writer_keys)
+        values = torch.einsum("blrs,bsv->blrv", value_weights.to(writer_values.dtype), writer_values)
+
+        outputs: list[BDRECompileOutput] = []
+        for reader_step in range(self.max_route_steps):
+            metrics = (
+                self._metrics(
+                    key_weights[:, reader_step],
+                    value_weights[:, reader_step],
+                    writer_valid,
+                    support[:, reader_step],
+                )
+                if collect_metrics
+                else {}
+            )
+            outputs.append(
+                BDRECompileOutput(
+                    keys[:, reader_step],
+                    values[:, reader_step],
+                    key_weights[:, reader_step],
+                    value_weights[:, reader_step],
+                    metrics,
+                )
+            )
+        return tuple(outputs)
+
     def compile_history_for_reader(
         self,
         writer_keys: torch.Tensor,

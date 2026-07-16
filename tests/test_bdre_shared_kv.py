@@ -83,6 +83,28 @@ def _synchronous_config(
     )
 
 
+def _cuda_flex_synchronous_config(
+    *,
+    chunk_size: int = 8,
+    depth_visibility_policy: str = "depth_prefix",
+    flex_reader_group_size: int = 2,
+) -> BDREConfig:
+    config = _synchronous_config(
+        chunk_size=chunk_size,
+        attention_backend="shared_padded_flex",
+        depth_visibility_policy=depth_visibility_policy,
+        dispatch_mode="grouped_mm",
+    )
+    base = replace(config.route.base, d_model=64, n_heads=4)
+    return replace(
+        config,
+        route=replace(config.route, base=base),
+        key_dim=16,
+        value_dim=16,
+        flex_reader_group_size=flex_reader_group_size,
+    )
+
+
 def test_spherical_code_matches_in_internal_out_gram_contract() -> None:
     table = BlockPositionTable(8, 64, mode="spherical_code", independent_input_position=True)
     points = torch.cat(
@@ -139,6 +161,66 @@ def test_bdre_compiler_emits_one_pair_per_reader_and_cache_per_token() -> None:
     assert stacked_key.shape == (2, 2, 3, 5)
     assert stacked_value.shape == (2, 2, 3, 7)
     assert state.tokens == 2
+
+
+def test_vectorized_full_bank_compile_matches_reader_step_loop_and_gradients() -> None:
+    compiler = BDRECompiler(
+        max_route_steps=4,
+        key_temperature=0.5,
+        value_temperature=1.0,
+        position_tau=0.8,
+        step_lambda=0.3,
+        normalize_step_distance=True,
+        late_step_weight=0.1,
+    )
+    writer_blocks = torch.tensor([[0, 1, 2, 0], [2, 1, 0, 1]])
+    writer_valid = torch.tensor([[True, True, True, False], [True, True, True, True]])
+
+    def run(vectorized: bool) -> tuple[list[torch.Tensor], tuple[torch.Tensor, ...]]:
+        writer_keys = torch.randn(2, 4, 5, requires_grad=True)
+        writer_values = torch.randn(2, 4, 7, requires_grad=True)
+        positions = torch.randn(3, 6, requires_grad=True)
+        if vectorized:
+            outputs = compiler.compile_all_reader_steps_vectorized(
+                writer_keys,
+                writer_values,
+                writer_blocks,
+                writer_valid,
+                positions,
+                collect_metrics=False,
+            )
+        else:
+            outputs = tuple(
+                compiler.compile(
+                    writer_keys,
+                    writer_values,
+                    writer_blocks,
+                    writer_valid,
+                    positions,
+                    reader_step=step,
+                    collect_metrics=False,
+                )
+                for step in range(4)
+            )
+        tensors = [
+            torch.stack([output.keys for output in outputs]),
+            torch.stack([output.values for output in outputs]),
+            torch.stack([output.key_weights for output in outputs]),
+            torch.stack([output.value_weights for output in outputs]),
+        ]
+        loss = sum(tensor.square().mean() for tensor in tensors)
+        gradients = torch.autograd.grad(loss, (writer_keys, writer_values, positions))
+        return tensors, gradients
+
+    torch.manual_seed(13)
+    loop_tensors, loop_gradients = run(False)
+    torch.manual_seed(13)
+    vectorized_tensors, vectorized_gradients = run(True)
+
+    for loop_tensor, vectorized_tensor in zip(loop_tensors, vectorized_tensors):
+        assert torch.allclose(loop_tensor, vectorized_tensor, atol=1e-6, rtol=1e-6)
+    for loop_gradient, vectorized_gradient in zip(loop_gradients, vectorized_gradients):
+        assert torch.allclose(loop_gradient, vectorized_gradient, atol=2e-6, rtol=2e-6)
 
 
 def test_bdre_hard_topk_and_temperatures_are_effective_and_differentiable() -> None:
@@ -703,6 +785,130 @@ def test_grouped_mm_dispatch_matches_grouped_host_outputs_and_gradients() -> Non
         assert torch.allclose(reference_parameter.grad, grouped_parameter.grad, atol=2e-5, rtol=2e-5)
 
 
+def test_flex_reader_cpu_fallback_matches_explicit_reader() -> None:
+    torch.manual_seed(70)
+    explicit = BrianBDRERouteCore(
+        _synchronous_config(
+            chunk_size=8,
+            attention_backend="shared_padded_explicit",
+            dispatch_mode="grouped_mm",
+        )
+    ).train()
+    flex = BrianBDRERouteCore(
+        _synchronous_config(
+            chunk_size=8,
+            attention_backend="shared_padded_flex",
+            dispatch_mode="grouped_mm",
+        )
+    ).train()
+    flex.load_state_dict(explicit.state_dict())
+    input_ids = torch.randint(0, 64, (3, 7))
+
+    explicit_output = explicit(
+        input_ids,
+        targets=input_ids,
+        route_mode="fixed",
+        pseudo_policy="sequential",
+    )
+    flex_output = flex(
+        input_ids,
+        targets=input_ids,
+        route_mode="fixed",
+        pseudo_policy="sequential",
+    )
+    explicit_output["loss"].backward()
+    flex_output["loss"].backward()
+
+    assert torch.equal(explicit_output["logits"], flex_output["logits"])
+    assert torch.equal(explicit_output["loss"], flex_output["loss"])
+    assert torch.equal(
+        explicit.bdre_projections[0].key_read.grad,
+        flex.bdre_projections[0].key_read.grad,
+    )
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is required")
+def test_flex_reader_cuda_bf16_matches_explicit_reader_within_rounding() -> None:
+    torch.manual_seed(71)
+    flex_config = _cuda_flex_synchronous_config(chunk_size=4)
+    explicit = BrianBDRERouteCore(
+        replace(
+            flex_config,
+            synchronous_attention_backend="shared_padded_explicit",
+            flex_reader_group_size=1,
+        )
+    ).cuda().train()
+    flex = BrianBDRERouteCore(flex_config).cuda().train()
+    flex.load_state_dict(explicit.state_dict())
+    input_ids = torch.randint(0, 64, (2, 4), device="cuda")
+
+    with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+        explicit_output = explicit(
+            input_ids,
+            targets=input_ids,
+            route_mode="fixed",
+            pseudo_policy="sequential",
+        )
+        flex_output = flex(
+            input_ids,
+            targets=input_ids,
+            route_mode="fixed",
+            pseudo_policy="sequential",
+        )
+    explicit_output["loss"].backward()
+    flex_output["loss"].backward()
+
+    logit_diff = (explicit_output["logits"].float() - flex_output["logits"].float()).abs()
+    assert logit_diff.max().item() <= 0.15
+    assert logit_diff.mean().item() <= 0.03
+    assert torch.allclose(explicit_output["loss"], flex_output["loss"], atol=2e-3, rtol=2e-3)
+    for explicit_parameter, flex_parameter in (
+        (explicit.token_embedding.weight, flex.token_embedding.weight),
+        (explicit.bdre_projections[0].key_read, flex.bdre_projections[0].key_read),
+        (explicit.bdre_projections[0].value_read, flex.bdre_projections[0].value_read),
+    ):
+        assert explicit_parameter.grad is not None and flex_parameter.grad is not None
+        assert torch.allclose(explicit_parameter.grad, flex_parameter.grad, atol=2e-2, rtol=2e-2)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is required")
+@pytest.mark.parametrize("depth_visibility_policy", ["depth_prefix", "full_bank"])
+def test_flex_reader_cuda_is_suffix_invariant_and_stream_consistent(
+    depth_visibility_policy: str,
+) -> None:
+    torch.manual_seed(72)
+    config = _cuda_flex_synchronous_config(
+        chunk_size=4,
+        depth_visibility_policy=depth_visibility_policy,
+    )
+    full = BrianBDRERouteCore(config).cuda().eval()
+    streamed = BrianBDRERouteCore(config).cuda().eval()
+    streamed.load_state_dict(full.state_dict())
+    prefix = torch.tensor([[1, 2, 3, 4], [4, 3, 2, 1]], device="cuda")
+    suffix_a = torch.tensor([[5, 6, 7, 8], [8, 7, 6, 5]], device="cuda")
+    suffix_b = torch.tensor([[9, 10, 11, 12], [12, 11, 10, 9]], device="cuda")
+    input_a = torch.cat((prefix, suffix_a), dim=1)
+    input_b = torch.cat((prefix, suffix_b), dim=1)
+
+    with torch.no_grad(), torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+        logits_a = full(input_a, route_mode="fixed", pseudo_policy="sequential")["logits"]
+        logits_b = full(input_b, route_mode="fixed", pseudo_policy="sequential")["logits"]
+        state = None
+        stream_parts = []
+        for start in range(0, input_a.size(1), 4):
+            output = streamed.forward_stream_chunk(
+                input_a[:, start : start + 4],
+                state,
+                route_mode="fixed",
+                pseudo_policy="sequential",
+            )
+            state = output["incremental_state"]
+            stream_parts.append(output["logits"])
+
+    assert torch.equal(logits_a[:, : prefix.size(1)], logits_b[:, : prefix.size(1)])
+    assert torch.allclose(logits_a, torch.cat(stream_parts, dim=1), atol=2e-2, rtol=2e-2)
+
+
 def test_synchronous_prefix_visualization_masks_future_writer_steps() -> None:
     model = BrianBDRERouteCore(_synchronous_config(chunk_size=4)).eval()
     with torch.no_grad():
@@ -802,6 +1008,20 @@ def test_bdre_rejects_top2_without_touching_legacy_config() -> None:
     config = _config()
     with pytest.raises(ValueError, match="top_k=later_top_k=1"):
         replace(config, route=replace(config.route, later_top_k=2)).validate()
+
+
+def test_bdre_rejects_invalid_fused_reader_and_full_bank_execution_options() -> None:
+    config = _synchronous_config(attention_backend="shared_padded_flex")
+    with pytest.raises(ValueError, match="cannot exceed route_pool_blocks"):
+        replace(config, flex_reader_group_size=3).validate()
+    with pytest.raises(ValueError, match="requires shared_padded_flex"):
+        replace(
+            config,
+            synchronous_attention_backend="shared_padded_explicit",
+            flex_reader_group_size=2,
+        ).validate()
+    with pytest.raises(ValueError, match="requires full_bank"):
+        replace(config, full_bank_compile_mode="vectorized").validate()
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is required")

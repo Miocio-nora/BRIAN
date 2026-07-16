@@ -263,6 +263,19 @@ global tok/s after warmup, reducing the pure 5B estimate to about 1.95 days.
 The full routing summary is recorded every 10 steps; the detached terminal
 route animation can still update every step.
 
+An additional exact fused-reader execution path now combines Key decoding,
+decoded-Key RoPE, causal attention over compressed Values, and the per-head
+Value read in a compiled FlexAttention graph. It is the same RC-KV model, not a
+new version. Reader calls can be batched with a bounded group size, while
+CPBC-FB can compile all completed reader depths in one vectorized operation.
+On one B200 at BS16/T2048, DP-C512 reaches 19,139 tok/s with 24,742 MiB peak
+allocated; DP-C2048 reaches 23,246 tok/s with 66,011 MiB. The C2048 DDP2 smoke
+reached 45.4-45.6k global tok/s after compilation. FB-C128 reaches 9,013 tok/s,
+over 10x its historical implementation. For identical route decisions,
+CPBC-DP cache/attention values are chunk-boundary invariant. C2048 still changes
+the U1 gradient horizon from 512 to 2,048 tokens, and stochastic routing consumes
+RNG in different tensor groupings, so it is not an identical training trajectory.
+
 Key BDRE entrypoints:
 
 ```text
@@ -282,11 +295,16 @@ configs/train/stage5_bdre_tiny_synchronous_prefix_debug.yaml
 configs/model/brian_r125_bdre_cpbc_dp_shared_explicit.yaml
 configs/model/brian_r125_bdre_cpbc_dp_c512_shared_explicit.yaml
 configs/model/brian_r125_bdre_cpbc_dp_c512_grouped_mm.yaml
+configs/model/brian_r125_bdre_cpbc_dp_c512_grouped_mm_flex.yaml
+configs/model/brian_r125_bdre_cpbc_dp_c2048_grouped_mm_flex.yaml
 configs/model/brian_r125_bdre_cpbc_fb_shared_explicit.yaml
+configs/model/brian_r125_bdre_cpbc_fb_c128_grouped_mm_flex.yaml
 configs/train/baseline_r125_5b_balanced_ddp2_legacyval.yaml
 configs/train/cpbc_r125_5b_dp_u1_c128_ddp2_legacyval.yaml
 configs/train/cpbc_r125_5b_dp_u1_c512_ddp2_legacyval.yaml
 configs/train/cpbc_r125_5b_dp_u1_c512_grouped_mm_ddp2_legacyval.yaml
+configs/train/cpbc_r125_5b_dp_u1_c2048_grouped_mm_flex_ddp2_legacyval.yaml
+configs/train/cpbc_r125_5b_fb_u1_c128_grouped_mm_flex_ddp2_legacyval.yaml
 configs/train/smoke_cpbc_r125_5b_dp_u1_c512_grouped_mm_ddp2_legacyval.yaml
 configs/train/cpbc_r125_5b_dp_u1_c512_ddp4_legacyval.yaml
 configs/train/cpbc_r125_5b_fb_u1_c128_ddp2_legacyval.yaml
@@ -316,6 +334,9 @@ recorded in
 The grouped-MM implementation, profiler evidence, rejected full-reader fusion,
 and final B200/DDP2 acceptance are recorded in
 [reports/rc_kv_deep_acceleration_report.md](./reports/rc_kv_deep_acceleration_report.md).
+The exact fused reader, vectorized FB compiler, large-chunk DP measurements,
+negative reader-grouping results, and current DDP2 acceptance are recorded in
+[reports/rc_kv_exact_fused_reader_report.md](./reports/rc_kv_exact_fused_reader_report.md).
 
 ## Live Route Sphere
 
@@ -468,6 +489,15 @@ PYTHONPATH=src:. \
 python -m torch.distributed.run --standalone --nproc_per_node=2 \
   scripts/train.py \
   --config configs/train/smoke_cpbc_r125_5b_dp_u1_c512_grouped_mm_ddp2_legacyval.yaml
+```
+
+Run the prepared large-chunk DP configuration on two B200s:
+
+```bash
+CUDA_VISIBLE_DEVICES=0,1 PYTHONPATH=src:. \
+python -m torch.distributed.run --standalone --nproc_per_node=2 \
+  scripts/train.py \
+  --config configs/train/cpbc_r125_5b_dp_u1_c2048_grouped_mm_flex_ddp2_legacyval.yaml
 ```
 
 Stateful TBPTT and CPBC support DDP. Cache state remains rank-local; all chunk

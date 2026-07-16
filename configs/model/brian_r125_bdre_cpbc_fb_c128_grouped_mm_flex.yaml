@@ -1,0 +1,8 @@
+extends: brian_r125_bdre_cpbc_fb_shared_explicit.yaml
+model_name: brian_r125_bdre_cpbc_fb_c128_grouped_mm_flex
+
+execution:
+  dispatch: grouped_mm
+  attention_backend: shared_padded_flex
+  flex_reader_group_size: 8
+  full_bank_compile: vectorized

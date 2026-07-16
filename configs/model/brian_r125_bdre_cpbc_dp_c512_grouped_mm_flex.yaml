@@ -1,0 +1,6 @@
+extends: brian_r125_bdre_cpbc_dp_c512_grouped_mm.yaml
+model_name: brian_r125_bdre_cpbc_dp_c512_grouped_mm_flex
+
+execution:
+  attention_backend: shared_padded_flex
+  flex_reader_group_size: 8

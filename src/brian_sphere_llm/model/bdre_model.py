@@ -35,12 +35,123 @@ try:
     import torch
     import torch.nn as nn
     import torch.nn.functional as F
+    from torch.nn.attention.flex_attention import flex_attention
 except ModuleNotFoundError:  # pragma: no cover
     torch = None
     nn = None
     F = None
+    flex_attention = None
 
 ModuleBase = nn.Module if nn is not None else object
+
+
+if torch is not None and flex_attention is not None:
+
+    @torch.compile(fullgraph=True, dynamic=True)
+    def _compiled_bdre_flex_reader(
+        query: torch.Tensor,
+        key_codes: torch.Tensor,
+        value_codes: torch.Tensor,
+        key_read: torch.Tensor,
+        value_read: torch.Tensor,
+        key_cosine: torch.Tensor,
+        key_sine: torch.Tensor,
+        query_positions: torch.Tensor,
+    ) -> torch.Tensor:
+        def causal_score_mod(
+            score: torch.Tensor,
+            batch_index: torch.Tensor,
+            head_index: torch.Tensor,
+            query_index: torch.Tensor,
+            key_index: torch.Tensor,
+        ) -> torch.Tensor:
+            del head_index
+            allowed = key_index <= query_positions[batch_index, query_index]
+            return torch.where(allowed, score, -float("inf"))
+
+        batch, key_length, _ = key_codes.shape
+        heads, _, head_dim = key_read.shape
+        key_read_weight = key_read.permute(0, 2, 1).reshape(
+            heads * head_dim,
+            key_read.size(1),
+        )
+        decoded_key = F.linear(key_codes, key_read_weight).view(
+            batch,
+            key_length,
+            heads,
+            head_dim,
+        ).permute(0, 2, 1, 3)
+        decoded_key = apply_rotary(decoded_key, key_cosine, key_sine)
+        expanded_values = value_codes.unsqueeze(1).expand(-1, heads, -1, -1)
+        latent_value = flex_attention(
+            query,
+            decoded_key,
+            expanded_values,
+            score_mod=causal_score_mod,
+            scale=query.shape[-1] ** -0.5,
+        )
+        attended = torch.einsum("bhqr,hrd->bhqd", latent_value, value_read)
+        return attended.transpose(1, 2).reshape(
+            query.size(0) * query.size(2),
+            heads,
+            head_dim,
+        )
+
+    @torch.compile(fullgraph=True, dynamic=True)
+    def _compiled_bdre_batched_flex_reader(
+        query: torch.Tensor,
+        key_codes: torch.Tensor,
+        value_codes: torch.Tensor,
+        key_read: torch.Tensor,
+        value_read: torch.Tensor,
+        key_cosine: torch.Tensor,
+        key_sine: torch.Tensor,
+        query_positions: torch.Tensor,
+    ) -> torch.Tensor:
+        """Read one bounded route-expert group in a shared FlexAttention graph."""
+
+        def causal_score_mod(
+            score: torch.Tensor,
+            batch_index: torch.Tensor,
+            head_index: torch.Tensor,
+            query_index: torch.Tensor,
+            key_index: torch.Tensor,
+        ) -> torch.Tensor:
+            del head_index
+            allowed = key_index <= query_positions[batch_index, query_index]
+            return torch.where(allowed, score, -float("inf"))
+
+        readers, batch, key_length, _ = key_codes.shape
+        _, heads, _, head_dim = key_read.shape
+        query_length = query.size(2)
+        decoded_key = torch.einsum(
+            "abkr,ahrd->abhkd",
+            key_codes,
+            key_read,
+        ).reshape(readers * batch, heads, key_length, head_dim)
+        decoded_key = apply_rotary(decoded_key, key_cosine, key_sine)
+        expanded_values = value_codes.reshape(
+            readers * batch,
+            key_length,
+            value_codes.size(-1),
+        ).unsqueeze(1).expand(-1, heads, -1, -1)
+        latent_value = flex_attention(
+            query,
+            decoded_key,
+            expanded_values,
+            score_mod=causal_score_mod,
+            scale=head_dim**-0.5,
+        ).view(readers, batch, heads, query_length, value_codes.size(-1))
+        attended = torch.einsum("abhqv,ahvd->abhqd", latent_value, value_read)
+        return attended.permute(0, 1, 3, 2, 4).reshape(
+            readers * batch * query_length,
+            heads,
+            head_dim,
+        )
+
+else:  # pragma: no cover - exercised only without PyTorch/FlexAttention.
+    _compiled_bdre_flex_reader = None
+    _compiled_bdre_batched_flex_reader = None
 
 
 @dataclass(frozen=True)
@@ -67,7 +178,9 @@ class BDREConfig:
     chunk_size: int = 1
     normalize_step_distance: bool = False
     synchronous_attention_backend: str = "per_query_reference"
+    flex_reader_group_size: int = 1
     depth_visibility_policy: str = "depth_prefix"
+    full_bank_compile_mode: str = "loop"
 
     @classmethod
     def from_dict(cls, data: dict[str, Any], *, config_dir: str | Path | None = None) -> "BDREConfig":
@@ -131,8 +244,16 @@ class BDREConfig:
             synchronous_attention_backend=str(
                 execution.get("attention_backend", "per_query_reference")
             ),
+            flex_reader_group_size=_int_value(
+                execution.get("flex_reader_group_size", 1),
+                "execution.flex_reader_group_size",
+                minimum=1,
+            ),
             depth_visibility_policy=str(
                 execution.get("depth_visibility_policy", "depth_prefix")
+            ),
+            full_bank_compile_mode=str(
+                execution.get("full_bank_compile", "loop")
             ),
         )
         if str(geometry.get("internal_target", "regular_simplex")) != "regular_simplex":
@@ -164,14 +285,34 @@ class BDREConfig:
                 "BDRE execution.dispatch must be 'legacy_cuda_scan', 'grouped_host', "
                 "or 'grouped_mm'."
             )
-        if self.synchronous_attention_backend not in {"per_query_reference", "shared_padded_explicit"}:
+        if self.synchronous_attention_backend not in {
+            "per_query_reference",
+            "shared_padded_explicit",
+            "shared_padded_flex",
+        }:
             raise ValueError(
-                "BDRE execution.attention_backend must be 'per_query_reference' or 'shared_padded_explicit'."
+                "BDRE execution.attention_backend must be 'per_query_reference', "
+                "'shared_padded_explicit', or 'shared_padded_flex'."
+            )
+        if self.flex_reader_group_size > self.route.route_pool_blocks:
+            raise ValueError(
+                "BDRE execution.flex_reader_group_size cannot exceed route_pool_blocks."
+            )
+        if (
+            self.flex_reader_group_size > 1
+            and self.synchronous_attention_backend != "shared_padded_flex"
+        ):
+            raise ValueError(
+                "BDRE execution.flex_reader_group_size > 1 requires shared_padded_flex."
             )
         if self.depth_visibility_policy not in {"depth_prefix", "full_bank"}:
             raise ValueError(
                 "BDRE execution.depth_visibility_policy must be 'depth_prefix' or 'full_bank'."
             )
+        if self.full_bank_compile_mode not in {"loop", "vectorized"}:
+            raise ValueError("BDRE execution.full_bank_compile must be 'loop' or 'vectorized'.")
+        if self.full_bank_compile_mode == "vectorized" and self.depth_visibility_policy != "full_bank":
+            raise ValueError("Vectorized full-bank compilation requires full_bank depth visibility.")
         if self.execution_mode == "synchronous_prefix":
             if self.depth_mode != "synchronous_prefix":
                 raise ValueError("synchronous_prefix execution requires bdre_depth_mode=synchronous_prefix.")
@@ -189,11 +330,12 @@ class BDREConfig:
             raise ValueError("Shared padded attention is available only for synchronous_prefix execution.")
         if self.dispatch_mode == "grouped_mm" and (
             self.execution_mode != "synchronous_prefix"
-            or self.synchronous_attention_backend != "shared_padded_explicit"
+            or self.synchronous_attention_backend
+            not in {"shared_padded_explicit", "shared_padded_flex"}
         ):
             raise ValueError(
                 "Grouped MM dispatch requires synchronous_prefix execution with "
-                "shared_padded_explicit attention."
+                "shared padded attention."
             )
         if not self.position_geometry_normalize:
             raise ValueError("BDRE v1 requires normalized position geometry.")
@@ -1152,7 +1294,10 @@ class BrianBDRERouteCore(BrianRouteCore):
                     step_value = step_value.index_copy(0, dispatch.indexes, canonical_value)
                     grouped_mm_prepared = (dispatch, routed_input, query)
             else:
-                if self.bdre_config.synchronous_attention_backend == "shared_padded_explicit":
+                if self.bdre_config.synchronous_attention_backend in {
+                    "shared_padded_explicit",
+                    "shared_padded_flex",
+                }:
                     packed_groups = self._active_synchronous_action_groups(
                         flat_selected,
                         flat_valid,
@@ -1353,20 +1498,36 @@ class BrianBDRERouteCore(BrianRouteCore):
         )
         historical_step_outputs = step_compile_outputs
         if self.bdre_config.depth_visibility_policy == "full_bank":
-            historical_step_outputs = []
-            for reader_step in range(self.config.max_route_steps):
+            if self.bdre_config.full_bank_compile_mode == "vectorized":
                 started = time.perf_counter()
-                output = self.bdre_compiler.compile(
-                    flat_key,
-                    flat_value,
-                    flat_block,
-                    flat_valid,
-                    self._internal_block_positions(),
-                    reader_step=reader_step,
-                    collect_metrics=diagnostics.enabled,
+                historical_step_outputs = list(
+                    self.bdre_compiler.compile_all_reader_steps_vectorized(
+                        flat_key,
+                        flat_value,
+                        flat_block,
+                        flat_valid,
+                        self._internal_block_positions(),
+                        collect_metrics=diagnostics.enabled,
+                    )
                 )
-                diagnostics.record_compile(output, time.perf_counter() - started)
-                historical_step_outputs.append(output)
+                elapsed = time.perf_counter() - started
+                for output_index, output in enumerate(historical_step_outputs):
+                    diagnostics.record_compile(output, elapsed if output_index == 0 else 0.0)
+            else:
+                historical_step_outputs = []
+                for reader_step in range(self.config.max_route_steps):
+                    started = time.perf_counter()
+                    output = self.bdre_compiler.compile(
+                        flat_key,
+                        flat_value,
+                        flat_block,
+                        flat_valid,
+                        self._internal_block_positions(),
+                        reader_step=reader_step,
+                        collect_metrics=diagnostics.enabled,
+                    )
+                    diagnostics.record_compile(output, time.perf_counter() - started)
+                    historical_step_outputs.append(output)
         step_keys = torch.stack(
             [
                 output.keys.view(
@@ -1661,6 +1822,38 @@ class BrianBDRERouteCore(BrianRouteCore):
         current_keys: torch.Tensor,
         current_values: torch.Tensor,
     ) -> torch.Tensor:
+        if (
+            self.bdre_config.synchronous_attention_backend == "shared_padded_flex"
+            and self.bdre_config.flex_reader_group_size > 1
+            and query.is_cuda
+            and _compiled_bdre_batched_flex_reader is not None
+            and self.route_blocks[0].block.attn.head_dim >= 16
+            and self.bdre_config.value_dim >= 16
+            and (not self.training or self.route_blocks[0].block.attn.dropout == 0.0)
+        ):
+            attended_parts: list[torch.Tensor] = []
+            cursor = 0
+            group_size = self.bdre_config.flex_reader_group_size
+            for group_start in range(0, len(dispatch.groups), group_size):
+                groups = dispatch.groups[group_start : group_start + group_size]
+                count = sum(group.indexes.numel() for group in groups)
+                end = cursor + count
+                attended_parts.append(
+                    self._read_synchronous_prefix_grouped_mm_batched_flex(
+                        routed_input[cursor:end],
+                        query[cursor:end],
+                        groups=groups,
+                        chunk=chunk,
+                        start_position=start_position,
+                        reader_step=reader_step,
+                        historical_state=historical_state,
+                        current_keys=current_keys,
+                        current_values=current_values,
+                    )
+                )
+                cursor = end
+            return torch.cat(attended_parts, dim=0)
+
         attended_parts: list[torch.Tensor] = []
         cursor = 0
         for group in dispatch.groups:
@@ -1683,6 +1876,117 @@ class BrianBDRERouteCore(BrianRouteCore):
             attended_parts.append(attended.squeeze(1))
             cursor = end
         return torch.cat(attended_parts, dim=0)
+
+    def _read_synchronous_prefix_grouped_mm_batched_flex(
+        self,
+        routed_input: torch.Tensor,
+        query: torch.Tensor,
+        *,
+        groups: tuple[_SynchronousActionGroup, ...],
+        chunk: int,
+        start_position: int,
+        reader_step: int,
+        historical_state: BDRECacheState,
+        current_keys: torch.Tensor,
+        current_values: torch.Tensor,
+    ) -> torch.Tensor:
+        attention = self.route_blocks[0].block.attn
+        batch = current_keys.size(0)
+        readers = len(groups)
+        max_selected = max(group.max_selected for group in groups)
+
+        indexes = torch.cat([group.indexes for group in groups])
+        query_positions = start_position + (indexes % chunk)
+        query_cosine = attention.rope.cos[0, 0, query_positions, :].to(
+            device=query.device,
+            dtype=query.dtype,
+        )
+        query_sine = attention.rope.sin[0, 0, query_positions, :].to(
+            device=query.device,
+            dtype=query.dtype,
+        )
+        query = apply_rotary(query, query_cosine.unsqueeze(1), query_sine.unsqueeze(1))
+
+        batched_slots: list[torch.Tensor] = []
+        for reader_index, group in enumerate(groups):
+            active_rows = torch.div(group.flat_slots, group.max_selected, rounding_mode="floor")
+            batch_indexes = group.active_batches.index_select(0, active_rows)
+            local_slots = group.flat_slots % group.max_selected
+            batched_slots.append(
+                (reader_index * batch + batch_indexes) * max_selected + local_slots
+            )
+        flat_slots = torch.cat(batched_slots)
+        padded_query = query.new_zeros(
+            readers * batch * max_selected,
+            attention.n_heads,
+            attention.head_dim,
+        ).index_copy(0, flat_slots, query)
+        padded_query = padded_query.view(
+            readers * batch,
+            max_selected,
+            attention.n_heads,
+            attention.head_dim,
+        ).transpose(1, 2)
+        padded_positions = torch.zeros(
+            readers * batch * max_selected,
+            dtype=torch.long,
+            device=query.device,
+        ).index_copy(0, flat_slots, query_positions).view(readers * batch, max_selected)
+
+        key_parts: list[torch.Tensor] = []
+        value_parts: list[torch.Tensor] = []
+        if start_position:
+            if historical_state.step_keys is None or historical_state.step_values is None:
+                raise ValueError("Synchronous-prefix history is missing step cache tensors.")
+            key_parts.append(
+                torch.stack(
+                    [
+                        historical_state.step_keys[:, :, reader_step, group.action, :]
+                        for group in groups
+                    ]
+                )
+            )
+            value_parts.append(
+                torch.stack(
+                    [
+                        historical_state.step_values[:, :, reader_step, group.action, :]
+                        for group in groups
+                    ]
+                )
+            )
+        key_parts.append(torch.stack([current_keys[:, :, group.action, :] for group in groups]))
+        value_parts.append(torch.stack([current_values[:, :, group.action, :] for group in groups]))
+        key_codes = torch.cat(key_parts, dim=2)
+        value_codes = torch.cat(value_parts, dim=2)
+        key_positions = torch.arange(key_codes.size(2), device=query.device)
+        key_cosine = attention.rope.cos[:, :, key_positions, :].to(
+            device=query.device,
+            dtype=query.dtype,
+        )
+        key_sine = attention.rope.sin[:, :, key_positions, :].to(
+            device=query.device,
+            dtype=query.dtype,
+        )
+        key_read = torch.stack(
+            [self.bdre_projections[group.action].key_read for group in groups]
+        ).to(dtype=query.dtype)
+        value_read = torch.stack(
+            [self.bdre_projections[group.action].value_read for group in groups]
+        ).to(dtype=query.dtype)
+        attended = _compiled_bdre_batched_flex_reader(
+            padded_query,
+            key_codes.to(dtype=query.dtype),
+            value_codes.to(dtype=query.dtype),
+            key_read,
+            value_read,
+            key_cosine,
+            key_sine,
+            padded_positions,
+        )
+        return attended.index_select(0, flat_slots).reshape(
+            routed_input.size(0),
+            -1,
+        ).to(dtype=routed_input.dtype)
 
     def _compile_synchronous_prefix_step(
         self,
@@ -1742,7 +2046,10 @@ class BrianBDRERouteCore(BrianRouteCore):
         current_values: torch.Tensor,
         pack_group: _SynchronousActionGroup | None = None,
     ) -> torch.Tensor:
-        if self.bdre_config.synchronous_attention_backend == "shared_padded_explicit":
+        if self.bdre_config.synchronous_attention_backend in {
+            "shared_padded_explicit",
+            "shared_padded_flex",
+        }:
             if pack_group is None:
                 raise ValueError("Shared padded attention requires synchronous action packing metadata.")
             return self._finish_synchronous_prefix_block_shared_explicit(
@@ -1913,50 +2220,70 @@ class BrianBDRERouteCore(BrianRouteCore):
         key_codes = torch.cat(key_parts, dim=1)
         value_codes = torch.cat(value_parts, dim=1)
 
-        key_read_weight = projection.key_read.permute(0, 2, 1).reshape(
-            attention.n_heads * attention.head_dim,
-            self.bdre_config.key_dim,
-        )
-        decoded_key = F.linear(
-            key_codes.to(dtype=projection.key_read.dtype),
-            key_read_weight,
-        ).view(
-            active_batches.numel(),
-            key_codes.size(1),
-            attention.n_heads,
-            attention.head_dim,
-        ).permute(0, 2, 1, 3).to(dtype=query.dtype)
         key_positions = torch.arange(key_codes.size(1), device=query.device)
         key_cosine = attention.rope.cos[:, :, key_positions, :].to(device=query.device, dtype=query.dtype)
         key_sine = attention.rope.sin[:, :, key_positions, :].to(device=query.device, dtype=query.dtype)
-        decoded_key = apply_rotary(decoded_key, key_cosine, key_sine)
-        allowed = key_positions.view(1, 1, 1, -1) <= padded_positions.view(
-            active_batches.numel(),
-            1,
-            max_selected,
-            1,
+        use_flex = (
+            self.bdre_config.synchronous_attention_backend == "shared_padded_flex"
+            and query.is_cuda
+            and _compiled_bdre_flex_reader is not None
+            and attention.head_dim >= 16
+            and self.bdre_config.value_dim >= 16
+            and (not block.training or attention.dropout == 0.0)
         )
-        scores = torch.einsum("bhqd,bhkd->bhqk", padded_query, decoded_key) * (
-            attention.head_dim**-0.5
-        )
-        scores = scores.masked_fill(~allowed, torch.finfo(scores.dtype).min)
-        weights = F.softmax(scores.float(), dim=-1).to(dtype=query.dtype)
-        weights = F.dropout(weights, p=attention.dropout, training=block.training)
-        latent_value = torch.einsum(
-            "bhqk,bkr->bhqr",
-            weights,
-            value_codes.to(dtype=weights.dtype),
-        )
-        latent_value = latent_value.transpose(1, 2).reshape(
-            active_batches.numel() * max_selected,
-            attention.n_heads,
-            self.bdre_config.value_dim,
-        ).index_select(0, flat_slots)
-        attended = torch.einsum(
-            "nhr,hrd->nhd",
-            latent_value.to(dtype=projection.value_read.dtype),
-            projection.value_read,
-        ).to(dtype=routed_input.dtype)
+        if use_flex:
+            attended = _compiled_bdre_flex_reader(
+                padded_query,
+                key_codes.to(dtype=query.dtype),
+                value_codes.to(dtype=query.dtype),
+                projection.key_read.to(dtype=query.dtype),
+                projection.value_read.to(dtype=query.dtype),
+                key_cosine,
+                key_sine,
+                padded_positions,
+            ).index_select(0, flat_slots).to(dtype=routed_input.dtype)
+        else:
+            key_read_weight = projection.key_read.permute(0, 2, 1).reshape(
+                attention.n_heads * attention.head_dim,
+                self.bdre_config.key_dim,
+            )
+            decoded_key = F.linear(
+                key_codes.to(dtype=projection.key_read.dtype),
+                key_read_weight,
+            ).view(
+                active_batches.numel(),
+                key_codes.size(1),
+                attention.n_heads,
+                attention.head_dim,
+            ).permute(0, 2, 1, 3).to(dtype=query.dtype)
+            decoded_key = apply_rotary(decoded_key, key_cosine, key_sine)
+            allowed = key_positions.view(1, 1, 1, -1) <= padded_positions.view(
+                active_batches.numel(),
+                1,
+                max_selected,
+                1,
+            )
+            scores = torch.einsum("bhqd,bhkd->bhqk", padded_query, decoded_key) * (
+                attention.head_dim**-0.5
+            )
+            scores = scores.masked_fill(~allowed, torch.finfo(scores.dtype).min)
+            weights = F.softmax(scores.float(), dim=-1).to(dtype=query.dtype)
+            weights = F.dropout(weights, p=attention.dropout, training=block.training)
+            latent_value = torch.einsum(
+                "bhqk,bkr->bhqr",
+                weights,
+                value_codes.to(dtype=weights.dtype),
+            )
+            latent_value = latent_value.transpose(1, 2).reshape(
+                active_batches.numel() * max_selected,
+                attention.n_heads,
+                self.bdre_config.value_dim,
+            ).index_select(0, flat_slots)
+            attended = torch.einsum(
+                "nhr,hrd->nhd",
+                latent_value.to(dtype=projection.value_read.dtype),
+                projection.value_read,
+            ).to(dtype=routed_input.dtype)
         attended = attended.reshape(routed_input.size(0), 1, -1)
         return attended
 

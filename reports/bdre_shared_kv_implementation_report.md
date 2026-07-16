@@ -1,19 +1,22 @@
 # BRIAN RC-KV / CPBC Implementation Report
 
 **Status:** RC-KV exact oracle, CPBC approximate prefill, stateful TBPTT/DDP,
-and the grouped-MM training backend are implemented and validated
+grouped-MM, and the exact fused-reader backend are implemented and validated
 
 **Date:** 2026-07-16
 
 **Working model:** `BRIAN-R125-BDRE-RCKV-v1`
 
-**Current acceleration branch:** `rc-kv-deep-acceleration`
+**Current acceleration branch:** `rc-kv-fused-exact`
 
 **Academic report:**
 [`BRIAN_RC_KV_Implementation_Report.tex`](./BRIAN_RC_KV_Implementation_Report.tex)
 
 **Acceleration report:**
 [`rc_kv_deep_acceleration_report.md`](./rc_kv_deep_acceleration_report.md)
+
+**Fused-reader follow-up:**
+[`rc_kv_exact_fused_reader_report.md`](./rc_kv_exact_fused_reader_report.md)
 
 ## 1. Executive Summary
 
@@ -51,11 +54,12 @@ identical to serial execution. Its depth visibility policy is explicit:
 - **CPBC-DP:** CPBC with Depth-Prefix Visibility.
 - **CPBC-FB:** CPBC with Full-Bank Depth Visibility.
 
-The system has passed causal, incremental, cache-policy, gradient, and DDP
-correctness tests. The accepted grouped-MM backend reaches about `29.6k
-token/s` on two B200s at the formal global batch, while the matched baseline
-reaches about `619k token/s`; this remains an end-to-end gap of about `20.9x`.
-These measurements do not establish a downstream quality conclusion.
+The system has passed causal, incremental, cache-policy, gradient, fused-reader,
+and DDP correctness tests. The accepted grouped-MM reference reaches about
+`29.6k token/s` on two B200s. The prepared fused DP-C2048 shape reaches
+`45.4-45.6k token/s` after compilation, while the matched baseline reaches
+about `619k token/s`. These measurements do not establish a downstream quality
+conclusion.
 
 Existing Non-Global, hidden-state Global KV, attention-summary Global KV, and
 pure-factorized cache-only implementations remain available and unchanged.
@@ -87,6 +91,9 @@ configs/model/brian_r125_bdre_rckv_synchronous_prefix_shared_explicit.yaml
 configs/model/brian_r125_bdre_cpbc_dp_shared_explicit.yaml
 configs/model/brian_r125_bdre_cpbc_dp_c512_shared_explicit.yaml
 configs/model/brian_r125_bdre_cpbc_fb_shared_explicit.yaml
+configs/model/brian_r125_bdre_cpbc_dp_c512_grouped_mm_flex.yaml
+configs/model/brian_r125_bdre_cpbc_dp_c2048_grouped_mm_flex.yaml
+configs/model/brian_r125_bdre_cpbc_fb_c128_grouped_mm_flex.yaml
 ```
 
 Current training and ablation configurations:
@@ -97,6 +104,8 @@ configs/train/cpbc_r125_5b_dp_u1_c128_ddp2_legacyval.yaml
 configs/train/cpbc_r125_5b_fb_u1_c128_ddp2_legacyval.yaml
 configs/train/cpbc_r125_5b_fb_u2_c128_ddp2_legacyval.yaml
 configs/train/cpbc_r125_5b_fb_u4_c128_ddp2_legacyval.yaml
+configs/train/cpbc_r125_5b_dp_u1_c2048_grouped_mm_flex_ddp2_legacyval.yaml
+configs/train/cpbc_r125_5b_fb_u1_c128_grouped_mm_flex_ddp2_legacyval.yaml
 configs/train/bdre_rckv_r125_5b_ddp2_legacyval.yaml
 configs/train/bdre_rckv_r125_5b_tbptt_bs32_legacyval.yaml
 ```
@@ -410,6 +419,17 @@ configs/model/brian_r125_bdre_cpbc_dp_c512_grouped_mm.yaml
 configs/train/cpbc_r125_5b_dp_u1_c512_grouped_mm_ddp2_legacyval.yaml
 ```
 
+The prepared exact fused-reader candidates are:
+
+```text
+configs/model/brian_r125_bdre_cpbc_dp_c512_grouped_mm_flex.yaml
+configs/model/brian_r125_bdre_cpbc_dp_c2048_grouped_mm_flex.yaml
+configs/model/brian_r125_bdre_cpbc_fb_c128_grouped_mm_flex.yaml
+configs/train/cpbc_r125_5b_dp_u1_c512_grouped_mm_flex_ddp2_legacyval.yaml
+configs/train/cpbc_r125_5b_dp_u1_c2048_grouped_mm_flex_ddp2_legacyval.yaml
+configs/train/cpbc_r125_5b_fb_u1_c128_grouped_mm_flex_ddp2_legacyval.yaml
+```
+
 | Setting | Formal value |
 | --- | --- |
 | Execution | `synchronous_prefix` (CPBC) |
@@ -471,7 +491,9 @@ the mathematical definition of RC-KV.
 | Visibility | `depth_prefix`, `full_bank` | `depth_prefix` |
 | Reader cache | `eager`, `lazy`, `dynamic` | `eager` |
 | Self-KV | `bdre_prefix`, `current_step`, `none` | `bdre_prefix` |
-| Reader attention | `per_query_reference`, `shared_padded_explicit` | `shared_padded_explicit` |
+| Reader attention | `per_query_reference`, `shared_padded_explicit`, `shared_padded_flex` | `shared_padded_explicit` |
+| Flex reader group | integer `1..route_pool_blocks` | not applicable |
+| FB compiler | `loop`, `vectorized` | `loop` |
 | Dispatch | `legacy_cuda_scan`, `grouped_host`, `grouped_mm` | `grouped_mm` |
 | Compiler top-k | `null` or positive integer | `null` |
 | Key/Value temperatures | positive and independent | `0.5 / 1.0` |
@@ -484,7 +506,7 @@ Hard validation rules include:
 - CPBC requires `hard_exit=true`, `bdre_depth_mode=synchronous_prefix`, eager
   reader-step banks, and `bdre_prefix` self-KV.
 - Full-bank visibility is legal only under CPBC.
-- `shared_padded_explicit` is legal only under CPBC.
+- Shared-padded explicit/Flex readers are legal only under CPBC.
 - Position mode must be spherical code with an independent IN position.
 - RC-KV cannot be combined with legacy hidden Global KV, attention-summary
   Global KV, or parallel passing in the same model.
@@ -505,10 +527,13 @@ Hard validation rules include:
 | CPBC full forward vs one-token incremental | agree within `2e-5` |
 | `U=1` vs `U=2` | same forward loss; gradients differ as intended |
 | Shared-padded-explicit vs per-query reference | logits, loss, cache, and gradients agree |
+| Vectorized FB compiler vs reader-depth loop | output, weights, and writer/position gradients agree |
+| Actual CUDA Flex reader suffix/stream checks | DP and FB passed |
+| Explicit vs Flex BF16 reader | reported loss equal; logits/gradients within BF16 rounding |
 | CPU DDP vs merged global batch | loss, gradients, and updates agree |
 | Rank-local unused parameter synchronization | passed |
 | B200 BF16 forward/backward and DDP2 smoke | finite; checkpoint state passed |
-| Full repository regression | `600 passed`, `15` pre-existing warnings |
+| Full repository regression | `606 passed`, `15` pre-existing warnings |
 
 These checks establish the implementation and causal interface. They do not
 show that CPBC-DP, CPBC-FB, or RC-KV improves language modeling or public
@@ -527,12 +552,19 @@ cache norms.
 | CPBC shared-padded-explicit | 14 | 2048 | 512 | 11,658.95 token/s | 101,808 MiB | stable single-GPU candidate |
 | CPBC grouped-MM | 16 | 2048 | 512 | 15,167 token/s | 120,947 MiB | accepted single-B200 formal shape |
 | Formal CPBC-DP DDP2, grouped-MM | 32 global | 2048 | 512 | 28,638-30,609 token/s | 124.5 GiB/rank | accepted three-step smoke |
+| CPBC-DP fused reader, group 8 | 16 | 2048 | 512 | 19,139 token/s | 24,742 MiB | same cache/route definition |
+| CPBC-DP fused reader, group 1 | 16 | 2048 | 2048 | 23,246 token/s | 66,011 MiB | U1 gradient horizon 2048 |
+| CPBC-FB fused/vectorized, group 8 | 16 | 2048 | 128 | 9,013 token/s | 13,460 MiB | over 10x historical FB |
+| CPBC-DP C2048 DDP2 | 32 global | 2048 | 2048 | 45,443-45,648 token/s | 70.2 GiB/rank | steady smoke steps |
 
-The accepted DDP2 smoke preserves global batch 32 and 65,536 tokens per
-optimizer step. Its two steady steps averaged about `29,624 token/s`; the old
-DDP2 smoke averaged about `16,276 token/s`. This is an approximately `82%`
-end-to-end improvement for the same formal shape. The matched Transformer
-baseline averaged `618,738 token/s`, so a large system-level gap remains.
+All DDP2 smokes preserve global batch 32 and 65,536 tokens per optimizer step.
+The accepted grouped-MM C512 reference averaged about `29,624 token/s`; the
+prepared fused C2048 shape averaged about `45,546 token/s` over its two steady
+steps. For identical route decisions, DP cache/attention is chunk-boundary
+invariant. C2048 is not a training-dynamics-equivalent replacement for C512:
+its U1 gradient horizon is 2,048 rather than 512 tokens, and stochastic routing
+consumes RNG in different tensor groupings. The matched Transformer baseline
+averaged `618,738 token/s`, so a large system-level gap remains.
 
 The two models do not execute the same number of block evaluations, so this is
 not a pure attention-kernel ratio. The gap is nevertheless much larger than
@@ -543,20 +575,19 @@ route length alone can explain.
 Profiling and code inspection identify the dominant costs:
 
 1. each route step still copies selected actions from GPU to CPU for grouping;
-2. routing and reader attention still launch many small elementwise, packing,
-   mask, softmax, and index-copy kernels;
-3. the exact reader path explicitly decodes Keys, builds causal masks, performs
-   FP32 softmax, and launches multiple einsums;
-4. one profiled chunk still launches about `20,100` kernels, leaving dispatch bubbles;
+2. routing and reader packing still launch many elementwise, copy, and index kernels;
+3. at C2048, fused attention forward/backward is the dominant GPU operation;
+4. route-dependent reader padding makes cross-reader batching shape-sensitive;
 5. `C=512,U=1,T=2048` executes four backward groups per optimizer step and then
    synchronizes about `561 MB` of gradients;
 6. step-indexed banks, route-dependent padding, and variable group shapes add
    memory traffic.
 
-Grouped expert GEMM, narrow cache gathers, and conditional compiler metrics
-are implemented. The next performance work should target GPU-resident
-grouping, routed RMSNorm fusion, and memory-bounded reader attention while
-preserving logits, loss, cache, and gradient equivalence.
+Grouped expert GEMM, narrow cache gathers, conditional compiler metrics, fused
+reader attention, bounded reader batching, and vectorized FB compilation are
+implemented. Remaining work should target GPU-resident grouping and routed
+RMSNorm/packing fusion while preserving logits, loss, cache, and gradient
+equivalence.
 
 ## 15. Metrics and Visualization
 
@@ -614,9 +645,10 @@ practical limitation and makes broad long-run ablations expensive.
 
 ### 17.2 CPBC Is an Explicit Approximation
 
-CPBC-DP is chunk-boundary invariant but permanently restricts completed reader
-depth `l` to writer prefix `s <= l`. CPBC-FB gives completed tokens full-route
-visibility but remains progressively incomplete inside the active chunk.
+For identical route decisions, CPBC-DP cache/attention is chunk-boundary
+invariant, but it permanently restricts completed reader depth `l` to writer
+prefix `s <= l`. CPBC-FB gives completed tokens full-route visibility but
+remains progressively incomplete inside the active chunk.
 Training PPL alone cannot choose between them.
 
 ### 17.3 TBPTT Truncation

@@ -9,7 +9,12 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from brian_sphere_llm.data.dataloader import build_dataloader
 from brian_sphere_llm.train.stage_runner import build_model_from_config, train_mode_for_stage
-from brian_sphere_llm.train.trainer import _device, _wrap_distributed_model, evaluate
+from brian_sphere_llm.train.trainer import (
+    _device,
+    _set_float32_matmul_precision,
+    _wrap_distributed_model,
+    evaluate,
+)
 from brian_sphere_llm.utils import distributed as dist_utils
 from brian_sphere_llm.utils.config import load_config
 from brian_sphere_llm.utils.logging import write_json
@@ -27,6 +32,7 @@ def main() -> None:
 
     config_path = Path(args.config)
     config = load_config(config_path)
+    _set_float32_matmul_precision(config)
     seed = int(config.get("seed", 1))
     set_seed(seed)
 
@@ -42,6 +48,9 @@ def main() -> None:
         device,
         distributed=distributed,
         find_unused_parameters=bool(config.get("ddp_find_unused_parameters", True)),
+        static_graph=bool(config.get("ddp_static_graph", False)),
+        gradient_as_bucket_view=bool(config.get("ddp_gradient_as_bucket_view", False)),
+        broadcast_buffers=bool(config.get("ddp_broadcast_buffers", False)),
     )
 
     split = str(args.split or config.get("eval_split", "val"))
