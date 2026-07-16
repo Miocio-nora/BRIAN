@@ -243,11 +243,15 @@ kernel-only single-GPU 5B estimate is about 5.0 days; real training remains
 slower. A throughput-oriented CPBC-DP DDP4 config uses local batch 8, global
 batch 32, chunk 512, and U1. Its three-step four-B200 smoke reached
 24.6-24.9k global tok/s after warmup with about 51.4 GiB peak allocated per
-rank, giving a 5B pure-training estimate of about 2.35 days. Stateful CPBC DDP
-uses rank-local caches and one manual gradient synchronization per optimizer
-step. The fixed-global-batch CPBC-FB-U4 smoke completed on two B200s at global
-batch 32 and chunk 128, but its measured 1,896 global tok/s is not sufficient
-for an unbounded four-arm 5B ablation.
+rank, giving a 5B pure-training estimate of about 2.35 days. The more
+resource-efficient DDP2 config uses local batch 16 and reaches 16.0-16.6k
+global tok/s with 123.7 GiB peak allocated per rank, for about 3.56 days of pure
+5B training. It retains 66% of four-card throughput with half the GPUs and is
+the recommended default when wall time is not the only objective. Stateful
+CPBC DDP uses rank-local caches and one manual gradient synchronization per
+optimizer step. The fixed-global-batch CPBC-FB-U4 smoke completed on two B200s
+at global batch 32 and chunk 128, but its measured 1,896 global tok/s is not
+sufficient for an unbounded four-arm 5B ablation.
 
 Key BDRE entrypoints:
 
@@ -269,6 +273,7 @@ configs/model/brian_r125_bdre_cpbc_dp_shared_explicit.yaml
 configs/model/brian_r125_bdre_cpbc_dp_c512_shared_explicit.yaml
 configs/model/brian_r125_bdre_cpbc_fb_shared_explicit.yaml
 configs/train/cpbc_r125_5b_dp_u1_c128_ddp2_legacyval.yaml
+configs/train/cpbc_r125_5b_dp_u1_c512_ddp2_legacyval.yaml
 configs/train/cpbc_r125_5b_dp_u1_c512_ddp4_legacyval.yaml
 configs/train/cpbc_r125_5b_fb_u1_c128_ddp2_legacyval.yaml
 configs/train/cpbc_r125_5b_fb_u2_c128_ddp2_legacyval.yaml
@@ -423,6 +428,18 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 PYTHONPATH=src:. \
 python -m torch.distributed.run --standalone --nproc_per_node=4 \
   scripts/train.py \
   --config configs/train/cpbc_r125_5b_dp_u1_c512_ddp4_legacyval.yaml
+```
+
+Run the resource-efficient two-B200 configuration. The expandable allocator is
+required for the local-BS16/C512 memory shape:
+
+```bash
+CUDA_VISIBLE_DEVICES=0,1 \
+PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
+PYTHONPATH=src:. \
+python -m torch.distributed.run --standalone --nproc_per_node=2 \
+  scripts/train.py \
+  --config configs/train/cpbc_r125_5b_dp_u1_c512_ddp2_legacyval.yaml
 ```
 
 Stateful TBPTT and CPBC support DDP. Cache state remains rank-local; all chunk

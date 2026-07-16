@@ -240,6 +240,35 @@ training run. It is not a controlled replacement for the C128 DP arm in the
 Depth Visibility ablation: comparing DP-C512 against FB-C128 would also change
 chunk count and gradient horizon.
 
+The resource-efficient default uses two B200s with local batch 16 while keeping
+the same global batch and optimizer-step token count:
+
+```text
+configs/train/cpbc_r125_5b_dp_u1_c512_ddp2_legacyval.yaml
+```
+
+The BS16/C512 shape requires the expandable CUDA allocator to avoid allocator
+fragmentation:
+
+```bash
+PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+```
+
+A real three-step DDP2 smoke passed train, legacy validation, gradient sync,
+and both rank-local checkpoint states. Steady measurements exclude the first
+warmup step:
+
+| Shape | Steady global tok/s | Step time | Peak allocated/rank | 5B pure train |
+| --- | ---: | ---: | ---: | ---: |
+| DDP2, local BS16, C512, U1 | 15,996-16,555 | 3.96-4.10 s | 123.7 GiB | 3.56 days |
+| DDP4, local BS8, C512, U1 | 24,563-24,896 | 2.63-2.67 s | 51.4 GiB | 2.35 days |
+
+DDP2 retains about 66% of DDP4 throughput with half the GPUs. Its mean
+throughput per GPU is approximately 8.14k tok/s versus 6.18k tok/s for DDP4,
+making DDP2 about 32% more efficient per allocated GPU. DDP2 is therefore the
+recommended default when GPU efficiency matters; DDP4 remains the option when
+reducing wall time by roughly 1.2 days is worth occupying two additional GPUs.
+
 ## 8. Decision
 
 Implementation and smoke acceptance are complete. The four long-run configs are
@@ -275,6 +304,17 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 PYTHONPATH=src:. \
 python -m torch.distributed.run --standalone --nproc_per_node=4 \
   scripts/train.py \
   --config configs/train/cpbc_r125_5b_dp_u1_c512_ddp4_legacyval.yaml
+```
+
+Resource-efficient CPBC-DP training on two B200s:
+
+```bash
+CUDA_VISIBLE_DEVICES=0,1 \
+PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
+PYTHONPATH=src:. \
+python -m torch.distributed.run --standalone --nproc_per_node=2 \
+  scripts/train.py \
+  --config configs/train/cpbc_r125_5b_dp_u1_c512_ddp2_legacyval.yaml
 ```
 
 Single-rank memory calibration with explicit U:
