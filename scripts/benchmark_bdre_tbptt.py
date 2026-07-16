@@ -30,6 +30,9 @@ def main() -> None:
     parser.add_argument("--global-step", type=int, default=1)
     parser.add_argument("--flex-kernel-variant", default=None)
     parser.add_argument("--flex-reader-group-size", type=int, default=None)
+    parser.add_argument("--decoded-key-rope-mode", default=None)
+    parser.add_argument("--writer-projection-mode", default=None)
+    parser.add_argument("--route-pointwise-mode", default=None)
     parser.add_argument("--prefix-compile-mode", default=None)
     parser.add_argument("--seed", type=int, default=123)
     parser.add_argument("--warmup-steps", type=int, default=0)
@@ -74,6 +77,9 @@ def main() -> None:
         for value in (
             args.flex_kernel_variant,
             args.flex_reader_group_size,
+            args.decoded_key_rope_mode,
+            args.writer_projection_mode,
+            args.route_pointwise_mode,
             args.prefix_compile_mode,
         )
     ):
@@ -88,6 +94,21 @@ def main() -> None:
                 args.flex_reader_group_size
                 if args.flex_reader_group_size is not None
                 else model.bdre_config.flex_reader_group_size
+            ),
+            decoded_key_rope_mode=(
+                args.decoded_key_rope_mode
+                if args.decoded_key_rope_mode is not None
+                else model.bdre_config.decoded_key_rope_mode
+            ),
+            writer_projection_mode=(
+                args.writer_projection_mode
+                if args.writer_projection_mode is not None
+                else model.bdre_config.writer_projection_mode
+            ),
+            route_pointwise_mode=(
+                args.route_pointwise_mode
+                if args.route_pointwise_mode is not None
+                else model.bdre_config.route_pointwise_mode
             ),
             prefix_compile_mode=(
                 args.prefix_compile_mode
@@ -178,6 +199,9 @@ def main() -> None:
         "global_step": args.global_step,
         "flex_kernel_variant": model.bdre_config.flex_kernel_variant,
         "flex_reader_group_size": model.bdre_config.flex_reader_group_size,
+        "decoded_key_rope_mode": model.bdre_config.decoded_key_rope_mode,
+        "writer_projection_mode": model.bdre_config.writer_projection_mode,
+        "route_pointwise_mode": model.bdre_config.route_pointwise_mode,
         "prefix_compile_mode": model.bdre_config.prefix_compile_mode,
         "warmup_steps": args.warmup_steps,
         "repeats": args.repeats,

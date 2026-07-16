@@ -1,14 +1,14 @@
 # BRIAN RC-KV / CPBC Implementation Report
 
 **Status:** RC-KV exact oracle, CPBC approximate prefill, stateful TBPTT/DDP,
-grouped-MM, exact BlockMask reader grouping, and online prefix compilation are
-implemented and validated
+grouped-MM, exact BlockMask reader grouping, online prefix compilation, and
+GPU-static route-step execution are implemented and validated
 
 **Date:** 2026-07-16
 
 **Working model:** `BRIAN-R125-BDRE-RCKV-v1`
 
-**Current acceleration branch:** `rc-kv-compact-reader`
+**Current acceleration branch:** `rc-kv-static-route-step`
 
 **Academic report:**
 [`BRIAN_RC_KV_Implementation_Report.tex`](./BRIAN_RC_KV_Implementation_Report.tex)
@@ -20,7 +20,7 @@ implemented and validated
 [`rc_kv_exact_fused_reader_report.md`](./rc_kv_exact_fused_reader_report.md)
 
 **Current acceleration report:**
-[`rc_kv_grouped_reader_incremental_prefix_report.md`](./rc_kv_grouped_reader_incremental_prefix_report.md)
+[`rc_kv_static_route_step_report.md`](./rc_kv_static_route_step_report.md)
 
 ## 1. Executive Summary
 
@@ -59,11 +59,11 @@ identical to serial execution. Its depth visibility policy is explicit:
 - **CPBC-FB:** CPBC with Full-Bank Depth Visibility.
 
 The system has passed causal, incremental, cache-policy, gradient, fused-reader,
-and DDP correctness tests. The current DP-C2048 candidate reaches about
-`63.1k token/s` on one B200 and `128.3k token/s` on two B200s after compilation,
-while the matched baseline reaches about `619k token/s`. The remaining measured
-gap is 4.82x. These measurements do not establish a downstream quality
-conclusion.
+GPU-static dispatch, and DDP correctness tests. The current DP-C2048 candidate
+reaches about `78.4k token/s` on one B200 and `150.8k token/s` on two B200s after
+compilation, while the matched baseline reaches about `619k token/s`. The
+remaining measured gap is 4.10x. These measurements do not establish a
+downstream quality conclusion.
 
 Existing Non-Global, hidden-state Global KV, attention-summary Global KV, and
 pure-factorized cache-only implementations remain available and unchanged.
@@ -99,6 +99,7 @@ configs/model/brian_r125_bdre_cpbc_dp_c512_grouped_mm_flex.yaml
 configs/model/brian_r125_bdre_cpbc_dp_c2048_grouped_mm_flex.yaml
 configs/model/brian_r125_bdre_cpbc_dp_c2048_grouped_mm_flex_blockmask.yaml
 configs/model/brian_r125_bdre_cpbc_dp_c2048_grouped_mm_flex_blockmask_group8_incremental.yaml
+configs/model/brian_r125_bdre_cpbc_dp_c2048_grouped_mm_gpu_static_blockmask_incremental.yaml
 configs/model/brian_r125_bdre_cpbc_fb_c128_grouped_mm_flex.yaml
 ```
 
@@ -113,6 +114,7 @@ configs/train/cpbc_r125_5b_fb_u4_c128_ddp2_legacyval.yaml
 configs/train/cpbc_r125_5b_dp_u1_c2048_grouped_mm_flex_ddp2_legacyval.yaml
 configs/train/cpbc_r125_5b_dp_u1_c2048_grouped_mm_flex_blockmask_ddp2_legacyval.yaml
 configs/train/cpbc_r125_5b_dp_u1_c2048_grouped_mm_flex_blockmask_group8_incremental_ddp2_legacyval.yaml
+configs/train/cpbc_r125_5b_dp_u1_c2048_grouped_mm_gpu_static_blockmask_incremental_ddp2_legacyval.yaml
 configs/train/cpbc_r125_5b_fb_u1_c128_grouped_mm_flex_ddp2_legacyval.yaml
 configs/train/bdre_rckv_r125_5b_ddp2_legacyval.yaml
 configs/train/bdre_rckv_r125_5b_tbptt_bs32_legacyval.yaml
@@ -433,41 +435,34 @@ The current DDP2 profile synchronizes about `561 MB` of gradients in nine
 `64 MB`-bounded buckets per update. CPU merged-global-batch tests verify loss,
 gradient, and parameter-update equivalence.
 
-## 11. Current Formal Training Profile
+## 11. Current Prepared Formal Training Profile
 
-The exact oracle defaults and the current formal training profile are
-different. The active 5B profile is resolved from:
+The exact oracle defaults and the prepared formal training profile are
+different. Historical C512 anchors remain available at:
 
 ```text
 configs/model/brian_r125_bdre_cpbc_dp_c512_shared_explicit.yaml
 configs/train/cpbc_r125_5b_dp_u1_c512_ddp2_legacyval.yaml
 ```
 
-The accepted accelerated equivalents are:
+The current C2048 candidate, validated by single-B200 calibration and a DDP2
+smoke but not yet started as a long run, is resolved from:
 
 ```text
-configs/model/brian_r125_bdre_cpbc_dp_c512_grouped_mm.yaml
-configs/train/cpbc_r125_5b_dp_u1_c512_grouped_mm_ddp2_legacyval.yaml
-```
-
-The prepared exact fused-reader candidates are:
-
-```text
-configs/model/brian_r125_bdre_cpbc_dp_c512_grouped_mm_flex.yaml
-configs/model/brian_r125_bdre_cpbc_dp_c2048_grouped_mm_flex.yaml
-configs/model/brian_r125_bdre_cpbc_fb_c128_grouped_mm_flex.yaml
-configs/train/cpbc_r125_5b_dp_u1_c512_grouped_mm_flex_ddp2_legacyval.yaml
-configs/train/cpbc_r125_5b_dp_u1_c2048_grouped_mm_flex_ddp2_legacyval.yaml
-configs/train/cpbc_r125_5b_fb_u1_c128_grouped_mm_flex_ddp2_legacyval.yaml
+configs/model/brian_r125_bdre_cpbc_dp_c2048_grouped_mm_gpu_static_blockmask_incremental.yaml
+configs/train/cpbc_r125_5b_dp_u1_c2048_grouped_mm_gpu_static_blockmask_incremental_ddp2_legacyval.yaml
 ```
 
 | Setting | Formal value |
 | --- | --- |
 | Execution | `synchronous_prefix` (CPBC) |
 | Visibility | `depth_prefix` (CPBC-DP) |
-| Attention backend | `shared_padded_explicit` |
-| Dispatch | `grouped_mm` |
-| Chunk size `C` | 512 |
+| Attention backend | exact shared-padded BlockMask |
+| Dispatch | `grouped_mm_gpu` static workspace |
+| Prefix compiler | `incremental_exact` |
+| Writer projection | `precomposed` |
+| Decoded-Key RoPE / route pointwise | compiled |
+| Chunk size `C` | 2048 |
 | TBPTT detach interval `U` | 1 |
 | Hardware | 2 B200 GPUs |
 | Local batch per rank | 16 |
@@ -498,7 +493,7 @@ logit noise: 0.08 -> 0.008
 random route override: 0.25 -> 0.03
 ```
 
-The active objective is:
+The prepared profile's objective is:
 
 ```text
 L = L_LM
@@ -561,10 +556,12 @@ Hard validation rules include:
 | Vectorized FB compiler vs reader-depth loop | output, weights, and writer/position gradients agree |
 | Actual CUDA Flex reader suffix/stream checks | DP and FB passed |
 | Explicit vs Flex BF16 reader | reported loss equal; logits/gradients within BF16 rounding |
+| GPU-static workspace vs host-grouped BlockMask | logits, loss, and representative gradients within BF16 tolerance |
+| Static workspace validity/OUT layout | unique slots, compact valid ranks, masked OUT tail passed |
 | CPU DDP vs merged global batch | loss, gradients, and updates agree |
 | Rank-local unused parameter synchronization | passed |
 | B200 BF16 forward/backward and DDP2 smoke | finite; checkpoint state passed |
-| Full repository regression | `609 passed`; PyTorch deprecation warnings only |
+| Full repository regression | `616 passed`; PyTorch deprecation warnings only |
 
 These checks establish the implementation and causal interface. They do not
 show that CPBC-DP, CPBC-FB, or RC-KV improves language modeling or public
@@ -586,23 +583,29 @@ cache norms.
 | CPBC-DP fused reader, group 8 | 16 | 2048 | 512 | 19,139 token/s | 24,742 MiB | same cache/route definition |
 | CPBC-DP fused reader, group 1 | 16 | 2048 | 2048 | 23,246 token/s | 66,011 MiB | U1 gradient horizon 2048 |
 | CPBC-DP exact BlockMask, `bwd32` | 16 | 2048 | 2048 | 48,956 token/s | 66,016 MiB | historical group-1 stage |
-| CPBC-DP grouped BlockMask + online prefix, group 8 | 16 | 2048 | 2048 | **63,078 token/s** | **66,938 MiB** | current candidate |
+| CPBC-DP grouped BlockMask + online prefix, group 8 | 16 | 2048 | 2048 | 63,078 token/s | 66,938 MiB | accepted predecessor |
+| CPBC-DP GPU-static route step | 16 | 2048 | 2048 | **78,381 token/s** | **61,697 MiB** | current candidate |
 | CPBC-DP ragged BlockMask + GPU dispatch | 16 | 2048 | 2048 | 28,050 token/s | 83,562 MiB | experimental negative |
 | CPBC-FB fused/vectorized, group 8 | 16 | 2048 | 128 | 9,013 token/s | 13,460 MiB | over 10x historical FB |
 | CPBC-DP C2048 DDP2 | 32 global | 2048 | 2048 | 45,443-45,648 token/s | 70.2 GiB/rank | steady smoke steps |
 | CPBC-DP C2048 exact BlockMask DDP2 | 32 global | 2048 | 2048 | 90,780-97,447 token/s | 70.2 GiB/rank | historical group-1 stage |
-| CPBC-DP grouped BlockMask + online prefix DDP2 | 32 global | 2048 | 2048 | **126,878-129,710 token/s** | **70,926 MiB/rank** | current steady smoke steps |
+| CPBC-DP grouped BlockMask + online prefix DDP2 | 32 global | 2048 | 2048 | 126,878-129,710 token/s | 70,926 MiB/rank | accepted predecessor |
+| CPBC-DP GPU-static route step DDP2 | 32 global | 2048 | 2048 | **149,568-152,584 token/s** | **65,510 MiB/rank** | current steady smoke steps |
 
 All DDP2 smokes preserve global batch 32 and 65,536 tokens per optimizer step.
 The accepted grouped-MM C512 reference averaged about `29,624 token/s`; the
-initial fused C2048 shape averaged about `45,546 token/s`; and the first exact
-BlockMask path averaged about `94,114 token/s`. The current grouped-reader and
-online-prefix candidate averages `128,294 token/s`, a further 36.3% DDP2 gain.
+initial fused C2048 shape averaged about `45,546 token/s`; the first exact
+BlockMask path averaged about `94,114 token/s`; and the grouped-reader/online
+prefix predecessor averaged `128,294 token/s`. The current GPU-static candidate
+averages `150,778 token/s`, a further 17.5% DDP2 gain with 96.2% efficiency
+relative to twice its single-card median.
 For identical route decisions, DP cache/attention is chunk-boundary invariant.
 C2048 is not a training-dynamics-equivalent replacement for C512: its U1
 gradient horizon is 2,048 rather than 512 tokens, and stochastic routing
 consumes RNG in different tensor groupings. The matched Transformer baseline
-averaged `618,738 token/s`, so a system-level gap of about 4.82x remains.
+averaged `618,738 token/s`, so a system-level gap of about 4.10x remains. At
+steady throughput, 5B pure training tokens require about 9.21 hours before
+compile, evaluation, checkpoint, W&B, and data stalls.
 
 The two models do not execute the same number of block evaluations, so this is
 not a pure attention-kernel ratio. The gap is nevertheless much larger than
@@ -612,24 +615,23 @@ route length alone can explain.
 
 Profiling and code inspection identify the dominant costs:
 
-1. the per-step routing loop and host-built action groups fragment the GPU workload;
-2. reader packing still launches many elementwise, copy, index, and concatenate kernels;
-3. bounded reader grouping reduces attention calls but retains route-dependent padding;
-4. current FlexAttention forward/backward accounts for about 23% of profiled self CUDA,
-   so attention is important but no longer the sole dominant family;
-5. `C=512,U=1,T=2048` executes four backward groups per optimizer step and then
-   synchronizes about `561 MB` of gradients;
-6. step-indexed banks, route-dependent padding, and variable group shapes add
-   memory traffic.
+1. FlexAttention backward remains the largest indivisible attention cost;
+2. reader workspace packing, copies, scatters, and indexes consume about 61.6 ms
+   of the final self-CUDA profile;
+3. remaining elementwise work consumes about 42.0 ms, including decoded-Key
+   RoPE outside already fused regions;
+4. grouped expert GEMM still costs about 19.8 ms across 225 calls;
+5. the route-depth loop remains serial even though its dispatch metadata is now
+   GPU-resident;
+6. every optimizer step still synchronizes about `561 MB` of gradients.
 
-Grouped expert GEMM, narrow cache gathers, conditional compiler metrics, exact
-BlockMask attention, calibrated backward tiles, bounded reader batching,
-exact online DP prefix compilation, vectorized FB compilation, ragged reader
-attention, and GPU-resident dispatch are implemented. GPU dispatch improves the
-ragged path by about 9.8%, but all-reader K/V expansion makes that path slower
-and larger than padded BlockMask attention. The next exact optimization should
-reduce route-loop fragmentation, packing copies, and intermediate
-materialization without changing cache visibility or parameter ownership.
+Grouped expert GEMM, narrow cache gathers, exact BlockMask attention, calibrated
+tiles, all-reader static workspaces, exact online DP prefix compilation,
+precomposed writer projection, and compiled pointwise paths are implemented.
+The final profile falls from 421.9 ms to 382.3 ms self CUDA and from 9,346 to
+7,156 CUDA launches. Further exact optimization should focus on FlexAttention
+backward and workspace copy/scatter traffic without changing cache visibility
+or parameter ownership.
 
 ## 15. Metrics and Visualization
 
@@ -681,8 +683,8 @@ should advance to 2B. A Cartesian product of 5B runs is not justified.
 
 ### 17.1 Training Speed
 
-CPBC improves serial throughput by hundreds of times. The current grouped
-BlockMask C2048 DDP2 path remains about 4.82x behind the matched baseline. This
+CPBC improves serial throughput by hundreds of times. The current GPU-static
+BlockMask C2048 DDP2 path remains about 4.10x behind the matched baseline. This
 is still the primary practical limitation and makes broad long-run ablations
 expensive.
 
@@ -696,10 +698,11 @@ Training PPL alone cannot choose between them.
 
 ### 17.3 TBPTT Truncation
 
-The formal C512/U1 profile has a 512-token gradient horizon. Cache values remain
-available across the sequence, but later chunks cannot assign gradient credit
-to writers before the detach boundary. Increasing `U` raises activation memory
-quickly; the quality benefit has not yet been measured.
+The current C2048/U1 profile has a full-context 2,048-token gradient horizon.
+Historical C512/U1 has a 512-token horizon: its cache values remain available
+across chunks, but later chunks cannot assign gradient credit before the detach
+boundary. Increasing `U` raises activation memory quickly; the quality benefit
+has not yet been measured.
 
 ### 17.4 Compression and Reader Takeover
 
@@ -727,14 +730,17 @@ explicit DP/FB visibility semantics. Stateful TBPTT and manual DDP gradient
 synchronization preserve cache lifecycle and optimizer consistency.
 
 Functionality, causality, incremental behavior, grouped expert compute, exact
-BlockMask attention, grouped readers, online prefix compilation, and
-distributed training have been validated. Profiling now places attention at
-about 23% of self CUDA time; the next engineering priority is reducing the
-remaining route-loop, packing, copy, and elementwise fragmentation while
-preserving the current exact execution contract. Historical BlockMask
+BlockMask attention, grouped readers, online prefix compilation, GPU-static
+dispatch, precomposed writer projection, and distributed training have been
+validated. The current candidate reaches 78.4k token/s on one B200 and 150.8k
+token/s on two B200s. The next engineering priority is reducing FlexAttention
+backward and workspace copy/scatter traffic while preserving the current exact
+execution contract. Historical BlockMask
 acceptance is in
 [rc_kv_c2048_blockmask_dispatch_report.md](./rc_kv_c2048_blockmask_dispatch_report.md),
+the grouped-reader predecessor is documented in
+[rc_kv_grouped_reader_incremental_prefix_report.md](./rc_kv_grouped_reader_incremental_prefix_report.md),
 and the current candidate is documented in
-[rc_kv_grouped_reader_incremental_prefix_report.md](./rc_kv_grouped_reader_incremental_prefix_report.md).
+[rc_kv_static_route_step_report.md](./rc_kv_static_route_step_report.md).
 Quality claims must wait for the controlled benchmark and ablation sequence
 above.

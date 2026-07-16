@@ -268,6 +268,45 @@ def test_embedding_position_lookup_matches_advanced_index_gradients() -> None:
     assert torch.equal(legacy_positions.grad, optimized_positions.grad)
 
 
+def test_static_reader_workspace_slots_are_unique_and_compact_with_out_tokens() -> None:
+    config = replace(
+        _synchronous_config(
+            chunk_size=4,
+            attention_backend="shared_padded_flex_blockmask",
+            dispatch_mode="grouped_mm_gpu",
+        ),
+        flex_reader_group_size=2,
+    )
+    model = BrianBDRERouteCore(config)
+    selected = torch.tensor([0, 2, 1, 0, 2, 1, 1, 2])
+    dispatch = model._synchronous_grouped_mm_dispatch(selected, chunk=4)
+    assert dispatch is not None and dispatch.valid is not None
+    slots = model._static_reader_workspace_slots(
+        dispatch,
+        batch=2,
+        chunk=4,
+        readers=2,
+    )
+
+    assert torch.unique(slots).numel() == selected.numel()
+    sorted_batches = torch.div(dispatch.indexes, 4, rounding_mode="floor")
+    reader_batches = dispatch.actions * 2 + sorted_batches
+    slot_ranks = slots % 4
+    for reader_batch in range(4):
+        valid_ranks = slot_ranks[(reader_batches == reader_batch) & dispatch.valid]
+        assert torch.equal(valid_ranks, torch.arange(valid_ranks.numel()))
+    invalid = ~dispatch.valid
+    invalid_batches = sorted_batches[invalid]
+    invalid_ranks = slot_ranks[invalid]
+    for batch_index in range(2):
+        valid_last_reader = ((reader_batches == 2 + batch_index) & dispatch.valid).sum()
+        batch_invalid_ranks = invalid_ranks[invalid_batches == batch_index]
+        assert torch.equal(
+            batch_invalid_ranks,
+            valid_last_reader + torch.arange(batch_invalid_ranks.numel()),
+        )
+
+
 def test_bdre_compiler_emits_one_pair_per_reader_and_cache_per_token() -> None:
     compiler = BDRECompiler(max_route_steps=4, key_temperature=0.5, value_temperature=1.0)
     writer_key = torch.randn(2, 4, 5)
@@ -1095,9 +1134,61 @@ def test_gpu_fixed_dispatch_matches_compact_ragged_dispatch_within_rounding() ->
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is required")
+def test_gpu_static_blockmask_dispatch_matches_compact_grouped_reader_within_rounding() -> None:
+    torch.manual_seed(713)
+    compact_config = replace(
+        _cuda_flex_synchronous_config(chunk_size=8, flex_reader_group_size=2),
+        synchronous_attention_backend="shared_padded_flex_blockmask",
+        flex_kernel_variant="bwd32_fwd32",
+        prefix_compile_mode="incremental_exact",
+    )
+    static_config = replace(
+        compact_config,
+        dispatch_mode="grouped_mm_gpu",
+        decoded_key_rope_mode="compiled",
+        writer_projection_mode="precomposed",
+        route_pointwise_mode="compiled",
+    )
+    compact = BrianBDRERouteCore(compact_config).cuda().train()
+    static = BrianBDRERouteCore(static_config).cuda().train()
+    static.load_state_dict(compact.state_dict())
+    input_ids = torch.randint(0, 64, (3, 8), device="cuda")
+
+    with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+        compact_output = compact(
+            input_ids,
+            targets=input_ids,
+            route_mode="free",
+            summarize_routing=False,
+        )
+        static_output = static(
+            input_ids,
+            targets=input_ids,
+            route_mode="free",
+            summarize_routing=False,
+        )
+    compact_output["loss"].backward()
+    static_output["loss"].backward()
+
+    logit_diff = (compact_output["logits"].float() - static_output["logits"].float()).abs()
+    assert logit_diff.max().item() <= 0.2
+    assert logit_diff.mean().item() <= 0.04
+    assert torch.allclose(compact_output["loss"], static_output["loss"], atol=3e-3, rtol=3e-3)
+    for compact_parameter, static_parameter in (
+        (compact.token_embedding.weight, static.token_embedding.weight),
+        (compact.bdre_projections[0].key_read, static.bdre_projections[0].key_read),
+        (compact.route_blocks[1].block.ffn.w1.weight, static.route_blocks[1].block.ffn.w1.weight),
+    ):
+        assert compact_parameter.grad is not None and static_parameter.grad is not None
+        assert torch.allclose(compact_parameter.grad, static_parameter.grad, atol=3e-2, rtol=3e-2)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is required")
 @pytest.mark.parametrize("depth_visibility_policy", ["depth_prefix", "full_bank"])
+@pytest.mark.parametrize("dispatch_mode", ["grouped_mm", "grouped_mm_gpu"])
 def test_flex_reader_cuda_is_suffix_invariant_and_stream_consistent(
     depth_visibility_policy: str,
+    dispatch_mode: str,
 ) -> None:
     torch.manual_seed(72)
     config = _cuda_flex_synchronous_config(
@@ -1108,7 +1199,11 @@ def test_flex_reader_cuda_is_suffix_invariant_and_stream_consistent(
     config = replace(
         config,
         synchronous_attention_backend="shared_padded_flex_blockmask",
+        dispatch_mode=dispatch_mode,
         flex_kernel_variant="bwd32_fwd32",
+        decoded_key_rope_mode="compiled" if dispatch_mode == "grouped_mm_gpu" else "eager",
+        writer_projection_mode="precomposed" if dispatch_mode == "grouped_mm_gpu" else "staged",
+        route_pointwise_mode="compiled" if dispatch_mode == "grouped_mm_gpu" else "eager",
         prefix_compile_mode="incremental_exact",
     )
     full = BrianBDRERouteCore(config).cuda().eval()
@@ -1265,8 +1360,25 @@ def test_bdre_rejects_invalid_fused_reader_and_full_bank_execution_options() -> 
         replace(config, full_bank_compile_mode="vectorized").validate()
     with pytest.raises(ValueError, match="flex_kernel_variant"):
         replace(config, flex_kernel_variant="unsupported").validate()
+    with pytest.raises(ValueError, match="decoded_key_rope"):
+        replace(config, decoded_key_rope_mode="unsupported").validate()
+    with pytest.raises(ValueError, match="writer_projection"):
+        replace(config, writer_projection_mode="unsupported").validate()
+    with pytest.raises(ValueError, match="route_pointwise"):
+        replace(config, route_pointwise_mode="unsupported").validate()
     with pytest.raises(ValueError, match="requires ragged_flex_blockmask"):
         replace(config, dispatch_mode="grouped_mm_gpu").validate()
+    blockmask_config = replace(
+        config,
+        synchronous_attention_backend="shared_padded_flex_blockmask",
+    )
+    with pytest.raises(ValueError, match="covering route_pool_blocks"):
+        replace(blockmask_config, dispatch_mode="grouped_mm_gpu").validate()
+    replace(
+        blockmask_config,
+        dispatch_mode="grouped_mm_gpu",
+        flex_reader_group_size=2,
+    ).validate()
     with pytest.raises(ValueError, match="does not support bdre_compile_top_k"):
         replace(
             config,

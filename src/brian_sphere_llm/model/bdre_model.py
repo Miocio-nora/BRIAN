@@ -53,6 +53,34 @@ ModuleBase = nn.Module if nn is not None else object
 
 if torch is not None and flex_attention is not None:
 
+    @torch.compile(fullgraph=True, dynamic=True)
+    def _compiled_bdre_apply_rotary(
+        tensor: torch.Tensor,
+        cosine: torch.Tensor,
+        sine: torch.Tensor,
+    ) -> torch.Tensor:
+        """Fuse large decoded-Key RoPE elementwise work without capturing GEMM."""
+
+        return apply_rotary(tensor, cosine, sine)
+
+    @torch.compile(fullgraph=True, dynamic=True)
+    def _compiled_bdre_grouped_rms_norm(
+        inputs: torch.Tensor,
+        norm_weights: torch.Tensor,
+        actions: torch.Tensor,
+        eps: float,
+    ) -> torch.Tensor:
+        selected_weights = F.embedding(actions, norm_weights).to(dtype=inputs.dtype)
+        scale = torch.rsqrt(inputs.pow(2).mean(dim=-1, keepdim=True) + eps)
+        return selected_weights * inputs * scale
+
+    @torch.compile(fullgraph=True, dynamic=True)
+    def _compiled_bdre_silu_mul(
+        gate: torch.Tensor,
+        up: torch.Tensor,
+    ) -> torch.Tensor:
+        return F.silu(gate) * up
+
     def _create_bdre_causal_block_mask(
         query_positions: torch.Tensor,
         query_valid: torch.Tensor,
@@ -325,6 +353,9 @@ if torch is not None and flex_attention is not None:
         return latent_value
 
 else:  # pragma: no cover - exercised only without PyTorch/FlexAttention.
+    _compiled_bdre_apply_rotary = None
+    _compiled_bdre_grouped_rms_norm = None
+    _compiled_bdre_silu_mul = None
     _create_bdre_causal_block_mask = None
     _create_bdre_ragged_block_mask = None
     _compiled_bdre_flex_reader = None
@@ -360,6 +391,9 @@ class BDREConfig:
     synchronous_attention_backend: str = "per_query_reference"
     flex_reader_group_size: int = 1
     flex_kernel_variant: str = "auto"
+    decoded_key_rope_mode: str = "eager"
+    writer_projection_mode: str = "staged"
+    route_pointwise_mode: str = "eager"
     prefix_compile_mode: str = "recompute"
     depth_visibility_policy: str = "depth_prefix"
     full_bank_compile_mode: str = "loop"
@@ -432,6 +466,9 @@ class BDREConfig:
                 minimum=1,
             ),
             flex_kernel_variant=str(execution.get("flex_kernel_variant", "auto")),
+            decoded_key_rope_mode=str(execution.get("decoded_key_rope", "eager")),
+            writer_projection_mode=str(execution.get("writer_projection", "staged")),
+            route_pointwise_mode=str(execution.get("route_pointwise", "eager")),
             prefix_compile_mode=str(execution.get("prefix_compile", "recompute")),
             depth_visibility_policy=str(
                 execution.get("depth_visibility_policy", "depth_prefix")
@@ -492,6 +529,14 @@ class BDREConfig:
             "bwd32_fwd32",
         }:
             raise ValueError("Unsupported BDRE execution.flex_kernel_variant.")
+        if self.decoded_key_rope_mode not in {"eager", "compiled"}:
+            raise ValueError("BDRE execution.decoded_key_rope must be 'eager' or 'compiled'.")
+        if self.writer_projection_mode not in {"staged", "precomposed"}:
+            raise ValueError(
+                "BDRE execution.writer_projection must be 'staged' or 'precomposed'."
+            )
+        if self.route_pointwise_mode not in {"eager", "compiled"}:
+            raise ValueError("BDRE execution.route_pointwise must be 'eager' or 'compiled'.")
         if self.prefix_compile_mode not in {"recompute", "incremental_exact"}:
             raise ValueError(
                 "BDRE execution.prefix_compile must be 'recompute' or 'incremental_exact'."
@@ -547,9 +592,22 @@ class BDREConfig:
             )
         if (
             self.dispatch_mode == "grouped_mm_gpu"
-            and self.synchronous_attention_backend != "ragged_flex_blockmask"
+            and self.synchronous_attention_backend
+            not in {"ragged_flex_blockmask", "shared_padded_flex_blockmask"}
         ):
-            raise ValueError("grouped_mm_gpu dispatch requires ragged_flex_blockmask attention.")
+            raise ValueError(
+                "grouped_mm_gpu dispatch requires ragged_flex_blockmask or "
+                "shared_padded_flex_blockmask attention."
+            )
+        if (
+            self.dispatch_mode == "grouped_mm_gpu"
+            and self.synchronous_attention_backend == "shared_padded_flex_blockmask"
+            and self.flex_reader_group_size != self.route.route_pool_blocks
+        ):
+            raise ValueError(
+                "Static grouped_mm_gpu BlockMask dispatch requires one reader group "
+                "covering route_pool_blocks."
+            )
         if not self.position_geometry_normalize:
             raise ValueError("BDRE v1 requires normalized position geometry.")
         if self.route.top_k != 1 or self.route.later_top_k != 1:
@@ -584,9 +642,10 @@ class _SynchronousGroupedMMDispatch:
 class _SynchronousGroupedMMWeights:
     position_adapter: torch.Tensor | None
     attn_norm: torch.Tensor
-    qkv: torch.Tensor
-    key_write: torch.Tensor
-    value_write: torch.Tensor
+    qkv: torch.Tensor | None
+    key_write: torch.Tensor | None
+    value_write: torch.Tensor | None
+    query_key_value_write: torch.Tensor | None
     attention_out: torch.Tensor
     ffn_norm: torch.Tensor
     ffn_gate_up: torch.Tensor
@@ -1886,12 +1945,45 @@ class BrianBDRERouteCore(BrianRouteCore):
                 position_weights.append(block.position_adapter.weight)
             position_adapter = grouped_matrix(position_weights)
 
+        qkv_parameters = [block.block.attn.qkv.weight for block in self.route_blocks]
+        query_key_value_write = None
+        if self.bdre_config.writer_projection_mode == "precomposed":
+            dim = self.config.base.d_model
+            qkv_stack = torch.stack(qkv_parameters).to(dtype=grouped_dtype)
+            key_write_stack = torch.stack(
+                [projection.key_write.weight for projection in self.bdre_projections]
+            ).to(dtype=grouped_dtype)
+            value_write_stack = torch.stack(
+                [projection.value_write.weight for projection in self.bdre_projections]
+            ).to(dtype=grouped_dtype)
+            query_key_value_write = torch.cat(
+                (
+                    qkv_stack[:, :dim, :],
+                    torch.bmm(key_write_stack, qkv_stack[:, dim : 2 * dim, :]),
+                    torch.bmm(value_write_stack, qkv_stack[:, 2 * dim :, :]),
+                ),
+                dim=1,
+            ).transpose(-1, -2).contiguous()
+
         return _SynchronousGroupedMMWeights(
             position_adapter=position_adapter,
             attn_norm=torch.stack([block.block.attn_norm.weight for block in self.route_blocks]),
-            qkv=grouped_matrix([block.block.attn.qkv.weight for block in self.route_blocks]),
-            key_write=grouped_matrix([projection.key_write.weight for projection in self.bdre_projections]),
-            value_write=grouped_matrix([projection.value_write.weight for projection in self.bdre_projections]),
+            qkv=None if query_key_value_write is not None else grouped_matrix(qkv_parameters),
+            key_write=(
+                None
+                if query_key_value_write is not None
+                else grouped_matrix(
+                    [projection.key_write.weight for projection in self.bdre_projections]
+                )
+            ),
+            value_write=(
+                None
+                if query_key_value_write is not None
+                else grouped_matrix(
+                    [projection.value_write.weight for projection in self.bdre_projections]
+                )
+            ),
+            query_key_value_write=query_key_value_write,
             attention_out=grouped_matrix([block.block.attn.out.weight for block in self.route_blocks]),
             ffn_norm=torch.stack([block.block.ffn_norm.weight for block in self.route_blocks]),
             ffn_gate_up=grouped_matrix(
@@ -1911,9 +2003,11 @@ class BrianBDRERouteCore(BrianRouteCore):
     ) -> _SynchronousGroupedMMDispatch | None:
         if self.bdre_config.dispatch_mode == "grouped_mm_gpu":
             actions = selected.clamp(max=self.config.route_pool_blocks - 1)
-            indexes = torch.argsort(actions, stable=True)
+            valid = selected < self.config.route_pool_blocks
+            sort_keys = actions * 2 + (~valid).to(dtype=actions.dtype)
+            indexes = torch.argsort(sort_keys, stable=True)
             actions = actions.index_select(0, indexes)
-            valid = selected.index_select(0, indexes) < self.config.route_pool_blocks
+            valid = valid.index_select(0, indexes)
             offsets = torch.bincount(
                 actions,
                 minlength=self.config.route_pool_blocks,
@@ -2000,16 +2094,45 @@ class BrianBDRERouteCore(BrianRouteCore):
             start = end
         return torch.cat(outputs, dim=0)
 
-    @staticmethod
     def _grouped_mm_rms_norm(
+        self,
         inputs: torch.Tensor,
         norm_weights: torch.Tensor,
         actions: torch.Tensor,
         eps: float,
     ) -> torch.Tensor:
+        if (
+            self.bdre_config.route_pointwise_mode == "compiled"
+            and inputs.is_cuda
+            and _compiled_bdre_grouped_rms_norm is not None
+        ):
+            return _compiled_bdre_grouped_rms_norm(inputs, norm_weights, actions, eps)
         selected_weights = F.embedding(actions, norm_weights).to(dtype=inputs.dtype)
         scale = torch.rsqrt(inputs.pow(2).mean(dim=-1, keepdim=True) + eps)
         return selected_weights * inputs * scale
+
+    def _silu_mul(self, gate: torch.Tensor, up: torch.Tensor) -> torch.Tensor:
+        if (
+            self.bdre_config.route_pointwise_mode == "compiled"
+            and gate.is_cuda
+            and _compiled_bdre_silu_mul is not None
+        ):
+            return _compiled_bdre_silu_mul(gate, up)
+        return F.silu(gate) * up
+
+    def _apply_decoded_key_rope(
+        self,
+        decoded_key: torch.Tensor,
+        key_cosine: torch.Tensor,
+        key_sine: torch.Tensor,
+    ) -> torch.Tensor:
+        if (
+            self.bdre_config.decoded_key_rope_mode == "compiled"
+            and decoded_key.is_cuda
+            and _compiled_bdre_apply_rotary is not None
+        ):
+            return _compiled_bdre_apply_rotary(decoded_key, key_cosine, key_sine)
+        return apply_rotary(decoded_key, key_cosine, key_sine)
 
     def _prepare_synchronous_grouped_mm_step(
         self,
@@ -2037,13 +2160,27 @@ class BrianBDRERouteCore(BrianRouteCore):
             dispatch.actions,
             self.route_blocks[0].block.attn_norm.eps,
         )
-        qkv = self._grouped_mm_linear(attn_input, weights.qkv, dispatch.offsets)
         dim = attn_input.size(-1)
-        query, key, value = qkv.chunk(3, dim=-1)
+        if weights.query_key_value_write is not None:
+            projected = self._grouped_mm_linear(
+                attn_input,
+                weights.query_key_value_write,
+                dispatch.offsets,
+            )
+            query, canonical_key, canonical_value = torch.split(
+                projected,
+                (dim, self.bdre_config.key_dim, self.bdre_config.value_dim),
+                dim=-1,
+            )
+        else:
+            if weights.qkv is None or weights.key_write is None or weights.value_write is None:
+                raise RuntimeError("Staged grouped writer projection weights are incomplete.")
+            qkv = self._grouped_mm_linear(attn_input, weights.qkv, dispatch.offsets)
+            query, key, value = qkv.chunk(3, dim=-1)
+            canonical_key = self._grouped_mm_linear(key, weights.key_write, dispatch.offsets)
+            canonical_value = self._grouped_mm_linear(value, weights.value_write, dispatch.offsets)
         attention = self.route_blocks[0].block.attn
         query = query.view(-1, attention.n_heads, attention.head_dim)
-        canonical_key = self._grouped_mm_linear(key, weights.key_write, dispatch.offsets)
-        canonical_value = self._grouped_mm_linear(value, weights.value_write, dispatch.offsets)
         return routed_input, query, canonical_key, canonical_value
 
     def _finish_synchronous_prefix_grouped_mm(
@@ -2088,7 +2225,7 @@ class BrianBDRERouteCore(BrianRouteCore):
             weights.ffn_gate_up,
             dispatch.offsets,
         ).chunk(2, dim=-1)
-        hidden = F.silu(gate) * up
+        hidden = self._silu_mul(gate, up)
         return routed + self._grouped_mm_linear(hidden, weights.ffn_down, dispatch.offsets)
 
     def _read_synchronous_prefix_grouped_mm_per_action(
@@ -2106,6 +2243,21 @@ class BrianBDRERouteCore(BrianRouteCore):
     ) -> torch.Tensor:
         if self.bdre_config.synchronous_attention_backend == "ragged_flex_blockmask":
             return self._read_synchronous_prefix_grouped_mm_ragged_flex(
+                routed_input,
+                query,
+                dispatch=dispatch,
+                chunk=chunk,
+                start_position=start_position,
+                reader_step=reader_step,
+                historical_state=historical_state,
+                current_keys=current_keys,
+                current_values=current_values,
+            )
+        if (
+            self.bdre_config.synchronous_attention_backend == "shared_padded_flex_blockmask"
+            and self.bdre_config.dispatch_mode == "grouped_mm_gpu"
+        ):
+            return self._read_synchronous_prefix_grouped_mm_static_blockmask(
                 routed_input,
                 query,
                 dispatch=dispatch,
@@ -2277,6 +2429,181 @@ class BrianBDRERouteCore(BrianRouteCore):
         attended = torch.einsum("nhv,nhvd->nhd", latent_value, selected_value_read)
         return attended.reshape(routed_input.size(0), -1).to(dtype=routed_input.dtype)
 
+    @staticmethod
+    def _static_reader_workspace_slots(
+        dispatch: _SynchronousGroupedMMDispatch,
+        *,
+        batch: int,
+        chunk: int,
+        readers: int,
+    ) -> torch.Tensor:
+        """Assign every sorted query a unique compact slot without a host sync."""
+
+        if dispatch.valid is None:
+            raise ValueError("Static reader workspace requires a GPU validity mask.")
+        sorted_batches = torch.div(dispatch.indexes, chunk, rounding_mode="floor")
+        reader_batches = dispatch.actions * batch + sorted_batches
+        validity_class = (~dispatch.valid).to(dtype=dispatch.actions.dtype)
+        rank_groups = (dispatch.actions * 2 + validity_class) * batch + sorted_batches
+        order = torch.arange(rank_groups.numel(), device=rank_groups.device)
+        boundaries = torch.cat(
+            (
+                torch.ones(1, dtype=torch.bool, device=rank_groups.device),
+                rank_groups[1:] != rank_groups[:-1],
+            )
+        )
+        starts = torch.where(boundaries, order, torch.zeros_like(order))
+        local_rank = order - torch.cummax(starts, dim=0).values
+        valid_counts = torch.zeros(
+            readers * batch,
+            dtype=torch.long,
+            device=rank_groups.device,
+        ).scatter_add(0, reader_batches, dispatch.valid.to(dtype=torch.long))
+        slot_rank = torch.where(
+            dispatch.valid,
+            local_rank,
+            valid_counts.index_select(0, reader_batches) + local_rank,
+        )
+        return reader_batches * chunk + slot_rank
+
+    def _read_synchronous_prefix_grouped_mm_static_blockmask(
+        self,
+        routed_input: torch.Tensor,
+        query: torch.Tensor,
+        *,
+        dispatch: _SynchronousGroupedMMDispatch,
+        chunk: int,
+        start_position: int,
+        reader_step: int,
+        historical_state: BDRECacheState,
+        current_keys: torch.Tensor,
+        current_values: torch.Tensor,
+    ) -> torch.Tensor:
+        """Read all reader actions through one compacted, GPU-resident workspace."""
+
+        if dispatch.valid is None or _compiled_bdre_batched_blockmask_flex_reader is None:
+            raise RuntimeError("Static BlockMask dispatch requires CUDA FlexAttention.")
+        attention = self.route_blocks[0].block.attn
+        batch = current_keys.size(0)
+        readers = self.config.route_pool_blocks
+        slots = self._static_reader_workspace_slots(
+            dispatch,
+            batch=batch,
+            chunk=chunk,
+            readers=readers,
+        )
+        query_positions = start_position + (dispatch.indexes % chunk)
+        query_cosine = attention.rope.cos[0, 0, query_positions, :].to(
+            device=query.device,
+            dtype=query.dtype,
+        )
+        query_sine = attention.rope.sin[0, 0, query_positions, :].to(
+            device=query.device,
+            dtype=query.dtype,
+        )
+        query = apply_rotary(query, query_cosine.unsqueeze(1), query_sine.unsqueeze(1))
+
+        workspace_size = readers * batch * chunk
+        padded_query = query.new_zeros(
+            workspace_size,
+            attention.n_heads,
+            attention.head_dim,
+        ).index_copy(0, slots, query)
+        padded_query = padded_query.view(
+            readers * batch,
+            chunk,
+            attention.n_heads,
+            attention.head_dim,
+        ).transpose(1, 2)
+        padded_positions = torch.zeros(
+            workspace_size,
+            dtype=torch.long,
+            device=query.device,
+        ).index_copy(0, slots, query_positions).view(readers * batch, chunk)
+        padded_valid = torch.zeros(
+            workspace_size,
+            dtype=torch.bool,
+            device=query.device,
+        ).index_copy(0, slots, dispatch.valid).view(readers * batch, chunk)
+
+        key_parts: list[torch.Tensor] = []
+        value_parts: list[torch.Tensor] = []
+        if start_position:
+            if historical_state.step_keys is None or historical_state.step_values is None:
+                raise ValueError("Synchronous-prefix history is missing step cache tensors.")
+            key_parts.append(
+                historical_state.step_keys[:, :, reader_step, :, :].permute(2, 0, 1, 3)
+            )
+            value_parts.append(
+                historical_state.step_values[:, :, reader_step, :, :].permute(2, 0, 1, 3)
+            )
+        key_parts.append(current_keys.permute(2, 0, 1, 3))
+        value_parts.append(current_values.permute(2, 0, 1, 3))
+        key_codes = torch.cat(key_parts, dim=2)
+        value_codes = torch.cat(value_parts, dim=2)
+        key_positions = torch.arange(key_codes.size(2), device=query.device)
+        key_cosine = attention.rope.cos[:, :, key_positions, :].to(
+            device=query.device,
+            dtype=query.dtype,
+        )
+        key_sine = attention.rope.sin[:, :, key_positions, :].to(
+            device=query.device,
+            dtype=query.dtype,
+        )
+        key_read = torch.stack([projection.key_read for projection in self.bdre_projections]).to(
+            dtype=query.dtype
+        )
+        value_read = torch.stack(
+            [projection.value_read for projection in self.bdre_projections]
+        ).to(dtype=query.dtype)
+        block_mask = _create_bdre_causal_block_mask(
+            padded_positions,
+            padded_valid,
+            key_codes.size(2),
+        )
+        decoded_key = torch.einsum(
+            "abkr,ahrd->abhkd",
+            key_codes.to(dtype=query.dtype),
+            key_read,
+        ).reshape(
+            readers * batch,
+            attention.n_heads,
+            key_codes.size(2),
+            attention.head_dim,
+        )
+        decoded_key = self._apply_decoded_key_rope(decoded_key, key_cosine, key_sine)
+        expanded_values = value_codes.to(dtype=query.dtype).reshape(
+            readers * batch,
+            key_codes.size(2),
+            self.bdre_config.value_dim,
+        ).unsqueeze(1).expand(-1, attention.n_heads, -1, -1)
+        latent_value = _compiled_bdre_batched_blockmask_flex_reader(
+            padded_query,
+            decoded_key,
+            expanded_values,
+            block_mask,
+            self.bdre_config.flex_kernel_variant,
+        ).view(
+            readers,
+            batch,
+            attention.n_heads,
+            chunk,
+            self.bdre_config.value_dim,
+        )
+        attended = torch.einsum("abhqv,ahvd->abhqd", latent_value, value_read)
+        attended = attended.permute(0, 1, 3, 2, 4).reshape(
+            workspace_size,
+            attention.n_heads,
+            attention.head_dim,
+        )
+        attended = attended.index_select(0, slots)
+        attended = torch.where(
+            dispatch.valid.view(-1, 1, 1),
+            attended,
+            torch.zeros_like(attended),
+        )
+        return attended.reshape(routed_input.size(0), -1).to(dtype=routed_input.dtype)
+
     def _read_synchronous_prefix_grouped_mm_batched_flex(
         self,
         routed_input: torch.Tensor,
@@ -2394,7 +2721,7 @@ class BrianBDRERouteCore(BrianRouteCore):
                 key_codes.size(2),
                 attention.head_dim,
             )
-            decoded_key = apply_rotary(decoded_key, key_cosine, key_sine)
+            decoded_key = self._apply_decoded_key_rope(decoded_key, key_cosine, key_sine)
             expanded_values = value_codes.to(dtype=query.dtype).reshape(
                 readers * batch,
                 key_codes.size(2),

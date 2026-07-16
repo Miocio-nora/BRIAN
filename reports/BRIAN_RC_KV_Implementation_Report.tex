@@ -65,7 +65,7 @@
 \begin{abstract}
 自由路由使不同 token 在同一计算深度访问不同 block，并允许重复访问同一 block；因此，固定层 Transformer 中以 layer identity 为索引的 KV cache 无法直接迁移到 BRIAN。本文给出已经实现的 Reader-Compiled KV Cache（\RCKV{}）系统，而非早期理论规格的复述。系统首先由每个 writer block 独立地将其多头 K/V 压缩到 canonical latent，再由 Block--Depth Relative Encoding（\BDRE{}）按照 reader block、可选 reader step 及球面几何编译 reader-specific cache；reader head 使用独立映射恢复 Key 视角，并在压缩 Value 空间中完成等价聚合。实现同时提供精确 token-serial oracle、三种 current-token self-KV、三类 reader-step cache policy、可选 hard top-$k$ 与独立 K/V 温度。
 
-为解决精确 teacher-forced 训练的串行瓶颈，本文进一步定义 Chunkwise Progressive Bank Completion（\CPBC{}）：chunk 内 token 并行、route depth 串行，cache bank 随 recurrent step 渐进补全，并以严格 token-causal mask 阻止未来信息。实现包含 depth-prefix visibility（\DP{}）和 full-bank visibility（\FB{}）、跨 chunk 的 stateful TBPTT，以及 rank-local state 下的显式 DDP 梯度同步。完整测试验证了因果性、incremental consistency、cache policy 等价性和分布式更新一致性。grouped expert GEMM、exact BlockMask reader grouping、在线 prefix softmax 与 calibrated FlexAttention kernel 将单卡 \DP{} C2048 提升到约 $6.31\times10^4$ token/s，并将两卡 smoke 提升到约 $1.28\times10^5$ token/s；匹配的普通 Transformer 约为 $6.19\times10^5$ token/s。该优化没有创建新模型版本，当前 $4.82\times$ 差距主要来自 route loop、packing/copy、elementwise work 与 attention 算术。
+为解决精确 teacher-forced 训练的串行瓶颈，本文进一步定义 Chunkwise Progressive Bank Completion（\CPBC{}）：chunk 内 token 并行、route depth 串行，cache bank 随 recurrent step 渐进补全，并以严格 token-causal mask 阻止未来信息。实现包含 depth-prefix visibility（\DP{}）和 full-bank visibility（\FB{}）、跨 chunk 的 stateful TBPTT，以及 rank-local state 下的显式 DDP 梯度同步。完整测试验证了因果性、incremental consistency、cache policy 等价性和分布式更新一致性。grouped expert GEMM、exact BlockMask、在线 prefix softmax、GPU-static route workspace、预组合 writer projection 与 compiled pointwise kernels 将单卡 \DP{} C2048 提升到约 $7.84\times10^4$ token/s，并将两卡 smoke 提升到约 $1.51\times10^5$ token/s；匹配的普通 Transformer 约为 $6.19\times10^5$ token/s。该优化没有创建新模型版本，当前 $4.10\times$ 差距主要来自 FlexAttention backward、workspace copy/scatter、elementwise work 与 route-depth 串行控制。
 \end{abstract}
 
 \noindent\textbf{关键词：} BRIAN；自由路由；Reader-Compiled KV；BDRE；CPBC；TBPTT
@@ -359,8 +359,8 @@ LM loss 以完整 sequence 的有效 next-token label 数归一化：
 \subsection{Rank-local state 与手工同步}
 DDP 仅划分 batch，每个 rank 维护自己的 cache state。所有 stateful forwards 在 \code{no\_sync()} 下运行，完整 optimizer-step accumulation 后进行一次显式同步：先 all-reduce parameter-used mask，再把全局使用但本 rank 未使用的参数补零梯度，最后按 dtype/device bucket all-reduce 并除以 world size。当前两卡 formal profile 每步同步约 561 MB gradients，分为 9 个 64 MB 上限 buckets。CPU merged-batch 测试验证了 loss、gradient 与 parameter update 等价。这里的跨 chunk 截断属于 TBPTT~\cite{williams1990tbptt}，但 cache state 与稀疏参数同步是本实现的显式扩展。
 
-\subsection{当前正式训练 profile}
-表~\ref{tab:formal-profile} 是正在运行的实现 profile，而不是所有 \RCKV{} mode 的默认值。
+\subsection{当前准备的正式训练 profile}
+表~\ref{tab:formal-profile} 是已经完成 smoke 验收、但尚未启动长训练的实现 profile，而不是所有 \RCKV{} mode 的默认值。
 
 \begin{table}[t]
 \centering
@@ -373,9 +373,11 @@ DDP 仅划分 batch，每个 rank 维护自己的 cache state。所有 stateful 
 \midrule
 execution & \code{synchronous\_prefix} \\
 visibility & \code{depth\_prefix} \\
-attention backend & \code{shared\_padded\_explicit} \\
-dispatch & \code{grouped\_mm} \\
-$C,U$ & $512,1$ \\
+attention backend & exact BlockMask \\
+dispatch & \code{grouped\_mm\_gpu} \\
+prefix compiler & \code{incremental\_exact} \\
+writer projection & \code{precomposed} \\
+$C,U$ & $2048,1$ \\
 DDP & 2 B200 \\
 local/global batch & $16/32$ \\
 tokens/update & 65,536 \\
@@ -398,7 +400,7 @@ training budget & 5B tokens \\
 \end{align}
 location、plain balance、transition-diversity 与 route-imitation 权重为 0。该 routing recipe 是当前实验控制，不是 \RCKV{} 数学定义的一部分。
 
-在不改变上述 formal run 的前提下，当前还准备了同一 \RCKV{} 定义下的 fused-reader profile。给定相同 route decisions，\DP{} cache/attention 满足 chunk-boundary invariance。C2048 将 U1 gradient horizon 从 512 提高到 2,048 token，并把四次 backward group 合为一次；scheduled routing、noise 与 random override 还会按不同 tensor grouping 消耗 RNG，因此训练轨迹不与 C512 等价。
+给定相同 route decisions，\DP{} cache/attention 满足 chunk-boundary invariance。C2048 将 U1 gradient horizon 从 512 提高到 2,048 token，并把四次 backward group 合为一次；scheduled routing、noise 与 random override 还会按不同 tensor grouping 消耗 RNG，因此训练轨迹不与 C512 等价。当前只完成性能、因果性、DDP 与 legacy-eval 验收，尚未启动该 profile 的正式 5B 长训练。
 
 \section{已实现选项与合法组合}
 表~\ref{tab:options} 总结当前代码可以选择的机制。部分选项是 correctness reference 或 ablation，不应视为推荐生产后端。
@@ -418,11 +420,14 @@ Depth mode & none；reader-step；synchronous-prefix & synchronous-prefix & CPBC
 Visibility policy & depth-prefix；full-bank & depth-prefix & full-bank 仅允许 CPBC \\
 Reader cache & eager；lazy；dynamic & eager & CPBC 强制 eager；其余服务 exact reader-step mode \\
 Self-KV & bdre-prefix；current-step；none & bdre-prefix & CPBC 当前强制 bdre-prefix \\
-Attention backend & per-query-reference；shared-padded-explicit；shared-padded-flex；exact-blockmask & shared-padded-explicit & BlockMask 使用绝对位置 causal rule 与 valid-row mask \\
-Flex reader group & $1\ldots B$ & N/A & 只改变 reader 执行布局；当前 C2048 candidate 用 8 \\
-Prefix compiler & recompute；incremental-exact & recompute & 后者只适用于 synchronous DP 且不允许 hard top-$k$ \\
+Attention backend & per-query-reference；shared-padded-explicit；shared-padded-flex；exact-blockmask & exact-blockmask & BlockMask 使用绝对位置 causal rule 与 valid-row mask \\
+Flex reader group & $1\ldots B$ & 8 & 只改变 reader 执行布局；当前 C2048 candidate 覆盖全部 free blocks \\
+Prefix compiler & recompute；incremental-exact & incremental-exact & 后者只适用于 synchronous DP 且不允许 hard top-$k$ \\
 FB compiler & loop；vectorized & loop & vectorized 同时计算所有 completed reader depths \\
-Dispatch & legacy-cuda-scan；grouped-host；grouped-mm；grouped-mm-gpu & grouped-mm & grouped-mm 批处理 routed expert projections \\
+Dispatch & legacy-cuda-scan；grouped-host；grouped-mm；grouped-mm-gpu & grouped-mm-gpu & static workspace 的 metadata 全部留在 GPU \\
+Decoded-Key RoPE & eager；compiled & compiled & 只捕获 elementwise RoPE，不捕获 GEMM/FlexAttention \\
+Writer projection & staged；precomposed & precomposed & $[W_Q;A_KW_K;A_VW_V]$，参数与梯度不变 \\
+Route pointwise & eager；compiled & compiled & 融合 grouped RMSNorm 与 SwiGLU pointwise \\
 Compiler top-$k$ & null 或正整数 & null & Key/Value 共用 support；不得超过 $S_{\max}$ \\
 $T_K,T_V$ & 正实数 & $0.5,1.0$ & 独立 compiler softmax 温度 \\
 $\tau_z,\lambda_s,\gamma$ & 非负实数 & $1.0,0.25,0$ & formal depth distance 归一化 \\
@@ -459,10 +464,12 @@ CUDA Flex DP/FB suffix 与 streamed forward & 通过 \\
 explicit 与 Flex BF16 reader & reported loss 相同；logits/gradients 在 BF16 舍入范围 \\
 grouped exact BlockMask 与 score-mod reference & logits、loss、representative gradients 在 BF16 容差内 \\
 online DP prefix compiler 与 full recompute & 每步 cache、full-model loss 与 gradients 在显式容差内 \\
+GPU-static workspace 与 host-grouped BlockMask & logits、loss、representative gradients 在 BF16 容差内 \\
+static slot/OUT layout & slots 唯一、valid ranks 紧凑、OUT tail 被 mask \\
 CPU DDP 与 merged global batch & loss、gradient、update 一致 \\
 rank-local unused parameter synchronization & 通过 \\
 B200 CUDA BF16 forward/backward 与 DDP2 smoke & finite 且 checkpoint state 通过 \\
-完整 repository regression & 612 passed；仅有既有 PyTorch warnings \\
+完整 repository regression & 616 passed；仅有既有 PyTorch warnings \\
 \bottomrule
 \end{tabularx}
 \end{table*}
@@ -492,38 +499,40 @@ Formal \DP{} grouped-MM DDP2 & 32 global & 2048 & 512 & 28,638--30,609 & 124.5 G
 \DP{} fused reader, group 8 & 16 & 2048 & 512 & 19,139 & 24,742 MiB & same model definition \\
 \DP{} fused reader, group 1 & 16 & 2048 & 2048 & 23,246 & 66,011 MiB & horizon 2048 \\
 \DP{} exact BlockMask, group 1 & 16 & 2048 & 2048 & 48,956 & 66,016 MiB & historical stage \\
-\DP{} BlockMask+online, group 8 & 16 & 2048 & 2048 & \textbf{63,078} & 66,938 MiB & current candidate \\
+\DP{} BlockMask+online, group 8 & 16 & 2048 & 2048 & 63,078 & 66,938 MiB & predecessor \\
+\DP{} GPU-static route step & 16 & 2048 & 2048 & \textbf{78,381} & 61,697 MiB & current candidate \\
 \FB{} fused/vectorized, group 8 & 16 & 2048 & 128 & 9,013 & 13,460 MiB & $>10\times$ historical FB \\
 \DP{} C2048 fused DDP2 & 32 global & 2048 & 2048 & 45,443--45,648 & 70.2 GiB/rank & steady smoke \\
 \DP{} C2048 exact BlockMask DDP2 & 32 global & 2048 & 2048 & 90,780--97,447 & 70.2 GiB/rank & historical stage \\
-\DP{} C2048 grouped+online DDP2 & 32 global & 2048 & 2048 & \textbf{126,878--129,710} & 70.9 GiB/rank & current smoke \\
+\DP{} C2048 grouped+online DDP2 & 32 global & 2048 & 2048 & 126,878--129,710 & 70.9 GiB/rank & predecessor \\
+\DP{} C2048 GPU-static DDP2 & 32 global & 2048 & 2048 & \textbf{149,568--152,584} & 65,510 MiB/rank & current smoke \\
 \bottomrule
 \end{tabular}
 \end{table*}
 
-所有 DDP2 profile 均保持 global batch 32。accepted C512 grouped-MM 平均约 29,624 token/s；早期 C2048 fused profile 平均约 45,546 token/s；exact BlockMask group-1 平均约 94,114 token/s；当前 grouped-reader+online-prefix candidate 平均 128,294 token/s。同期匹配数据与 global batch 的普通 Transformer 平均为 618,738 token/s，因此当前系统级差距约 $4.82\times$。按 steady throughput 计算，5B pure training tokens 约需 10.8 小时，不含 compile、evaluation、checkpoint、W\&B 与 data stalls。
+所有 DDP2 profile 均保持 global batch 32。accepted C512 grouped-MM 平均约 29,624 token/s；早期 C2048 fused profile 平均约 45,546 token/s；exact BlockMask group-1 平均约 94,114 token/s；grouped-reader+online-prefix predecessor 平均 128,294 token/s；当前 GPU-static candidate 平均 150,778 token/s，相对 predecessor 提升 17.5\%，相对两倍单卡中位数的 DDP efficiency 为 96.2\%。同期匹配数据与 global batch 的普通 Transformer 平均为 618,738 token/s，因此当前系统级差距约 $4.10\times$。按 steady throughput 计算，5B pure training tokens 约需 9.21 小时，不含 compile、evaluation、checkpoint、W\&B 与 data stalls。
 
 \subsection{剩余热点}
 profile 与实现检查显示主要瓶颈为：
 \begin{enumerate}
-  \item 每个 route step 仍由 host 构造 active block groups，route control 与 kernel submission 高度碎片化；
-  \item grouped GEMM 已合并主要 expert projections，但 reader packing、copy、index 与 concat kernels 仍很多；
-  \item grouped exact BlockMask 将 observed attention calls 从 120 降到 15，但 route-dependent padding 仍存在；
-  \item 当前 profile 中 attention forward/backward 约占 self CUDA 的 23.1\%，已经不是唯一主导项；
-  \item $C=512,U=1,T=2048$ 每个 optimizer step 执行四次 backward groups，随后同步约 561 MB gradients；
-  \item step-indexed bank 与 route-dependent padding 增加 memory traffic，且不同路径长度使 group shape 高频变化。
+  \item FlexAttention backward 仍是最大的不可再分 attention 成本；
+  \item static reader workspace 的 packing、copy、scatter 与 index 约占 61.6 ms self CUDA；
+  \item 其余 elementwise work 约占 42.0 ms，包括未被合并的 decoded-Key RoPE 区域；
+  \item grouped expert GEMM 仍有 225 次调用，合计约 19.8 ms；
+  \item route-depth loop 仍然串行，虽然 dispatch metadata 已不再同步到 host；
+  \item 每个 optimizer step 仍需同步约 561 MB gradients。
 \end{enumerate}
-grouped expert GEMM、窄 cache gather、exact BlockMask、bounded reader grouping、online DP prefix compiler 与 vectorized FB compiler 已实现。下一阶段性能工作应减少 route-step packing、canonical writer update、reader projection materialization 与 scatter/gather 的中间张量和 launches，并继续以 logits/loss/gradient 等价为验收条件。
+grouped expert GEMM、窄 cache gather、exact BlockMask、all-reader static workspace、online DP prefix compiler、precomposed writer projection 与 compiled pointwise paths 已实现。完整 forward/backward profile 从 421.9 ms 降到 382.3 ms self CUDA，CUDA launches 从 9,346 降到 7,156。下一阶段性能工作应优先减少 FlexAttention backward 与 workspace copy/scatter，并继续以 logits/loss/gradient 等价为验收条件。
 
 \section{局限与尚未回答的问题}
 \paragraph{训练速度。}
-当前 \CPBC{} 已把不可训练的 token-serial 速度提高数百倍，但 current candidate 仍比 matched baseline 慢约 $4.82\times$。该数值是当前实现差距，不是已证明的硬件或数学极限。
+当前 \CPBC{} 已把不可训练的 token-serial 速度提高数百倍，但 current candidate 仍比 matched baseline 慢约 $4.10\times$。该数值是当前实现差距，不是已证明的硬件或数学极限。
 
 \paragraph{CPBC 是显式近似语义。}
 \DP{} 对 chunk boundary 前向不变，但它让 completed token 的 reader depth $\ell$ 永久只看 writer prefix $s\le\ell$；\FB{} 更接近 completed-route oracle，却在 active chunk 内仍只能渐进补全并依赖 chunk boundary。二者不能只凭训练 PPL 选取。
 
 \paragraph{TBPTT 截断。}
-$U=1$ 的 512-token gradient horizon 保留 forward cache，却阻断后续 chunk 对早期 writer 的 credit assignment。增大 $U$ 会快速增加 activation memory，质量收益尚未测定。
+当前 C2048/U1 profile 的 gradient horizon 覆盖完整 2,048-token context。历史 C512/U1 profile 的 512-token horizon 保留跨 chunk forward cache，却阻断后续 chunk 对 detach boundary 之前 writer 的 credit assignment。增大 $U$ 会快速增加 activation memory，质量收益尚未测定。
 
 \paragraph{压缩与 reader takeover。}
 $r_K=r_V=32$ 相对 $d=768$ 是强压缩。block-specific canonicalizers 必须学习可组合坐标系；compiler position term、depth term、self-prefix 和 reader decoder 均可能形成 memory shortcut。需要通过 entropy、writer mass、self-memory concentration 与 public benchmark 联合诊断。
@@ -548,7 +557,7 @@ v1 只实现 hard top-1，尚未支持 top-2 reader fusion；八个 free blocks�
 \section{结论}
 当前实现将自由路由中的 KV memory 分成三个清晰层次：block/head-specific attention 负责写入与读取的局部坐标系，canonical K/V latent 提供跨路径接口，\BDRE{} 依据 reader geometry 和可选 depth 规则把完整 writer route 编译成每 token 的 reader-specific object。\Serial{} 给出精确因果 oracle；\CPBC{} 通过 chunk 内 token 并行和 route-depth 串行实现可训练的近似 prefill，并用 DP/FB 明确暴露其历史可见性选择。stateful TBPTT 与手工 DDP 同步进一步保证 cache 生命周期和 optimizer update 一致。
 
-系统的功能、因果性和分布式训练接口已经实现并通过测试；exact BlockMask reader grouping 与 online prefix compiler 在不改变 \RCKV{}/\CPBC{} 语义的前提下把两卡吞吐提高到约 128.3k token/s，但系统级执行效率仍是 limitation。下一阶段的关键不是继续堆叠 routing loss，而是减少 route-loop fragmentation、packing/copy 与小 kernel 开销，再用受控 ablation 判断该记忆结构的真实能力收益。
+系统的功能、因果性和分布式训练接口已经实现并通过测试；exact BlockMask、online prefix compiler、GPU-static workspace、precomposed writer projection 与 compiled pointwise kernels 在不改变 \RCKV{}/\CPBC{} 语义的前提下把单卡吞吐提高到约 78.4k token/s、两卡吞吐提高到约 150.8k token/s，但相对 matched baseline 仍有 $4.10\times$ 系统级差距。下一阶段的关键不是继续堆叠 routing loss，而是在严格等价验收下减少 FlexAttention backward 与 workspace copy/scatter，再用受控 ablation 判断该记忆结构的真实能力收益。
 
 \begin{thebibliography}{9}
 \small

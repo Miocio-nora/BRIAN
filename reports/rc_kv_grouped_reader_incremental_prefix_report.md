@@ -2,9 +2,12 @@
 
 **Date:** 2026-07-16
 
-**Status:** implemented and accepted as the current C2048 performance candidate
+**Status:** implemented and retained as the accepted predecessor
 
 **Branch:** `rc-kv-compact-reader`
+
+**Successor:**
+[`rc_kv_static_route_step_report.md`](./rc_kv_static_route_step_report.md)
 
 ## 1. Scope
 

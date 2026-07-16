@@ -277,18 +277,20 @@ the U1 gradient horizon from 512 to 2,048 tokens, and stochastic routing consume
 RNG in different tensor groupings, so it is not an identical training trajectory.
 
 The current C2048 path builds on the exact FlexAttention `BlockMask` backend.
-It batches up to eight independent readers into one exact attention call,
-updates unrestricted depth-prefix compiler softmaxes with an algebraically
-exact online recurrence, and uses calibrated 32-token forward/backward tiles.
-Reader/head parameters remain independent, and the causal mask now explicitly
-excludes padded query rows. On one B200 at BS16/T2048, the current candidate
-reaches 63,078 tok/s with 66,938 MiB peak allocated, up 28.8% from the prior
-48,956 tok/s BlockMask stage. A two-B200 smoke with global BS32 reached 126.9k
-and 129.7k global tok/s on its two steady steps, averaging 128.3k tok/s and
-reducing the same-shape baseline gap to 4.82x. Single-process and DDP2 legacy
-evaluation produced identical validation loss and routing statistics. The
-online compiler automatically falls back to full recomputation when detailed
-compiler diagnostics or visualization weights are requested.
+It batches all eight readers in a fixed GPU-resident workspace, updates
+unrestricted depth-prefix compiler softmaxes with an algebraically exact online
+recurrence, precomposes local K/V writer projections, and compiles the largest
+decoded-Key RoPE and route pointwise regions. Reader/head parameters remain
+independent, and the causal mask explicitly excludes padded and OUT rows. On
+one B200 at BS16/T2048, the current candidate reaches 78,381 tok/s with 61,697
+MiB peak allocated, up 24.3% from the accepted 63,078 tok/s predecessor. A
+two-B200 smoke with global BS32 averages 150,778 global tok/s across four steady
+steps, reducing the matched baseline gap to 4.10x and the pure 5B estimate to
+about 9.21 hours. Single-process and DDP2 legacy evaluation agree within a
+`3.5e-6` relative loss difference, with routing/cache telemetry at comparable
+BF16 reduction tolerance. The online compiler automatically falls back to full
+recomputation when detailed compiler diagnostics or visualization weights are
+requested.
 
 Ragged multi-reader attention and GPU-resident dispatch remain experimental;
 GPU dispatch improved the ragged path to 28,050 tok/s, but its all-reader K/V
@@ -317,6 +319,7 @@ configs/model/brian_r125_bdre_cpbc_dp_c512_grouped_mm_flex.yaml
 configs/model/brian_r125_bdre_cpbc_dp_c2048_grouped_mm_flex.yaml
 configs/model/brian_r125_bdre_cpbc_dp_c2048_grouped_mm_flex_blockmask.yaml
 configs/model/brian_r125_bdre_cpbc_dp_c2048_grouped_mm_flex_blockmask_group8_incremental.yaml
+configs/model/brian_r125_bdre_cpbc_dp_c2048_grouped_mm_gpu_static_blockmask_incremental.yaml
 configs/model/brian_r125_bdre_cpbc_fb_shared_explicit.yaml
 configs/model/brian_r125_bdre_cpbc_fb_c128_grouped_mm_flex.yaml
 configs/train/baseline_r125_5b_balanced_ddp2_legacyval.yaml
@@ -326,6 +329,7 @@ configs/train/cpbc_r125_5b_dp_u1_c512_grouped_mm_ddp2_legacyval.yaml
 configs/train/cpbc_r125_5b_dp_u1_c2048_grouped_mm_flex_ddp2_legacyval.yaml
 configs/train/cpbc_r125_5b_dp_u1_c2048_grouped_mm_flex_blockmask_ddp2_legacyval.yaml
 configs/train/cpbc_r125_5b_dp_u1_c2048_grouped_mm_flex_blockmask_group8_incremental_ddp2_legacyval.yaml
+configs/train/cpbc_r125_5b_dp_u1_c2048_grouped_mm_gpu_static_blockmask_incremental_ddp2_legacyval.yaml
 configs/train/cpbc_r125_5b_fb_u1_c128_grouped_mm_flex_ddp2_legacyval.yaml
 configs/train/smoke_cpbc_r125_5b_dp_u1_c512_grouped_mm_ddp2_legacyval.yaml
 configs/train/cpbc_r125_5b_dp_u1_c512_ddp4_legacyval.yaml
@@ -362,9 +366,13 @@ negative reader-grouping results, and current DDP2 acceptance are recorded in
 The exact BlockMask implementation, backward-kernel calibration, ragged/GPU
 dispatch experiments, and updated C2048/DDP2 acceptance are recorded in
 [reports/rc_kv_c2048_blockmask_dispatch_report.md](./reports/rc_kv_c2048_blockmask_dispatch_report.md).
-The grouped-reader execution, exact online prefix compiler, forward-kernel
-calibration, profiler evidence, and current 4.82x baseline gap are recorded in
+The grouped-reader execution, exact online prefix compiler, and historical
+4.82x baseline gap are recorded in
 [reports/rc_kv_grouped_reader_incremental_prefix_report.md](./reports/rc_kv_grouped_reader_incremental_prefix_report.md).
+The GPU-static route-step workspace, precomposed writer projection, compiled
+pointwise paths, complete acceptance evidence, and current 4.10x baseline gap
+are recorded in
+[reports/rc_kv_static_route_step_report.md](./reports/rc_kv_static_route_step_report.md).
 
 ## Live Route Sphere
 

@@ -27,6 +27,9 @@ def main() -> None:
     parser.add_argument("--detach-interval-chunks", type=int, default=None)
     parser.add_argument("--global-step", type=int, default=1)
     parser.add_argument("--flex-reader-group-size", type=int, default=None)
+    parser.add_argument("--decoded-key-rope-mode", default=None)
+    parser.add_argument("--writer-projection-mode", default=None)
+    parser.add_argument("--route-pointwise-mode", default=None)
     parser.add_argument("--prefix-compile-mode", default=None)
     parser.add_argument("--seed", type=int, default=123)
     parser.add_argument("--warmup-steps", type=int, default=1)
@@ -61,13 +64,37 @@ def main() -> None:
     torch.set_float32_matmul_precision(str(config.get("float32_matmul_precision", "high")))
     device = torch.device("cuda")
     model = build_model_from_config(model_config_path).to(device).train()
-    if args.flex_reader_group_size is not None or args.prefix_compile_mode is not None:
+    if any(
+        value is not None
+        for value in (
+            args.flex_reader_group_size,
+            args.decoded_key_rope_mode,
+            args.writer_projection_mode,
+            args.route_pointwise_mode,
+            args.prefix_compile_mode,
+        )
+    ):
         model.bdre_config = replace(
             model.bdre_config,
             flex_reader_group_size=(
                 args.flex_reader_group_size
                 if args.flex_reader_group_size is not None
                 else model.bdre_config.flex_reader_group_size
+            ),
+            decoded_key_rope_mode=(
+                args.decoded_key_rope_mode
+                if args.decoded_key_rope_mode is not None
+                else model.bdre_config.decoded_key_rope_mode
+            ),
+            writer_projection_mode=(
+                args.writer_projection_mode
+                if args.writer_projection_mode is not None
+                else model.bdre_config.writer_projection_mode
+            ),
+            route_pointwise_mode=(
+                args.route_pointwise_mode
+                if args.route_pointwise_mode is not None
+                else model.bdre_config.route_pointwise_mode
             ),
             prefix_compile_mode=(
                 args.prefix_compile_mode
@@ -155,6 +182,9 @@ def main() -> None:
         "chunk_size": chunk_size,
         "detach_interval_chunks": detach_interval_chunks,
         "flex_reader_group_size": model.bdre_config.flex_reader_group_size,
+        "decoded_key_rope_mode": model.bdre_config.decoded_key_rope_mode,
+        "writer_projection_mode": model.bdre_config.writer_projection_mode,
+        "route_pointwise_mode": model.bdre_config.route_pointwise_mode,
         "prefix_compile_mode": model.bdre_config.prefix_compile_mode,
         "loss": float(result["loss"].detach().cpu()),
         "top_self_cuda": rows[: args.row_limit],
