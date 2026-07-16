@@ -145,6 +145,16 @@ public suites, teacher accuracy, reasoning exact, route entropy, path diversity,
 block coverage, route length, and token-by-token inference. PPL alone is not an
 acceptance criterion.
 
+The matched plain-Transformer control uses the same balanced data, legacy
+validation split, global batch, token budget, and checkpoint benchmark cadence:
+
+```text
+configs/train/baseline_r125_5b_balanced_ddp2_legacyval.yaml
+```
+
+This replaces the old unbalanced `r125_main_5b` Sbase as the primary plain
+baseline for CPBC comparisons; the old result remains a historical reference.
+
 ## 6. Correctness Validation
 
 | Check | Result |

@@ -272,6 +272,7 @@ configs/train/stage5_bdre_tiny_synchronous_prefix_debug.yaml
 configs/model/brian_r125_bdre_cpbc_dp_shared_explicit.yaml
 configs/model/brian_r125_bdre_cpbc_dp_c512_shared_explicit.yaml
 configs/model/brian_r125_bdre_cpbc_fb_shared_explicit.yaml
+configs/train/baseline_r125_5b_balanced_ddp2_legacyval.yaml
 configs/train/cpbc_r125_5b_dp_u1_c128_ddp2_legacyval.yaml
 configs/train/cpbc_r125_5b_dp_u1_c512_ddp2_legacyval.yaml
 configs/train/cpbc_r125_5b_dp_u1_c512_ddp4_legacyval.yaml
