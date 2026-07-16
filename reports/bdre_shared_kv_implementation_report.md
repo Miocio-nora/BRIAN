@@ -1,45 +1,64 @@
-# BRIAN BDRE Reader-Compiled Shared KV Implementation Report
+# BRIAN RC-KV / CPBC Implementation Report
 
-**Status:** exact reference, stateful TBPTT, and additive synchronous-prefix
-prefill backends implemented
+**Status:** RC-KV exact oracle, CPBC approximate prefill, stateful TBPTT, and
+stateful DDP are implemented and validated
+
 **Date:** 2026-07-16
-**Working model name:** `BRIAN-R125-BDRE-RCKV-v1`
-**Base reference:** `BRIAN-R125 Global KV Cache-Only v1`
 
-## 1. Purpose
+**Working model:** `BRIAN-R125-BDRE-RCKV-v1`
 
-This report defines the implementation contract for the next BRIAN Global KV
-version: a Block-Dependent Relative Encoding (BDRE) reader-compiled shared KV
-cache for free routing.
+**Current branch:** `bdre-synchronous-prefix-ddp`
 
-The design starts from
-`reports/BRIAN_Free_Routing_Shared_KV_Cache.txt`, with the following approved
-clarifications:
+**Academic report:**
+[`BRIAN_RC_KV_Implementation_Report.tex`](./BRIAN_RC_KV_Implementation_Report.tex)
 
-- reader caches are indexed by the eight free route blocks by default, not by
-  a mandatory `reader_depth x reader_block` Cartesian product;
-- the optional depth term uses the current inference token's route step, not a
-  fixed depth attached to the historical token;
-- all attention K/V projections are block- and head-specific;
-- writer canonicalizers are block-specific and are not shared;
-- the default current-token self cache is a single BDRE-compiled prefix object;
-- exact token-by-token execution is the correctness reference;
-- parallel prefill must remain additive and must be measured against the exact
-  reference before it can replace any established experiment;
-- internal block positions use a spherical-code initialization rather than the
-  existing open-arc initialization.
+## 1. Executive Summary
+
+This document is the implementation-grounded contract for BRIAN's
+Reader-Compiled KV Cache (RC-KV). It supersedes the earlier design-only state
+of `BRIAN_Free_Routing_Shared_KV_Cache.txt`.
+
+Free routing removes the fixed layer identity used by an ordinary Transformer
+KV cache. Different tokens can visit different blocks, revisit a block, and
+exit at different route depths. RC-KV therefore separates memory into three
+levels:
+
+1. block/head-specific attention projections produce local K/V;
+2. block-specific writer projections map local K/V into canonical latent
+   spaces;
+3. the BDRE compiler turns a token's writer route into a reader-specific cache
+   object, which each reader block/head interprets with its own decoder.
+
+"Shared KV" means that readers use a common canonical cache interface. It does
+not mean that Q/K/V projections, writer canonicalizers, or reader decoders are
+shared across blocks.
+
+The implementation now has two distinct execution contracts:
+
+- **BDRE-Serial:** exact token-by-token execution. It is the causal and
+  incremental-inference oracle and remains permanently available.
+- **Chunkwise Progressive Bank Completion (CPBC):** an approximate prefill
+  procedure in which each chunk is processed in parallel across tokens while
+  each token's cache bank is progressively completed over recurrent route
+  steps.
+
+CPBC makes training feasible, but it is not presented as mathematically
+identical to serial execution. Its depth visibility policy is explicit:
+
+- **CPBC-DP:** CPBC with Depth-Prefix Visibility.
+- **CPBC-FB:** CPBC with Full-Bank Depth Visibility.
+
+The system has passed causal, incremental, cache-policy, gradient, and DDP
+correctness tests. The unresolved limitation is execution speed. The current
+two-B200 CPBC-DP run reaches about `21.6k token/s`, while the matched baseline
+reaches about `619k token/s`; this is an end-to-end gap of about `28.7x`.
+These measurements do not establish a downstream quality conclusion.
 
 Existing Non-Global, hidden-state Global KV, attention-summary Global KV, and
-pure-factorized cache-only implementations must remain available and unchanged.
-The BDRE path is additive and selected by a separate model configuration.
+pure-factorized cache-only implementations remain available and unchanged.
+RC-KV is additive and selected through a separate model configuration.
 
-## 1.1 Implementation Outcome
-
-The exact `BRIAN-R125-BDRE-RCKV-v1` reference is implemented on branch
-`bdre-reader-compiled-kv`. The implementation uses the existing
-`brian_route_core` architecture dispatch plus `bdre_shared_kv: true`; legacy
-configs still instantiate `BrianRouteCore`, while BDRE configs instantiate
-`BrianBDRERouteCore`.
+## 2. Implemented Surface
 
 Primary implementation files:
 
@@ -51,581 +70,484 @@ src/brian_sphere_llm/eval/bdre_cache_visualization.py
 src/brian_sphere_llm/train/stage_runner.py
 src/brian_sphere_llm/train/trainer.py
 tests/test_bdre_shared_kv.py
+tests/test_stateful_tbptt.py
+tests/test_stateful_ddp.py
 ```
 
-Prepared configs:
+Core model configurations:
 
 ```text
 configs/model/brian_r125_bdre_rckv_v1.yaml
-configs/model/brian_tiny_bdre_rckv.yaml
-configs/train/bdre_rckv_r125_5b_ddp2_legacyval.yaml
-configs/train/stage5_bdre_tiny_debug.yaml
-configs/train/stage5_bdre_tiny_ddp2_debug.yaml
+configs/model/brian_r125_bdre_rckv_v1_tbptt.yaml
 configs/model/brian_r125_bdre_rckv_synchronous_prefix.yaml
-configs/train/bdre_rckv_r125_5b_synchronous_prefix_b8_c128_legacyval.yaml
-configs/train/stage5_bdre_tiny_synchronous_prefix_debug.yaml
+configs/model/brian_r125_bdre_rckv_synchronous_prefix_shared_explicit.yaml
+configs/model/brian_r125_bdre_cpbc_dp_shared_explicit.yaml
+configs/model/brian_r125_bdre_cpbc_dp_c512_shared_explicit.yaml
+configs/model/brian_r125_bdre_cpbc_fb_shared_explicit.yaml
 ```
 
-Implemented execution and state contracts:
+Current training and ablation configurations:
 
-- stateful one-token `forward_incremental` without prefix recomputation;
-- token-serial teacher-forced training using the same incremental kernel;
-- conventional per-layer incremental KV for fixed pre/post blocks;
-- one persistent canonical K/V pair per completed token and free reader block;
-- independent block/head Q/K/V, block-specific writer canonicalizers, and
-  block/head-specific reader decoders;
-- exact decoded-Key RoPE and exact low-dimensional Value aggregation;
-- block-only compilation plus eager, persistent-lazy, and dynamic reader-step
-  modes;
-- `bdre_prefix`, `current_step`, and `none` self-KV modes;
-- optional hard compile top-k and separate Key/Value temperatures;
-- spherical IN/internal/OUT initialization and weak Gram loss;
-- all required scalar diagnostics in train/eval logs;
-- HTML/W&B visualization for position geometry, writer route, and per-reader
-  Key/Value compile weights.
-- detached terminal telemetry for a real sampled token route, consumed by the
-  text-free animated sphere in `tools/route_sphere_tui/`.
+```text
+configs/train/cpbc_r125_5b_dp_u1_c512_ddp2_legacyval.yaml
+configs/train/cpbc_r125_5b_dp_u1_c128_ddp2_legacyval.yaml
+configs/train/cpbc_r125_5b_fb_u1_c128_ddp2_legacyval.yaml
+configs/train/cpbc_r125_5b_fb_u2_c128_ddp2_legacyval.yaml
+configs/train/cpbc_r125_5b_fb_u4_c128_ddp2_legacyval.yaml
+configs/train/bdre_rckv_r125_5b_ddp2_legacyval.yaml
+configs/train/bdre_rckv_r125_5b_tbptt_bs32_legacyval.yaml
+```
 
-Core BDRE validation completed on 2026-07-15; terminal dashboard validation was
-added on 2026-07-16:
+Related engineering reports remain useful for historical calibration details:
 
-| Check | Result |
-| --- | --- |
-| BDRE focused unit/integration tests | 27 passed |
-| Prefix suffix-invariance | passed |
-| Full exact forward vs stateful incremental | max logits difference `0.0` |
-| Reader-step eager/lazy/dynamic equivalence | passed at `atol=rtol=1e-6` |
-| CUDA BF16 forward/backward | passed on B200 |
-| Tiny 3-step train/eval/checkpoint smoke | passed |
-| Tiny DDP2 train/eval/checkpoint smoke | passed on B200 GPUs 4-5 |
-| Legacy position/loss/routing/global/sparse regressions | passed |
-| R125 BF16 exact forward/backward smoke | passed |
-| Route Sphere single-GPU and DDP2 telemetry smoke | passed |
+```text
+reports/bdre_synchronous_prefix_prefill_report.md
+reports/bdre_stateful_tbptt_implementation_report.md
+reports/bdre_synchronous_prefix_kernel_optimization_report.md
+reports/cpbc_prefill_ddp_ablation_report.md
+reports/route_sphere_terminal_dashboard.md
+```
 
-The R125 smoke used batch 1, sequence length 4, and fixed sequential routing.
-It produced eight valid writer steps per token, finite loss and gradients, about
-`1.31 GiB` peak allocated CUDA memory, and about `2.47 s` wall time. This is a
-correctness measurement only and must not be extrapolated to 5B training.
+## 3. Current R125 Scope
 
-An additive synchronous-prefix prefill is now implemented after the exact
-reference passed its acceptance tests. It stores one cache per
-`(token, reader_step, reader_block)`, hard-masks future writer steps, and
-parallelizes tokens while keeping route depth serial. Its semantics, tests, and
-B200 calibration are recorded in
-`reports/bdre_synchronous_prefix_prefill_report.md`. The exact token-by-token
-implementation remains available as the oracle required by Section 16. The
-terminal visualization architecture and validation are recorded separately in
-`reports/route_sphere_terminal_dashboard.md`.
-
-Stateful TBPTT preserves exact token-serial forward and KV values while
-detaching cache history at explicit gradient boundaries; it is not approximate
-prefill. Stateful DDP and multi-chunk detach intervals were added later for the
-CPBC backend. Implementation, configuration, validation, and calibration are
-recorded in `reports/bdre_stateful_tbptt_implementation_report.md` and
-`reports/cpbc_prefill_ddp_ablation_report.md`.
-
-## 2. Model Scope
-
-The first implementation targets BRIAN-R125:
-
-| Item | Value |
+| Item | Implemented value |
 | --- | ---: |
+| Actual parameter count | `140,308,105` |
 | Hidden dimension | 768 |
 | Attention heads | 12 |
 | Head dimension | 64 |
 | Fixed pre blocks | 2 |
 | Free route blocks | 8 |
+| Exit Block | 1 |
 | Fixed post blocks | 2 |
 | Maximum route steps | 16 |
-| Routing | top-1 |
+| Route action | hard top-1 |
 | Block position dimension | 64 |
 | Canonical Key dimension | 32 |
 | Canonical Value dimension | 32 |
+| Current context length | 2048 |
 
-BDRE shared KV applies only to the eight free route blocks. Fixed pre/post
-blocks retain conventional per-layer autoregressive KV caches because their
-layer identity is stable.
+RC-KV applies only to the eight free route blocks. Fixed pre/post blocks retain
+standard per-layer autoregressive KV state because their layer identities are
+stable. OUT is a route action and terminal position, but it does not write a
+canonical cache object.
 
-## 3. Parameter Ownership
+When a token exits, its hidden state is frozen. Other active tokens continue
+routing; the exited token only occupies masked/padded positions until the
+route loop ends.
 
-No writer or reader attention matrix is shared across free blocks unless a
-future ablation explicitly enables sharing.
+## 4. Parameter Ownership and Writer Codes
 
-For free block `b` and head `h`:
+For free block `b` and head `h`, all attention projections are independent:
 
 ```text
 W_Q[b,h], W_K[b,h], W_V[b,h]
 ```
 
-are independent. They may remain packed in combined PyTorch linear weights,
-but their mathematical and parameter ownership is per block and per head.
+The code may pack them into combined PyTorch linear layers, but their
+mathematical ownership remains block- and head-specific.
 
-After concatenating all writer heads, each block has independent canonical
-write projections:
+For token `i` at route step `s`, the normalized attention input is:
 
 ```text
-A_K[b]: R^(H*dh) -> R^rK
-A_V[b]: R^(H*dh) -> R^rV
+x[i,s] = RMSNorm(hidden[i,s] + position_adapter(z[b[i,s]]))
+q[i,s,h] = W_Q[b[i,s],h] x[i,s]
+k[i,s,h] = W_K[b[i,s],h] x[i,s]
+v[i,s,h] = W_V[b[i,s],h] x[i,s]
 ```
 
-Each reader block and reader head has independent decoders:
+Before temporal RoPE, the selected writer block maps concatenated K and V
+heads into separate canonical spaces:
 
 ```text
-B_K[b,h]: R^rK -> R^dh
-B_V[b,h]: R^rV -> R^dh
+cK[i,s] = A_K[b[i,s]] Concat_h(k[i,s,h])
+cV[i,s] = A_V[b[i,s]] Concat_h(v[i,s,h])
 ```
 
-"Shared" refers to the canonical cache interface. It does not imply shared
-projection parameters.
+`A_K[b]` and `A_V[b]` are independent, bias-free, block-specific linear
+maps. They are not shared across free blocks. Canonical coordinates are
+learned jointly; no fixed external basis is assumed.
 
-## 4. Writer-Side KV Construction
-
-At route step `s`, token `i` selects writer block `b[i,s]`. K/V are generated
-from the standard pre-norm attention input:
+Each reader block and head also owns independent decoders:
 
 ```text
-x_attn[i,s] = RMSNorm(hidden[i,s] + position_adapter(z_current))
-k[i,s,h] = W_K[b[i,s],h](x_attn[i,s])
-v[i,s,h] = W_V[b[i,s],h](x_attn[i,s])
+B_K[reader,h]: R^rK -> R^dh
+B_V[reader,h]: R^rV -> R^dh
 ```
 
-The canonical writer codes are computed before temporal RoPE:
+## 5. Spherical Position Geometry
+
+The implementation maintains `IN + 8 internal blocks + OUT` learnable unit
+position vectors. Initialization uses antipodal IN/OUT poles and a regular
+simplex for the internal blocks in the orthogonal subspace:
 
 ```text
-cK[i,s] = A_K[b[i,s]](Concat_h(k[i,s,h]))
-cV[i,s] = A_V[b[i,s]](Concat_h(v[i,s,h]))
-```
-
-`cK` and `cV` remain mathematically separate. The implementation may fuse
-`A_K[b] @ W_K[b]` and `A_V[b] @ W_V[b]` to avoid materializing concatenated
-head tensors, provided equivalence tests pass.
-
-During a token's route, step-level canonical codes are temporary:
-
-```text
-temporary_K: [batch, max_route_steps, rK]
-temporary_V: [batch, max_route_steps, rV]
-temporary_valid: [batch, max_route_steps]
-temporary_writer_block: [batch, max_route_steps]
-```
-
-They are released after the token's persistent reader caches are compiled.
-
-## 5. Position Geometry
-
-### 5.1 Initialization
-
-The BDRE version uses ten unit position vectors:
-
-```text
-IN + 8 internal free blocks + OUT
-```
-
-Initialization uses antipodal IN/OUT poles and an internal regular simplex in
-the orthogonal subspace:
-
-```text
-z_IN dot z_OUT = -1
-z_IN dot z_block = 0
-z_OUT dot z_block = 0
-z_block_i dot z_block_j = -1/7, i != j
+dot(z_IN, z_OUT) = -1
+dot(z_IN, z_block) = dot(z_OUT, z_block) = 0
+dot(z_block_i, z_block_j) = -1/7, i != j
 ```
 
 A deterministic seeded orthogonal rotation is applied after construction so
-the initialization is not tied to coordinate axes.
+the geometry is not tied to coordinate axes. Positions are normalized when
+read and remain trainable.
 
-### 5.2 Semantics
+- IN initializes router state and first-step position injection.
+- Internal positions serve the router, block adapters, and BDRE compiler.
+- OUT represents termination and is injected into the Exit Block.
+- IN and OUT do not index reader cache entries.
 
-- `IN` initializes the first router state and first block-position injection.
-- The eight internal positions are used by the router, block adapters, and
-  BDRE compilation.
-- `OUT` represents the terminal state and is injected into the Exit Block.
-- IN and OUT do not index reader-compiled KV caches.
+A weak Gram-matrix loss with weight `0.001` discourages geometric collapse.
+It does not define a nearest-neighbor path and is not a route-imitation loss.
 
-All positions remain learnable and are normalized on use.
+## 6. BDRE Reader Compilation
 
-### 5.3 Geometry Regularization
-
-A weak Gram-matrix loss prevents position collapse without prescribing a route
-path:
-
-```yaml
-position_geometry:
-  enabled: true
-  weight: 0.001
-  normalize: true
-  internal_target: regular_simplex
-  in_out_target: antipodal_orthogonal
-```
-
-This loss preserves broad spherical separation. It must not be used as a
-nearest-neighbor routing objective.
-
-## 6. BDRE Compilation
-
-Let `z_reader` be the active reader block position and `z_writer[s]` the
-position of the block used at writer step `s`.
-
-### 6.1 Default: Block-Only
-
-The default score has no route-step distance term:
+For reader block `r`, reader step `l`, and historical writer step `s`, the
+implemented score is:
 
 ```text
-e[b,s] = tau_position * dot(z_reader[b], z_writer[s])
+e[r,l,s] = tau_z * dot(z_reader[r], z_writer[s])
+           - lambda_s * depth_distance(l,s)
+           + gamma * (s + 1) / max_route_steps
 ```
 
-After a token completes its route, it is compiled into eight persistent cache
-pairs:
+The formal CPBC profile uses normalized depth distance:
 
 ```text
-mK[token,b] = Sum_s alphaK[b,s] * cK[token,s]
-mV[token,b] = Sum_s alphaV[b,s] * cV[token,s]
+depth_distance(l,s) = abs(l - s) / (max_route_steps - 1)
 ```
 
-Persistent cache shapes are:
+The three score terms can be independently disabled:
 
-```text
-compiled_K: [batch, sequence, 8, rK]
-compiled_V: [batch, sequence, 8, rV]
-compiled_valid: [batch, sequence]
-```
+- block-only compilation uses `lambda_s = 0` and `gamma = 0`;
+- reader-step compilation enables `lambda_s > 0`;
+- late-step bias enables `gamma > 0` and remains an ablation only.
 
-### 6.2 Optional: Current Reader Step
-
-The depth-aware option uses the current inference token's route step `l_t`:
-
-```text
-e[l_t,b,s]
-    = -lambda_step * abs(l_t - s)
-      + tau_position * dot(z_reader[b], z_writer[s])
-```
-
-This mode may use:
-
-```yaml
-reader_step_cache: eager
-reader_step_cache: lazy
-reader_step_cache: dynamic
-```
-
-- `eager` compiles all `8 x max_route_steps` reader states when a token route
-  completes.
-- `lazy` compiles a `(reader_block, reader_step)` state on first access and
-  memoizes it; this is the default cache policy when reader-step scoring is
-  enabled.
-- `dynamic` retains historical step-level writer codes and recomputes fusion
-  at every read. It exists for cost and correctness measurement, not as the
-  expected production path.
-
-### 6.3 Optional: Late-Step Bias
-
-The block-only cache can add a reader-independent writer-step prior:
-
-```text
-e[b,s]
-    = tau_position * dot(z_reader[b], z_writer[s])
-      + late_step_weight * s / S
-```
-
-This keeps one cache per reader block but may collapse compilation toward the
-last writer steps. It is implemented only as an ablation and is disabled by
-default.
-
-### 6.4 Candidate Selection and Temperatures
-
-Hard top-k is optional:
-
-```yaml
-compile_top_k: null  # use every valid writer step; default
-compile_top_k: 16
-compile_top_k: 12
-compile_top_k: 8
-compile_top_k: 4
-```
-
-Key and Value use the same candidate set and separate softmax temperatures:
+Only valid writer steps enter the candidate set. Optional hard compile top-k
+is applied before softmax. Key and Value use the same support but independent
+temperatures:
 
 ```text
 alphaK = softmax(e / T_K)
 alphaV = softmax(e / T_V)
-T_K <= T_V
+mK[i,r,l] = Sum_s alphaK[r,l,s] * cK[i,s]
+mV[i,r,l] = Sum_s alphaV[r,l,s] * cV[i,s]
 ```
 
-Initial defaults are:
+Current defaults are `T_K=0.5`, `T_V=1.0`, `tau_z=1.0`, and no hard compile
+top-k. The current formal CPBC profile uses `lambda_s=0.25` and `gamma=0`.
 
-```yaml
-tau_position: 1.0
-key_temperature: 0.5
-value_temperature: 1.0
-compile_top_k: null
-```
+### 6.1 Persistent State Variants
 
-Temperature and top-k values remain explicit ablation parameters.
+| Mode | Main K/V state | Approx. BF16 K+V per token | Semantics |
+| --- | --- | ---: | --- |
+| Block-only | `[B,T,R,rX]` | 1 KiB | one cache pair per completed token and reader block |
+| Reader-step eager | `[B,T,L,R,rX]` | 16 KiB | compile every reader step when the token completes |
+| Reader-step lazy | block cache + writer history + memo | grows on access | compile `(reader,step)` at first read and memoize |
+| Reader-step dynamic | `[B,T,Smax,rX]` writer history | about 2 KiB | recompute fusion on every read; reference/cost mode |
 
-## 7. Current-Token Self KV
+CPBC requires eager, step-indexed banks. Exact reader-step execution supports
+eager, lazy, and dynamic policies and verifies their numerical equivalence.
 
-The default self mode is `bdre_prefix`.
+## 7. Reader Attention and Current-Token Memory
 
-At current token route step `s`:
-
-1. Compute the current step's standard pre-RoPE K/V and canonical `cK_s/cV_s`.
-2. Append them to the current token's temporary route prefix.
-3. Compile steps `1..s` with the current reader block and active BDRE scoring
-   mode.
-4. Produce exactly one temporary self K/V object.
-5. Attend to historical compiled caches plus this one self object.
-
-This avoids exposing earlier route steps as separate attention objects while
-retaining an online summary of the current token's route history. There is no
-circular dependency because current-step K/V are generated from the attention
-input before attention output is computed.
-
-Supported modes:
-
-```yaml
-self_kv_mode: bdre_prefix   # default
-self_kv_mode: current_step  # standard current-step self K/V ablation
-self_kv_mode: none          # strict historical i < t ablation
-```
-
-Self-prefix compilation uses the same top-k, temperatures, and scoring mode as
-historical cache compilation unless a diagnostic override is explicitly set.
-
-## 8. Reader Attention and RoPE
-
-For historical token `i < t`, active reader block `b`, and head `h`:
+For a historical canonical object, the exact Key path decodes into each
+reader-head coordinate system and then applies token-position RoPE:
 
 ```text
-k_hat[i,b,h] = B_K[b,h](mK[i,b])
-v_hat[i,b,h] = B_V[b,h](mV[i,b])
+k_hat[i,reader,h] = B_K[reader,h](mK[i,reader])
+q_rope[t,h] = RoPE(q[t,h], position=t)
+k_rope[i,h] = RoPE(k_hat[i,reader,h], position=i)
 ```
 
-The exact reference applies temporal RoPE after Key decoding:
+Value aggregation uses a strictly equivalent low-dimensional path:
 
 ```text
-q_rope[t,b,h] = RoPE(W_Q[b,h](x_reader), position=t)
-k_rope[i,b,h] = RoPE(k_hat[i,b,h], position=i)
+value_latent[h] = Sum_i attention_weight[i,h] * mV[i,reader]
+output_head[h] = B_V[reader,h](value_latent[h])
 ```
 
-Attention remains causal and includes historical tokens plus the single
-current-token self object selected by `self_kv_mode`.
+The Value decoder can therefore run after the weighted sum. The Key decoder
+cannot currently be removed because each historical Key receives a different
+RoPE rotation. Any latent-relative-RoPE optimization must first prove exact
+equivalence against this decoded-Key reference.
 
-### 8.1 Low-Dimensional Optimization
+The exact backend implements three current-token self-KV policies:
 
-Value decoding is optimized directly and exactly:
+- `bdre_prefix`: compile the current token's writer prefix into one temporary
+  self object; this is the default.
+- `current_step`: expose only the current writer step's K/V.
+- `none`: attend only to historical tokens `i < t`.
+
+`bdre_prefix` does not expose every route step as a separate attention object.
+Current-step K/V are generated from the pre-attention input, so the operation
+does not create a circular dependency. CPBC currently requires
+`bdre_prefix`.
+
+## 8. Exact Execution: BDRE-Serial
+
+BDRE-Serial is sequence-serial and batch-parallel. For token position `t`:
+
+1. fixed pre blocks process token `t` using standard incremental KV;
+2. position starts at IN and the router selects one internal block or OUT at
+   each route step;
+3. active tokens are grouped by selected reader block;
+4. the reader uses completed caches from tokens `< t` plus the configured
+   current-token self object;
+5. each valid route step appends one canonical writer code;
+6. after route completion, token `t` is compiled into persistent reader
+   cache state;
+7. the Exit Block and fixed post blocks process token `t`, producing LM logits.
+
+`forward_incremental` directly advances and returns pre/post KV plus RC-KV
+state. Teacher-forced exact `forward` calls the same incremental kernel for
+each token and does not recompute prefixes. This backend is the correctness
+oracle for causality, generation, and CPBC comparisons.
+
+Exact execution is not a practical 5B-token training backend. On one B200,
+measured R125 BF16 full forward/backward throughput was about `25-28 token/s`
+for the calibrated sequence lengths.
+
+## 9. CPBC Approximate Prefill
+
+**Chunkwise Progressive Bank Completion (CPBC)** is an approximate prefill
+procedure in which each chunk is processed in parallel across tokens, while
+the per-token cache bank is progressively completed over recurrent steps.
+
+For chunk size `C`, token positions are parallel on the token axis and serial
+on route depth. At reader step `l`:
+
+1. fixed pre blocks run standard causal attention over the chunk;
+2. the router independently selects an action for every active `[batch,token]`;
+3. tokens are grouped by selected reader block for Q/K/V, writer projection,
+   reader attention, and FFN;
+4. writer codes with valid step `s <= l` compile the current step bank;
+5. each query attends to completed history plus current-chunk positions
+   `i <= t` under a strict token-causal mask;
+6. exited tokens freeze while remaining tokens advance to `l+1`;
+7. completed chunk state is committed before the next chunk begins.
+
+CPBC preserves token causality but changes when a completed route becomes
+visible. It has two implemented depth visibility policies.
+
+### 9.1 CPBC-DP: Depth-Prefix Visibility
+
+Both active and completed tokens retain only writer support `s <= l` for
+reader depth `l`:
 
 ```text
-value_latent = Sum_i attention_weight[i] * mV[i,b]
-output_head = B_V[b,h](value_latent)
+visible_DP(i,l) = {s | writer_valid[i,s] and s <= l}
 ```
 
-Key scoring without temporal position transforms also satisfies:
+This policy is invariant to changing chunk boundaries at fixed weights: a
+reader depth never gains later writer steps merely because a token moved into
+an earlier completed chunk.
+
+### 9.2 CPBC-FB: Full-Bank Depth Visibility
+
+The active chunk still uses the progressive prefix available at reader step
+`l`. Once a chunk completes, every reader depth is recompiled from the token's
+full valid writer route:
 
 ```text
-q dot (B_K mK) == (B_K^T q) dot mK
+visible_FB(i,l) = {s | writer_valid[i,s]}  for completed tokens
 ```
 
-However, current BRIAN uses position-dependent RoPE on both query and decoded
-Key. A single latent query cannot be reused for every historical token because
-each Key position has a different rotation. Therefore:
+CPBC-FB is closer to completed-route serial semantics, and at `chunk_size=1`
+it matches the BDRE-Serial completed-route reference within the tested BF16
+tolerance. It is still chunk-boundary dependent for active-chunk history and
+must not be described as exact token-serial prefill.
 
-- `explicit_decode_rope` is the default exact Key path;
-- a future `latent_relative_rope` path may be enabled only after deriving an
-  exact formulation and passing explicit-vs-latent equivalence tests;
-- the naive position-free low-dimensional Key equation must not be used when
-  RoPE is active.
+## 10. Stateful TBPTT and DDP
 
-## 9. Exact Token-by-Token Execution
-
-The first implementation is sequence-serial and batch-parallel.
-
-For token position `t`:
+Let `C` be chunk size and `U` be the number of chunks retained in one autograd
+graph before cache state is detached. The maximum gradient horizon is:
 
 ```text
-embedding(t)
-  -> incremental fixed pre blocks with standard per-layer KV
-  -> initialize position at IN
-  -> run complete free route for token t
-       -> read compiled caches of tokens < t
-       -> include one current self object
-       -> collect temporary writer cK/cV
-  -> compile token t into persistent reader caches
-  -> Exit Block
-  -> incremental fixed post blocks with standard per-layer KV
-  -> LM logits(t)
+H_grad = min(sequence_length, C * U)
 ```
 
-Training processes teacher-forced tokens in order, stacks per-token logits,
-and applies the standard shifted causal LM loss. DDP parallelizes batches, not
-sequence positions.
+Cache values survive a detach boundary, but later losses no longer assign
+credit to writers before that boundary. Chunk losses in one group are summed
+before backward. Optimizer parameters are not updated until all chunks in the
+sequence have completed, so one sequence never observes two parameter
+versions.
 
-The exact implementation must expose a stateful incremental API rather than
-re-running the complete prefix for each generated token.
+LM loss is normalized by the full sequence's valid next-token labels. The sum
+of chunk losses therefore equals the full-sequence mean loss. At fixed model
+weights, changing `U` does not change forward values; it changes the backward
+graph and gradients.
 
-## 10. Routing and Training Defaults
+DDP divides the batch only. Every rank owns independent RC-KV and pre/post KV
+state. Stateful forwards execute under `no_sync()`, followed by one explicit
+gradient synchronization per optimizer update:
 
-The BDRE version inherits the corrected Global v1 routing controls:
+1. all-reduce a parameter-used mask;
+2. create zero gradients for parameters used globally but not on this rank;
+3. bucket gradients by dtype/device;
+4. all-reduce and divide by world size.
 
-```yaml
-routing:
-  top_k: 1
-  later_top_k: 1
-  max_route_steps: 16
-  hard_exit: true
-  min_exit_step: 4
-  exit_ramp_start: 12
-  force_final_exit: true
-  self_recur_max_consecutive: 2
-  logit_noise_std: 0.08
-  logit_noise_decay_steps: 50000
-  logit_noise_min_std: 0.008
-  random_route_probability: 0.25
-  random_route_decay_steps: 50000
-  random_route_min_probability: 0.03
-```
+The current DDP2 profile synchronizes about `561 MB` of gradients in nine
+`64 MB`-bounded buckets per update. CPU merged-global-batch tests verify loss,
+gradient, and parameter-update equivalence.
 
-The corrected selected-balance, coverage-floor, weak cost, and exit-boundary
-losses remain enabled. The route-position location loss is explicitly disabled:
-position geometry affects BDRE compilation but does not prescribe a route path.
-Route imitation remains disabled after the existing short execution curriculum.
+## 11. Current Formal Training Profile
 
-Top-2 and weighted route fusion are out of scope for BDRE v1.
-
-## 11. Default Configuration Contract
-
-```yaml
-model_name: brian_r125_bdre_rckv_v1
-architecture: brian_route_core
-
-route_pool_blocks: 8
-max_route_steps: 16
-top_k: 1
-later_top_k: 1
-
-block_position_dim: 64
-block_position_mode: spherical_code
-independent_input_position: true
-
-bdre_shared_kv: true
-bdre_key_dim: 32
-bdre_value_dim: 32
-
-bdre_depth_mode: none
-bdre_step_lambda: 0.0
-bdre_position_tau: 1.0
-bdre_late_step_weight: 0.0
-
-bdre_compile_top_k: null
-bdre_key_temperature: 0.5
-bdre_value_temperature: 1.0
-bdre_reader_step_cache: lazy
-
-bdre_self_kv_mode: bdre_prefix
-bdre_key_read_mode: explicit_decode_rope
-bdre_value_read_mode: latent_aggregate
-
-position_geometry:
-  enabled: true
-  weight: 0.001
-  normalize: true
-  internal_target: regular_simplex
-  in_out_target: antipodal_orthogonal
-
-execution:
-  mode: token_by_token
-```
-
-`bdre_reader_step_cache` is dormant while `bdre_depth_mode: none`.
-
-## 12. Complexity Budget
-
-Assume `S=16`, `B_route=8`, `rK=rV=32`, and BF16.
-
-### 12.1 Persistent Cache
-
-| Mode | Elements/token | Bytes/token | 2048-token context |
-| --- | ---: | ---: | ---: |
-| Block-only | `8 x 64 = 512` | 1 KB | about 2 MB |
-| Block x reader-step | `8 x 16 x 64 = 8192` | 16 KB | about 32 MB |
-| Retained writer-step latent | `16 x 64 = 1024` | 2 KB | about 4 MB |
-
-These estimates exclude allocator overhead, validity masks, gradients, and
-fixed pre/post caches.
-
-### 12.2 BDRE Self Prefix
-
-Across a complete 16-step route:
+The exact oracle defaults and the current formal training profile are
+different. The active 5B profile is resolved from:
 
 ```text
-Sum(1..16) = 136 writer candidates
-position scoring: 136 x 64 = 8,704 MAC
-K/V weighted sums: 136 x (32+32) = 8,704 MAC
-total: about 17,408 MAC per token route
-temporary storage: about 2 KB per active token
+configs/model/brian_r125_bdre_cpbc_dp_c512_shared_explicit.yaml
+configs/train/cpbc_r125_5b_dp_u1_c512_ddp2_legacyval.yaml
 ```
 
-This arithmetic cost is small relative to route-block attention and FFN. The
-measured cost may still be affected by small kernels, softmax launches, and
-temporary tensor layout, so dedicated B200 profiling is required.
+| Setting | Formal value |
+| --- | --- |
+| Execution | `synchronous_prefix` (CPBC) |
+| Visibility | `depth_prefix` (CPBC-DP) |
+| Attention backend | `shared_padded_explicit` |
+| Dispatch | `grouped_host` |
+| Chunk size `C` | 512 |
+| TBPTT detach interval `U` | 1 |
+| Hardware | 2 B200 GPUs |
+| Local batch per rank | 16 |
+| Global batch | 32 |
+| Context length | 2048 |
+| Tokens per optimizer update | 65,536 |
+| Precision | BF16 |
+| Learning rate | `3e-4` |
+| Token budget | 5B |
+| Validation compatibility | legacy validation profile |
 
-### 12.3 Dynamic Reader-Step Fusion
+Global batch is intentionally held at 32 when changing DDP world size. Batch
+per rank changes to preserve this experiment-level control.
 
-For context length `N=2048`:
+The current routing recipe uses:
 
 ```text
-N x S x (rK+rV)
-= 2048 x 16 x 64
-= about 2.1M latent MAC per reader step
+top-1 routing
+maximum route steps: 16
+minimum exit step: 4
+exit ramp start: 12
+force final OUT: enabled
+self-recurrence consecutive cap: 2
+router probability curriculum: 0 -> 1 over steps 0..1500
+route imitation loss: 0
+logit noise: 0.08 -> 0.008
+random route override: 0.25 -> 0.03
 ```
 
-At 16 reader steps this is about 33.6M MAC per generated token, before reader
-attention and block compute. This mode must be benchmarked against eager and
-lazy compiled reader-step caches.
+The active objective is:
 
-## 13. Implementation Plan
+```text
+L = L_LM
+    + 0.0002 * L_cost
+    + 0.02   * L_selected_balance
+    + 0.05   * L_coverage
+    + 0.02   * L_exit
+    + 0.001  * L_position_geometry
+```
 
-### Phase A: Additive Model and Configuration
+Location bias/loss, plain balance, transition diversity, and route imitation
+have zero weight. This routing recipe is an experiment control, not part of
+the mathematical definition of RC-KV.
 
-- Add BDRE config parsing and validation without changing existing config
-  defaults.
-- Add spherical-code IN/internal/OUT initialization.
-- Add geometry metrics and weak geometry loss.
-- Add independent writer canonicalizers and reader/head decoders.
+## 12. Implemented Options and Guardrails
 
-### Phase B: Cache and Compiler
+| Mechanism | Implemented values | Formal value |
+| --- | --- | --- |
+| Execution | `token_by_token`, `synchronous_prefix` | `synchronous_prefix` |
+| Depth mode | `none`, `reader_step`, `synchronous_prefix` | `synchronous_prefix` |
+| Visibility | `depth_prefix`, `full_bank` | `depth_prefix` |
+| Reader cache | `eager`, `lazy`, `dynamic` | `eager` |
+| Self-KV | `bdre_prefix`, `current_step`, `none` | `bdre_prefix` |
+| Reader attention | `per_query_reference`, `shared_padded_explicit` | `shared_padded_explicit` |
+| Dispatch | `legacy_cuda_scan`, `grouped_host` | `grouped_host` |
+| Compiler top-k | `null` or positive integer | `null` |
+| Key/Value temperatures | positive and independent | `0.5 / 1.0` |
+| Position/depth/late weights | non-negative | `1.0 / 0.25 / 0` |
+| TBPTT detach interval | `U >= 1` | `1` |
 
-- Add temporary per-token writer-step storage.
-- Add block-only compiler.
-- Add optional hard top-k and separate K/V temperatures.
-- Add reader-step eager, lazy, and dynamic modes.
-- Add late-step-bias ablation.
-- Add `bdre_prefix`, `current_step`, and `none` self modes.
+Hard validation rules include:
 
-### Phase C: Exact Incremental Forward
+- RC-KV v1 supports route top-1 only.
+- CPBC requires `hard_exit=true`, `bdre_depth_mode=synchronous_prefix`, eager
+  reader-step banks, and `bdre_prefix` self-KV.
+- Full-bank visibility is legal only under CPBC.
+- `shared_padded_explicit` is legal only under CPBC.
+- Position mode must be spherical code with an independent IN position.
+- RC-KV cannot be combined with legacy hidden Global KV, attention-summary
+  Global KV, or parallel passing in the same model.
+- Top-2 reader fusion is not implemented in RC-KV v1.
 
-- Add standard incremental KV state for fixed pre/post blocks.
-- Add stateful token-step API for the route core.
-- Add exact explicit Key decode + RoPE.
-- Add latent Value aggregation.
-- Add token-by-token training forward and generation integration.
+## 13. Correctness Evidence
 
-### Phase D: Performance and Training Integration
+| Check | Result |
+| --- | --- |
+| Exact full forward vs stateful incremental | maximum logits difference `0` |
+| Exact streamed chunks vs unchunked exact forward | forward and loss agree |
+| Reader-step eager/lazy/dynamic | agree at `atol=rtol=1e-6` |
+| Prefix suffix-invariance | passed |
+| Future-writer intervention | future tokens/steps do not affect prefix |
+| CPBC-FB chunk 1 vs BDRE-Serial | reference and shared-explicit agree within `2e-5` |
+| CPBC-DP chunk-boundary invariance | passed |
+| CPBC full forward vs streamed chunks | agree within `2e-5` |
+| CPBC full forward vs one-token incremental | agree within `2e-5` |
+| `U=1` vs `U=2` | same forward loss; gradients differ as intended |
+| Shared-padded-explicit vs per-query reference | logits, loss, cache, and gradients agree |
+| CPU DDP vs merged global batch | loss, gradients, and updates agree |
+| Rank-local unused parameter synchronization | passed |
+| B200 BF16 forward/backward and DDP2 smoke | finite; checkpoint state passed |
+| Full repository regression | `598 passed`, `15` pre-existing warnings |
 
-- Preallocate temporary writer tensors.
-- Vectorize BDRE scoring and prefix fusion across batch.
-- Add timing and memory metrics.
-- Integrate W&B route/cache visualizations.
-- Add DDP batch-parallel smoke training.
+These checks establish the implementation and causal interface. They do not
+show that CPBC-DP, CPBC-FB, or RC-KV improves language modeling or public
+benchmarks. Model selection must combine PPL, reasoning/public suites, route
+entropy, path diversity, block coverage, compiler entropy, writer mass, and
+cache norms.
 
-### Phase E: Approximate Prefill
+## 14. Performance Measurements
 
-- Implement synchronous-prefix prefill only after the exact reference passes
-  correctness and training smoke tests. Completed on 2026-07-16.
-- Keep exact token-by-token mode permanently available as the oracle.
+| Backend | BS | Sequence | Chunk | Throughput | Peak allocated | Context |
+| --- | ---: | ---: | ---: | ---: | ---: | --- |
+| Exact token-serial | 32 | 128 | 8 | 28.18 token/s | 3.28 GiB | oracle |
+| Exact token-serial | 32 | 256 | 8 | 25.53 token/s | 4.46 GiB | oracle |
+| CPBC per-query reference | 8 | 2048 | 256 | 1,467.80 token/s | 111,353 MiB | median |
+| CPBC shared-padded-explicit | 8 | 2048 | 256 | 4,695.64 token/s | 27,333 MiB | median |
+| CPBC shared-padded-explicit | 14 | 2048 | 512 | 11,658.95 token/s | 101,808 MiB | stable single-GPU candidate |
+| Formal CPBC-DP DDP2 | 32 global | 2048 | 512 | 21,577 token/s | 55.6 GiB/rank | active-run snapshot |
 
-## 14. Required Metrics
+The formal row is the latest-100-step snapshot captured on 2026-07-16, not an
+isolated kernel benchmark. Median throughput was `21,646 token/s`, with a
+`20,549-22,190 token/s` range. The matched Transformer baseline averaged
+`618,738 token/s`, producing an end-to-end gap of about `28.7x`.
 
-Training and evaluation logs must include:
+The two models do not execute the same number of block evaluations, so this is
+not a pure attention-kernel ratio. The gap is nevertheless much larger than
+route length alone can explain.
+
+### 14.1 Remaining Hotspots
+
+Profiling and code inspection identify the dominant costs:
+
+1. each route step copies selected actions from GPU to CPU for host grouping;
+2. routing scatters tokens across eight blocks, creating many small QKV,
+   writer-projection, FFN, and index-copy kernels;
+3. the exact reader path explicitly decodes Keys, builds causal masks, performs
+   FP32 softmax, and launches multiple einsums;
+4. one chunk still launches about `28,600` kernels, leaving dispatch bubbles;
+5. `C=512,U=1,T=2048` executes four backward groups per optimizer step and then
+   synchronizes about `561 MB` of gradients;
+6. step-indexed banks, route-dependent padding, and variable group shapes add
+   memory traffic.
+
+The BDRE compiler arithmetic is usually a small fraction of wall time. The
+next performance work should target GPU-resident grouping, grouped expert
+GEMM, and fused reader attention while preserving logits, loss, cache, and
+gradient equivalence.
+
+## 15. Metrics and Visualization
+
+Training/evaluation telemetry includes or is expected to preserve:
 
 ```text
 bdre_compile_time_ms
@@ -644,135 +566,80 @@ bdre_internal_position_min_angle
 bdre_cache_memory_mb
 ```
 
-Visualization must expose:
+Visualization covers spherical block positions, real sampled token routes,
+writer-step trajectories, per-reader Key/Value compile weights, top-k support,
+and last-step concentration. The detached terminal telemetry path feeds the
+text-free animated Route Sphere under `tools/route_sphere_tui/` without keeping
+training autograd graphs alive.
 
-- IN, eight internal blocks, and OUT on the sphere;
-- writer route steps and their block positions;
-- per-reader-block BDRE weights over writer steps;
-- Key and Value weight differences;
-- optional reader-step-conditioned weight changes;
-- top-k support and last-step concentration.
+## 16. Controlled Ablation Order
 
-## 15. Correctness Tests
+The matched baseline and CPBC-DP C512/U1 5B runs are anchor runs, not a complete
+visibility ablation. Mechanism tests should proceed in this order:
 
-The implementation is not accepted without:
+1. compare CPBC-DP and CPBC-FB at identical `C`, `U`, global batch, data, and
+   token budget;
+2. on the winning visibility policy, compare `U=1,2,4`;
+3. compare C128/U4 with C512/U1 at the same 512-token gradient horizon;
+4. from the winning setup, separately compare `bdre_prefix` vs `current_step`,
+   depth score on/off, and compiler position on/off;
+5. activate hard compile top-k or temperature ablations only if compiler
+   entropy or writer domination becomes abnormal.
 
-1. Shape and lifecycle tests for temporary and persistent caches.
-2. Proof that completed tokens expose one object per reader block, not one
-   object per writer step or writer head.
-3. Per-block/head parameter ownership tests proving no unintended sharing.
-4. Causal suffix-invariance tests.
-5. Incremental generation consistency tests.
-6. Proof that current self BDRE uses only route prefix `1..s`.
-7. Proof that future route steps and future tokens are invisible.
-8. Block-only compile equivalence between eager and lazy execution.
-9. Reader-step equivalence among eager, lazy, and dynamic modes.
-10. `compile_top_k: null` equivalence to explicit all-step aggregation.
-11. Hard top-k support and gradient-finiteness tests.
-12. Separate Key/Value temperature tests.
-13. Explicit Value decode versus latent Value aggregation equivalence.
-14. Explicit Key+RoPE reference tests.
-15. Spherical initialization Gram-target tests.
-16. CUDA BF16 forward/backward finite tests.
-17. DDP train/eval smoke tests.
-18. Regression tests proving existing BRIAN model configs remain unchanged.
+Initial arms should use 250M tokens and run legacy validation, reasoning S600,
+and public S600 at roughly 1/3, 2/3, and full progress. Only configurations
+that jointly preserve capability, route/cache stability, and performance
+should advance to 2B. A Cartesian product of 5B runs is not justified.
 
-## 16. Exact vs Approximate Prefill Acceptance
+## 17. Limitations and Guardrails
 
-Any prefill proposed as a drop-in replacement for exact token-by-token
-execution must be compared using:
+### 17.1 Training Speed
 
-```text
-logits max/mean absolute difference
-next-token prediction agreement
-route-action agreement
-route-length agreement
-compiled-cache cosine similarity and relative error
-validation loss and perplexity
-reasoning S600
-public S600
-throughput
-peak CUDA memory
-```
+CPBC improves serial throughput by hundreds of times, but remains about one
+order of magnitude or more behind the matched baseline. This is the primary
+practical limitation and makes broad long-run ablations expensive.
 
-Approximate prefill cannot replace the exact default based only on throughput.
-Its quality and route behavior must remain within explicitly reported error
-bounds.
+### 17.2 CPBC Is an Explicit Approximation
 
-The implemented synchronous-prefix backend deliberately changes historical
-reader-step cache semantics from completed-route compilation to route-prefix
-compilation. It is internally chunk-boundary and incremental invariant, but it
-is not presented as logit-equivalent to the exact backend. It remains a separate
-model configuration until benchmark evidence supports a model-level decision.
+CPBC-DP is chunk-boundary invariant but permanently restricts completed reader
+depth `l` to writer prefix `s <= l`. CPBC-FB gives completed tokens full-route
+visibility but remains progressively incomplete inside the active chunk.
+Training PPL alone cannot choose between them.
 
-## 17. Initial Ablation Matrix
+### 17.3 TBPTT Truncation
 
-| ID | Depth mode | Self mode | Top-k | Cache policy | Purpose |
-| --- | --- | --- | --- | --- | --- |
-| B0 | none | bdre_prefix | all | block eager | default BDRE |
-| B1 | none | current_step | all | block eager | self-prefix value |
-| B2 | none | none | all | block eager | strict historical-only |
-| D0 | reader_step | bdre_prefix | all | lazy | current-step distance |
-| D1 | reader_step | bdre_prefix | all | eager | lazy/eager equivalence |
-| D2 | reader_step | bdre_prefix | all | dynamic | dynamic cost reference |
-| L0 | late_step_bias | bdre_prefix | all | block eager | late-step collapse risk |
-| K0 | none | bdre_prefix | 12 | block eager | mild hard top-k |
-| K1 | none | bdre_prefix | 8 | block eager | medium hard top-k |
-| K2 | none | bdre_prefix | 4 | block eager | aggressive hard top-k |
+The formal C512/U1 profile has a 512-token gradient horizon. Cache values remain
+available across the sequence, but later chunks cannot assign gradient credit
+to writers before the detach boundary. Increasing `U` raises activation memory
+quickly; the quality benefit has not yet been measured.
 
-No large sweep should run before B0 passes exact correctness, CUDA backward,
-short training, and cache visualization checks.
+### 17.4 Compression and Reader Takeover
 
-## 18. Risks and Guardrails
+`rK=rV=32` is strong compression relative to `d=768`. Writer canonicalizers
+must learn a coherent shared interface, while position/depth score terms,
+self-prefix memory, and reader decoders can create a memory shortcut. Compiler
+entropy, writer mass, self-memory concentration, cache norms, and public
+benchmarks must be diagnosed together.
 
-- Token-by-token training will be much slower than the current full-sequence
-  route forward. It is accepted as the exact reference, not assumed to be the
-  final performance path.
-- Reader-step caches can grow to 128 cache pairs per token; lazy compilation
-  and measured state occupancy are required.
-- Late-step bias can collapse all compiled caches toward final writer states;
-  last-step mass and compiler entropy must be monitored.
-- `bdre_prefix` can create a within-token memory shortcut; compare it with
-  `current_step` and track self-attention concentration.
-- Hard top-k is non-smooth and routes gradients only through selected writer
-  steps.
-- Independent writer maps must still learn a coherent canonical interface.
-- Position initialization alone does not prevent later geometry collapse;
-  normalization, weak separation loss, and visualization are required.
-- The position-free low-dimensional Key equation is not exact under the current
-  decoded-Key RoPE contract.
+### 17.5 RoPE and Routing Scope
 
-## 19. Final Approved Defaults
+Position-dependent RoPE currently prevents a fully latent Key-scoring path.
+RC-KV v1 also supports only hard top-1 routing, eight free blocks, and 16
+maximum route steps. These values are implemented controls, not established
+scaling optima.
 
-```text
-Model: BRIAN-R125-BDRE-RCKV-v1
-Execution: exact token-by-token
-Free blocks: 8
-Routing: top-1
-Max route steps: 16
+## 18. Current Conclusion
 
-Writer K/V: independent per block and head
-Writer A_K/A_V: independent per block
-Reader B_K/B_V: independent per block and head
+RC-KV now has a stable implementation contract rather than only a theoretical
+proposal. Block/head-specific attention retains local parameter ownership;
+canonical K/V latents provide a cross-route memory interface; BDRE compiles a
+token's writer history into reader-specific objects; BDRE-Serial provides the
+exact causal oracle; and CPBC provides a trainable approximate prefill with
+explicit DP/FB visibility semantics. Stateful TBPTT and manual DDP gradient
+synchronization preserve cache lifecycle and optimizer consistency.
 
-Persistent cache index: reader block only
-Depth-step term: implemented, disabled
-Late-step bias: implemented, disabled
-Reader-step cache policy: lazy when enabled
-
-Compile top-k: all steps
-Key temperature: 0.5
-Value temperature: 1.0
-Self KV: BDRE route prefix
-
-Key read: explicit decode + RoPE
-Value read: latent aggregation + one decode
-
-Position initialization:
-  IN/OUT antipodal poles
-  eight internal blocks as orthogonal-subspace regular simplex
-Position geometry loss: enabled, weak
-Route-position location loss: disabled
-
-Synchronous-prefix prefill: additive separate config; exact backend retained
-```
+Functionality, causality, incremental behavior, and distributed training have
+been validated. The next engineering priority is reducing host synchronization,
+small-kernel fragmentation, and explicit reader-attention overhead without
+changing RC-KV/CPBC semantics. Quality claims must wait for the controlled
+benchmark and ablation sequence above.
