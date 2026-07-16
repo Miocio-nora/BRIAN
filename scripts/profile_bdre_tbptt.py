@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -25,6 +26,8 @@ def main() -> None:
     parser.add_argument("--chunk-size", type=int, default=None)
     parser.add_argument("--detach-interval-chunks", type=int, default=None)
     parser.add_argument("--global-step", type=int, default=1)
+    parser.add_argument("--flex-reader-group-size", type=int, default=None)
+    parser.add_argument("--prefix-compile-mode", default=None)
     parser.add_argument("--seed", type=int, default=123)
     parser.add_argument("--warmup-steps", type=int, default=1)
     parser.add_argument("--row-limit", type=int, default=80)
@@ -58,6 +61,21 @@ def main() -> None:
     torch.set_float32_matmul_precision(str(config.get("float32_matmul_precision", "high")))
     device = torch.device("cuda")
     model = build_model_from_config(model_config_path).to(device).train()
+    if args.flex_reader_group_size is not None or args.prefix_compile_mode is not None:
+        model.bdre_config = replace(
+            model.bdre_config,
+            flex_reader_group_size=(
+                args.flex_reader_group_size
+                if args.flex_reader_group_size is not None
+                else model.bdre_config.flex_reader_group_size
+            ),
+            prefix_compile_mode=(
+                args.prefix_compile_mode
+                if args.prefix_compile_mode is not None
+                else model.bdre_config.prefix_compile_mode
+            ),
+        )
+        model.bdre_config.validate()
     batch = torch.randint(
         0,
         int(model.config.base.vocab_size),
@@ -136,6 +154,8 @@ def main() -> None:
         "sequence_length": sequence_length,
         "chunk_size": chunk_size,
         "detach_interval_chunks": detach_interval_chunks,
+        "flex_reader_group_size": model.bdre_config.flex_reader_group_size,
+        "prefix_compile_mode": model.bdre_config.prefix_compile_mode,
         "loss": float(result["loss"].detach().cpu()),
         "top_self_cuda": rows[: args.row_limit],
         "top_self_cpu": sorted(

@@ -127,6 +127,130 @@ def test_spherical_code_requires_independent_input_position() -> None:
         BlockPositionTable(2, 8, mode="spherical_code", independent_input_position=False)
 
 
+def test_incremental_prefix_compiler_matches_recompute_outputs_and_gradients() -> None:
+    torch.manual_seed(19)
+    compiler = BDRECompiler(
+        max_route_steps=4,
+        key_temperature=0.5,
+        value_temperature=1.0,
+        position_tau=1.2,
+        step_lambda=0.25,
+        normalize_step_distance=True,
+        late_step_weight=0.1,
+    )
+    reference_keys = [torch.randn(3, 4, requires_grad=True) for _ in range(4)]
+    reference_values = [torch.randn(3, 5, requires_grad=True) for _ in range(4)]
+    incremental_keys = [value.detach().clone().requires_grad_() for value in reference_keys]
+    incremental_values = [value.detach().clone().requires_grad_() for value in reference_values]
+    blocks = [torch.randint(0, 2, (3,)) for _ in range(4)]
+    valid = [
+        torch.tensor([True, True, True]),
+        torch.tensor([True, False, True]),
+        torch.tensor([True, True, False]),
+        torch.tensor([False, True, True]),
+    ]
+    reference_positions = torch.randn(2, 3, requires_grad=True)
+    incremental_positions = reference_positions.detach().clone().requires_grad_()
+    reference_loss = torch.zeros(())
+    incremental_loss = torch.zeros(())
+    incremental_state = None
+
+    for step in range(4):
+        reference = compiler.compile_prefix(
+            torch.stack(reference_keys[: step + 1], dim=1),
+            torch.stack(reference_values[: step + 1], dim=1),
+            torch.stack(blocks[: step + 1], dim=1),
+            torch.stack(valid[: step + 1], dim=1),
+            reference_positions,
+            reader_step=step,
+            collect_metrics=False,
+        )
+        incremental, incremental_state = compiler.compile_prefix_incremental(
+            incremental_keys[step],
+            incremental_values[step],
+            blocks[step],
+            valid[step],
+            incremental_positions,
+            writer_step=step,
+            state=incremental_state,
+        )
+        assert torch.allclose(reference.keys, incremental.keys, atol=2e-6, rtol=2e-6)
+        assert torch.allclose(reference.values, incremental.values, atol=2e-6, rtol=2e-6)
+        reference_loss = reference_loss + reference.keys.square().mean() + reference.values.square().mean()
+        incremental_loss = (
+            incremental_loss
+            + incremental.keys.square().mean()
+            + incremental.values.square().mean()
+        )
+
+    reference_loss.backward()
+    incremental_loss.backward()
+    assert torch.allclose(reference_positions.grad, incremental_positions.grad, atol=2e-5, rtol=2e-5)
+    for reference, incremental in zip(reference_keys, incremental_keys):
+        assert torch.allclose(reference.grad, incremental.grad, atol=2e-5, rtol=2e-5)
+    for reference, incremental in zip(reference_values, incremental_values):
+        assert torch.allclose(reference.grad, incremental.grad, atol=2e-5, rtol=2e-5)
+
+
+def test_incremental_prefix_compile_mode_matches_recompute_model() -> None:
+    torch.manual_seed(20)
+    reference_config = _synchronous_config(
+        chunk_size=8,
+        attention_backend="shared_padded_explicit",
+    )
+    incremental_config = replace(reference_config, prefix_compile_mode="incremental_exact")
+    reference = BrianBDRERouteCore(reference_config).train()
+    incremental = BrianBDRERouteCore(incremental_config).train()
+    incremental.load_state_dict(reference.state_dict())
+    input_ids = torch.randint(0, 64, (3, 8))
+
+    reference_output = reference.forward_stream_chunk(
+        input_ids,
+        next_token_targets=input_ids,
+        loss_token_count=input_ids.numel(),
+        include_auxiliary_losses=True,
+        route_mode="fixed",
+        pseudo_policy="sequential",
+        summarize_routing=False,
+    )
+    incremental_output = incremental.forward_stream_chunk(
+        input_ids,
+        next_token_targets=input_ids,
+        loss_token_count=input_ids.numel(),
+        include_auxiliary_losses=True,
+        route_mode="fixed",
+        pseudo_policy="sequential",
+        summarize_routing=False,
+    )
+    reference_output["loss"].backward()
+    incremental_output["loss"].backward()
+
+    assert torch.allclose(
+        reference_output["logits"],
+        incremental_output["logits"],
+        atol=2e-5,
+        rtol=2e-5,
+    )
+    assert torch.allclose(
+        reference_output["loss"],
+        incremental_output["loss"],
+        atol=2e-6,
+        rtol=2e-6,
+    )
+    for reference_parameter, incremental_parameter in (
+        (reference.token_embedding.weight, incremental.token_embedding.weight),
+        (reference.bdre_projections[0].key_write.weight, incremental.bdre_projections[0].key_write.weight),
+        (reference.position_table.embeddings, incremental.position_table.embeddings),
+    ):
+        assert reference_parameter.grad is not None and incremental_parameter.grad is not None
+        assert torch.allclose(
+            reference_parameter.grad,
+            incremental_parameter.grad,
+            atol=3e-5,
+            rtol=3e-5,
+        )
+
+
 def test_embedding_position_lookup_matches_advanced_index_gradients() -> None:
     torch.manual_seed(11)
     actions = torch.tensor([[0, 2, 2, 1], [1, 0, 2, 2]])
@@ -873,14 +997,16 @@ def test_flex_reader_cuda_bf16_matches_explicit_reader_within_rounding() -> None
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is required")
 @pytest.mark.parametrize(
-    "attention_backend",
+    ("attention_backend", "flex_reader_group_size"),
     [
-        "shared_padded_flex_blockmask",
-        "ragged_flex_blockmask",
+        ("shared_padded_flex_blockmask", 1),
+        ("shared_padded_flex_blockmask", 2),
+        ("ragged_flex_blockmask", 1),
     ],
 )
 def test_blockmask_readers_cuda_bf16_match_score_mod_reader_within_rounding(
     attention_backend: str,
+    flex_reader_group_size: int,
 ) -> None:
     torch.manual_seed(711)
     reference_config = _cuda_flex_synchronous_config(
@@ -890,8 +1016,16 @@ def test_blockmask_readers_cuda_bf16_match_score_mod_reader_within_rounding(
     candidate_config = replace(
         reference_config,
         synchronous_attention_backend=attention_backend,
+        flex_reader_group_size=flex_reader_group_size,
         flex_kernel_variant=(
-            "bwd32" if attention_backend == "shared_padded_flex_blockmask" else "auto"
+            "bwd32_fwd32"
+            if attention_backend == "shared_padded_flex_blockmask" and flex_reader_group_size > 1
+            else "bwd32"
+            if attention_backend == "shared_padded_flex_blockmask"
+            else "auto"
+        ),
+        prefix_compile_mode=(
+            "incremental_exact" if flex_reader_group_size > 1 else "recompute"
         ),
     )
     reference = BrianBDRERouteCore(reference_config).cuda().train()
@@ -900,8 +1034,18 @@ def test_blockmask_readers_cuda_bf16_match_score_mod_reader_within_rounding(
     input_ids = torch.randint(0, 64, (3, 8), device="cuda")
 
     with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
-        reference_output = reference(input_ids, targets=input_ids, route_mode="free")
-        candidate_output = candidate(input_ids, targets=input_ids, route_mode="free")
+        reference_output = reference(
+            input_ids,
+            targets=input_ids,
+            route_mode="free",
+            summarize_routing=False,
+        )
+        candidate_output = candidate(
+            input_ids,
+            targets=input_ids,
+            route_mode="free",
+            summarize_routing=False,
+        )
     reference_output["loss"].backward()
     candidate_output["loss"].backward()
 
@@ -959,12 +1103,13 @@ def test_flex_reader_cuda_is_suffix_invariant_and_stream_consistent(
     config = _cuda_flex_synchronous_config(
         chunk_size=4,
         depth_visibility_policy=depth_visibility_policy,
-        flex_reader_group_size=1,
+        flex_reader_group_size=2,
     )
     config = replace(
         config,
         synchronous_attention_backend="shared_padded_flex_blockmask",
-        flex_kernel_variant="bwd32",
+        flex_kernel_variant="bwd32_fwd32",
+        prefix_compile_mode="incremental_exact",
     )
     full = BrianBDRERouteCore(config).cuda().eval()
     streamed = BrianBDRERouteCore(config).cuda().eval()
@@ -976,8 +1121,18 @@ def test_flex_reader_cuda_is_suffix_invariant_and_stream_consistent(
     input_b = torch.cat((prefix, suffix_b), dim=1)
 
     with torch.no_grad(), torch.autocast(device_type="cuda", dtype=torch.bfloat16):
-        logits_a = full(input_a, route_mode="fixed", pseudo_policy="sequential")["logits"]
-        logits_b = full(input_b, route_mode="fixed", pseudo_policy="sequential")["logits"]
+        logits_a = full(
+            input_a,
+            route_mode="fixed",
+            pseudo_policy="sequential",
+            summarize_routing=False,
+        )["logits"]
+        logits_b = full(
+            input_b,
+            route_mode="fixed",
+            pseudo_policy="sequential",
+            summarize_routing=False,
+        )["logits"]
         state = None
         stream_parts = []
         for start in range(0, input_a.size(1), 4):
@@ -986,6 +1141,7 @@ def test_flex_reader_cuda_is_suffix_invariant_and_stream_consistent(
                 state,
                 route_mode="fixed",
                 pseudo_policy="sequential",
+                summarize_routing=False,
             )
             state = output["incremental_state"]
             stream_parts.append(output["logits"])
@@ -1099,7 +1255,7 @@ def test_bdre_rejects_invalid_fused_reader_and_full_bank_execution_options() -> 
     config = _synchronous_config(attention_backend="shared_padded_flex")
     with pytest.raises(ValueError, match="cannot exceed route_pool_blocks"):
         replace(config, flex_reader_group_size=3).validate()
-    with pytest.raises(ValueError, match="requires shared_padded_flex"):
+    with pytest.raises(ValueError, match="requires a shared padded Flex backend"):
         replace(
             config,
             synchronous_attention_backend="shared_padded_explicit",
@@ -1111,6 +1267,14 @@ def test_bdre_rejects_invalid_fused_reader_and_full_bank_execution_options() -> 
         replace(config, flex_kernel_variant="unsupported").validate()
     with pytest.raises(ValueError, match="requires ragged_flex_blockmask"):
         replace(config, dispatch_mode="grouped_mm_gpu").validate()
+    with pytest.raises(ValueError, match="does not support bdre_compile_top_k"):
+        replace(
+            config,
+            prefix_compile_mode="incremental_exact",
+            compile_top_k=1,
+        ).validate()
+    with pytest.raises(ValueError, match="requires synchronous_prefix"):
+        replace(_config(), prefix_compile_mode="incremental_exact").validate()
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is required")

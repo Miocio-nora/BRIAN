@@ -1,0 +1,29 @@
+extends: cpbc_r125_5b_dp_u1_c2048_grouped_mm_flex_blockmask_ddp2_legacyval.yaml
+run_name: cpbc_r125_5b_dp_u1_c2048_grouped_mm_flex_blockmask_group8_incremental_ddp2_legacyval
+model_config: ../model/brian_r125_bdre_cpbc_dp_c2048_grouped_mm_flex_blockmask_group8_incremental.yaml
+
+checkpoint_benchmarks:
+  label: cpbc_r125_5b_dp_u1_c2048_grouped_mm_flex_blockmask_group8_incremental_ddp2_legacyval
+
+post_train_benchmarks:
+  label: cpbc_r125_5b_dp_u1_c2048_grouped_mm_flex_blockmask_group8_incremental_ddp2_legacyval
+
+wandb:
+  group: cpbc_dp_blockmask_group8_incremental_c2048_ddp2
+  tags:
+    - cpbc
+    - cpbc_dp
+    - grouped_mm
+    - flex_reader
+    - exact_blockmask
+    - grouped_reader8
+    - incremental_prefix
+    - c2048
+    - u1
+    - ddp2
+    - local_batch16
+    - global_batch32
+    - r125
+    - 5b
+    - balanced_data
+    - legacy_val

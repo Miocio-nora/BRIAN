@@ -29,6 +29,8 @@ def main() -> None:
     parser.add_argument("--detach-interval-chunks", type=int, default=None)
     parser.add_argument("--global-step", type=int, default=1)
     parser.add_argument("--flex-kernel-variant", default=None)
+    parser.add_argument("--flex-reader-group-size", type=int, default=None)
+    parser.add_argument("--prefix-compile-mode", default=None)
     parser.add_argument("--seed", type=int, default=123)
     parser.add_argument("--warmup-steps", type=int, default=0)
     parser.add_argument("--repeats", type=int, default=1)
@@ -67,10 +69,31 @@ def main() -> None:
     torch.set_float32_matmul_precision(str(config.get("float32_matmul_precision", "high")))
     device = torch.device("cuda")
     model = build_model_from_config(model_config_path).to(device).train()
-    if args.flex_kernel_variant is not None:
+    if any(
+        value is not None
+        for value in (
+            args.flex_kernel_variant,
+            args.flex_reader_group_size,
+            args.prefix_compile_mode,
+        )
+    ):
         model.bdre_config = replace(
             model.bdre_config,
-            flex_kernel_variant=args.flex_kernel_variant,
+            flex_kernel_variant=(
+                args.flex_kernel_variant
+                if args.flex_kernel_variant is not None
+                else model.bdre_config.flex_kernel_variant
+            ),
+            flex_reader_group_size=(
+                args.flex_reader_group_size
+                if args.flex_reader_group_size is not None
+                else model.bdre_config.flex_reader_group_size
+            ),
+            prefix_compile_mode=(
+                args.prefix_compile_mode
+                if args.prefix_compile_mode is not None
+                else model.bdre_config.prefix_compile_mode
+            ),
         )
         model.bdre_config.validate()
     vocab_size = int(model.config.base.vocab_size)
@@ -154,6 +177,8 @@ def main() -> None:
         ),
         "global_step": args.global_step,
         "flex_kernel_variant": model.bdre_config.flex_kernel_variant,
+        "flex_reader_group_size": model.bdre_config.flex_reader_group_size,
+        "prefix_compile_mode": model.bdre_config.prefix_compile_mode,
         "warmup_steps": args.warmup_steps,
         "repeats": args.repeats,
         "elapsed_seconds": median_elapsed,

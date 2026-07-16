@@ -276,17 +276,23 @@ CPBC-DP cache/attention values are chunk-boundary invariant. C2048 still changes
 the U1 gradient horizon from 512 to 2,048 tokens, and stochastic routing consumes
 RNG in different tensor groupings, so it is not an identical training trajectory.
 
-The current C2048 path replaces the dense per-score causal callback with an
-exact FlexAttention `BlockMask` and uses a calibrated 32-token backward tile.
-It preserves the same absolute-position causal rule while increasing the
-single-B200 BS16/T2048 rate from 23,246 to 48,956 tok/s at 66,016 MiB peak
-allocated. A two-B200 smoke with global BS32 reached 90.8k and 97.4k global
-tok/s on its two compiled steps, cutting the historical gap to the same-shape
-baseline from 13.6x to about 6.6x. Single-process and DDP2 legacy evaluation
-produced the identical validation loss and routing statistics. Ragged
-multi-reader attention and GPU-resident dispatch are also available as
-experimental backends; GPU dispatch improved the ragged path to 28,050 tok/s,
-but its all-reader K/V expansion costs about 83.6 GiB and is not recommended.
+The current C2048 path builds on the exact FlexAttention `BlockMask` backend.
+It batches up to eight independent readers into one exact attention call,
+updates unrestricted depth-prefix compiler softmaxes with an algebraically
+exact online recurrence, and uses calibrated 32-token forward/backward tiles.
+Reader/head parameters remain independent, and the causal mask now explicitly
+excludes padded query rows. On one B200 at BS16/T2048, the current candidate
+reaches 63,078 tok/s with 66,938 MiB peak allocated, up 28.8% from the prior
+48,956 tok/s BlockMask stage. A two-B200 smoke with global BS32 reached 126.9k
+and 129.7k global tok/s on its two steady steps, averaging 128.3k tok/s and
+reducing the same-shape baseline gap to 4.82x. Single-process and DDP2 legacy
+evaluation produced identical validation loss and routing statistics. The
+online compiler automatically falls back to full recomputation when detailed
+compiler diagnostics or visualization weights are requested.
+
+Ragged multi-reader attention and GPU-resident dispatch remain experimental;
+GPU dispatch improved the ragged path to 28,050 tok/s, but its all-reader K/V
+expansion costs about 83.6 GiB and is not recommended.
 
 Key BDRE entrypoints:
 
@@ -310,6 +316,7 @@ configs/model/brian_r125_bdre_cpbc_dp_c512_grouped_mm.yaml
 configs/model/brian_r125_bdre_cpbc_dp_c512_grouped_mm_flex.yaml
 configs/model/brian_r125_bdre_cpbc_dp_c2048_grouped_mm_flex.yaml
 configs/model/brian_r125_bdre_cpbc_dp_c2048_grouped_mm_flex_blockmask.yaml
+configs/model/brian_r125_bdre_cpbc_dp_c2048_grouped_mm_flex_blockmask_group8_incremental.yaml
 configs/model/brian_r125_bdre_cpbc_fb_shared_explicit.yaml
 configs/model/brian_r125_bdre_cpbc_fb_c128_grouped_mm_flex.yaml
 configs/train/baseline_r125_5b_balanced_ddp2_legacyval.yaml
@@ -318,6 +325,7 @@ configs/train/cpbc_r125_5b_dp_u1_c512_ddp2_legacyval.yaml
 configs/train/cpbc_r125_5b_dp_u1_c512_grouped_mm_ddp2_legacyval.yaml
 configs/train/cpbc_r125_5b_dp_u1_c2048_grouped_mm_flex_ddp2_legacyval.yaml
 configs/train/cpbc_r125_5b_dp_u1_c2048_grouped_mm_flex_blockmask_ddp2_legacyval.yaml
+configs/train/cpbc_r125_5b_dp_u1_c2048_grouped_mm_flex_blockmask_group8_incremental_ddp2_legacyval.yaml
 configs/train/cpbc_r125_5b_fb_u1_c128_grouped_mm_flex_ddp2_legacyval.yaml
 configs/train/smoke_cpbc_r125_5b_dp_u1_c512_grouped_mm_ddp2_legacyval.yaml
 configs/train/cpbc_r125_5b_dp_u1_c512_ddp4_legacyval.yaml
@@ -354,6 +362,9 @@ negative reader-grouping results, and current DDP2 acceptance are recorded in
 The exact BlockMask implementation, backward-kernel calibration, ragged/GPU
 dispatch experiments, and updated C2048/DDP2 acceptance are recorded in
 [reports/rc_kv_c2048_blockmask_dispatch_report.md](./reports/rc_kv_c2048_blockmask_dispatch_report.md).
+The grouped-reader execution, exact online prefix compiler, forward-kernel
+calibration, profiler evidence, and current 4.82x baseline gap are recorded in
+[reports/rc_kv_grouped_reader_incremental_prefix_report.md](./reports/rc_kv_grouped_reader_incremental_prefix_report.md).
 
 ## Live Route Sphere
 

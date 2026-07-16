@@ -14,6 +14,103 @@ except ModuleNotFoundError:  # pragma: no cover
 ModuleBase = nn.Module if nn is not None else object
 
 
+if torch is not None:
+
+    @torch.compile(fullgraph=True, dynamic=True)
+    def _compiled_incremental_prefix_step(
+        writer_key: torch.Tensor,
+        writer_value: torch.Tensor,
+        writer_block: torch.Tensor,
+        writer_valid: torch.Tensor,
+        block_positions: torch.Tensor,
+        writer_step: torch.Tensor,
+        key_max: torch.Tensor,
+        key_denom: torch.Tensor,
+        key_numerator: torch.Tensor,
+        value_max: torch.Tensor,
+        value_denom: torch.Tensor,
+        value_numerator: torch.Tensor,
+        position_tau: float,
+        step_lambda: float,
+        step_scale: float,
+        late_step_weight: float,
+        max_route_steps: int,
+        key_temperature: float,
+        value_temperature: float,
+    ) -> tuple[torch.Tensor, ...]:
+        normalized_positions = F.normalize(block_positions, dim=-1)
+        safe_blocks = writer_block.clamp(min=0, max=normalized_positions.size(0) - 1)
+        writer_position = F.embedding(safe_blocks, normalized_positions)
+        scores = position_tau * torch.einsum(
+            "rp,np->nr",
+            normalized_positions,
+            writer_position,
+        )
+        step = writer_step.to(device=scores.device, dtype=scores.dtype)
+        if step_lambda != 0.0:
+            scores = scores + step_lambda * step / step_scale
+        if late_step_weight != 0.0:
+            scores = scores + late_step_weight * (step + 1.0) / float(max_route_steps)
+        valid = writer_valid.unsqueeze(1)
+
+        def update(
+            logits: torch.Tensor,
+            previous_max: torch.Tensor,
+            previous_denom: torch.Tensor,
+            previous_numerator: torch.Tensor,
+            writer: torch.Tensor,
+        ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+            candidate = torch.where(valid, logits, torch.full_like(logits, -float("inf")))
+            next_max = torch.maximum(previous_max, candidate)
+            previous_scale = torch.where(
+                torch.isfinite(previous_max),
+                torch.exp(previous_max - next_max),
+                torch.zeros_like(previous_max),
+            )
+            writer_scale = torch.where(
+                valid,
+                torch.exp(logits - next_max),
+                torch.zeros_like(logits),
+            )
+            next_denom = previous_denom * previous_scale + writer_scale
+            next_numerator = (
+                previous_numerator * previous_scale.unsqueeze(-1)
+                + writer.float().unsqueeze(1) * writer_scale.unsqueeze(-1)
+            )
+            compiled = (next_numerator / next_denom.clamp_min(1e-20).unsqueeze(-1)).to(
+                dtype=writer.dtype
+            )
+            return next_max, next_denom, next_numerator, compiled
+
+        key_max, key_denom, key_numerator, keys = update(
+            scores / key_temperature,
+            key_max,
+            key_denom,
+            key_numerator,
+            writer_key,
+        )
+        value_max, value_denom, value_numerator, values = update(
+            scores / value_temperature,
+            value_max,
+            value_denom,
+            value_numerator,
+            writer_value,
+        )
+        return (
+            key_max,
+            key_denom,
+            key_numerator,
+            value_max,
+            value_denom,
+            value_numerator,
+            keys,
+            values,
+        )
+
+else:  # pragma: no cover - exercised only without PyTorch.
+    _compiled_incremental_prefix_step = None
+
+
 @dataclass
 class BDRECacheState:
     """Persistent reader-compiled cache with a contiguous token dimension."""
@@ -170,6 +267,16 @@ class BDRECompileOutput:
     metrics: dict[str, torch.Tensor]
 
 
+@dataclass(frozen=True)
+class BDREIncrementalCompileState:
+    key_max: torch.Tensor
+    key_denom: torch.Tensor
+    key_numerator: torch.Tensor
+    value_max: torch.Tensor
+    value_denom: torch.Tensor
+    value_numerator: torch.Tensor
+
+
 class BDRECompiler(ModuleBase):
     """Position-conditioned compiler from writer-step codes to reader caches."""
 
@@ -276,6 +383,101 @@ class BDRECompiler(ModuleBase):
             reader_actions=reader_actions,
             collect_metrics=collect_metrics,
         )
+
+    def compile_prefix_incremental(
+        self,
+        writer_key: torch.Tensor,
+        writer_value: torch.Tensor,
+        writer_block: torch.Tensor,
+        writer_valid: torch.Tensor,
+        block_positions: torch.Tensor,
+        *,
+        writer_step: int,
+        state: BDREIncrementalCompileState | None,
+    ) -> tuple[BDRECompileOutput, BDREIncrementalCompileState]:
+        """Exactly update an unrestricted synchronous-prefix softmax online."""
+
+        if _compiled_incremental_prefix_step is None:
+            raise RuntimeError("Incremental BDRE compilation requires PyTorch.")
+        if self.compile_top_k is not None:
+            raise ValueError("Incremental prefix compilation does not support compile_top_k.")
+        if writer_key.dim() != 2 or writer_value.dim() != 2:
+            raise ValueError("Incremental writer codes must have shape [batch, code_dim].")
+        if writer_block.shape != writer_valid.shape or writer_block.shape != writer_key.shape[:1]:
+            raise ValueError("Incremental writer block and validity tensors must match [batch].")
+        if writer_step < 0 or writer_step >= self.max_route_steps:
+            raise ValueError("writer_step must be within max_route_steps.")
+
+        batch = writer_key.size(0)
+        readers = block_positions.size(0)
+        if state is None:
+            score_shape = (batch, readers)
+            state = BDREIncrementalCompileState(
+                key_max=torch.full(
+                    score_shape,
+                    -float("inf"),
+                    device=writer_key.device,
+                    dtype=torch.float32,
+                ),
+                key_denom=torch.zeros(score_shape, device=writer_key.device, dtype=torch.float32),
+                key_numerator=torch.zeros(
+                    (*score_shape, writer_key.size(-1)),
+                    device=writer_key.device,
+                    dtype=torch.float32,
+                ),
+                value_max=torch.full(
+                    score_shape,
+                    -float("inf"),
+                    device=writer_value.device,
+                    dtype=torch.float32,
+                ),
+                value_denom=torch.zeros(
+                    score_shape,
+                    device=writer_value.device,
+                    dtype=torch.float32,
+                ),
+                value_numerator=torch.zeros(
+                    (*score_shape, writer_value.size(-1)),
+                    device=writer_value.device,
+                    dtype=torch.float32,
+                ),
+            )
+        step_scale = (
+            float(self.max_route_steps - 1)
+            if self.normalize_step_distance and self.max_route_steps > 1
+            else 1.0
+        )
+        result = _compiled_incremental_prefix_step(
+            writer_key,
+            writer_value,
+            writer_block,
+            writer_valid,
+            block_positions,
+            torch.tensor(writer_step, device=writer_key.device),
+            state.key_max,
+            state.key_denom,
+            state.key_numerator,
+            state.value_max,
+            state.value_denom,
+            state.value_numerator,
+            self.position_tau,
+            self.step_lambda,
+            step_scale,
+            self.late_step_weight,
+            self.max_route_steps,
+            self.key_temperature,
+            self.value_temperature,
+        )
+        next_state = BDREIncrementalCompileState(*result[:6])
+        empty_weights = result[6].new_empty((batch, readers, 0))
+        output = BDRECompileOutput(
+            keys=result[6],
+            values=result[7],
+            key_weights=empty_weights,
+            value_weights=empty_weights,
+            metrics={},
+        )
+        return output, next_state
 
     def compile_all_reader_steps(
         self,

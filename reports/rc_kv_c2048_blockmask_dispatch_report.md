@@ -2,9 +2,12 @@
 
 **Date:** 2026-07-16
 
-**Status:** implemented and accepted for the recommended C2048 path
+**Status:** accepted historical BlockMask stage; superseded by the grouped-reader candidate
 
 **Branch:** `rc-kv-fused-exact`
+
+**Successor:**
+[`rc_kv_grouped_reader_incremental_prefix_report.md`](./rc_kv_grouped_reader_incremental_prefix_report.md)
 
 ## 1. Scope
 
@@ -152,7 +155,7 @@ configs/train/cpbc_r125_5b_dp_u1_c2048_grouped_mm_ragged_flex_ddp2_legacyval.yam
 configs/train/cpbc_r125_5b_dp_u1_c2048_grouped_mm_gpu_ragged_flex_ddp2_legacyval.yaml
 ```
 
-## 7. Remaining Bottleneck
+## 7. Historical Bottleneck and Successor
 
 After removing dense score modification and calibrating backward tiles,
 FlexAttention backward remains the dominant kernel family. The next exact
@@ -160,3 +163,12 @@ optimization should target a compact multi-reader kernel that decodes and
 attends only selected reader K/V without either query padding or all-reader K/V
 expansion. CUDA graph capture or Python-loop cleanup is secondary: it cannot
 close the remaining 6.6x gap while attention backward dominates.
+
+The follow-up implementation batches eight independent padded readers per
+attention call, adds an exact online DP prefix compiler, and calibrates both
+forward and backward tiles. It reaches 63,078 tok/s on one B200 and 128,294
+tok/s on two B200s, reducing the measured baseline gap to 4.82x. The newer
+profile also changes the bottleneck conclusion: attention accounts for about
+23% of self CUDA, while route-loop fragmentation, copies, and elementwise work
+now require equal attention. See the successor report above for current
+acceptance data.

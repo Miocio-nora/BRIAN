@@ -15,7 +15,12 @@ from brian_sphere_llm.losses.location_loss import location_loss
 from brian_sphere_llm.losses.route_loss import route_imitation_loss
 from brian_sphere_llm.losses.selected_balance_loss import selected_block_balance_loss
 from brian_sphere_llm.losses.transition_diversity_loss import transition_diversity_loss
-from brian_sphere_llm.memory.bdre_shared_kv import BDRECacheState, BDRECompileOutput, BDRECompiler
+from brian_sphere_llm.memory.bdre_shared_kv import (
+    BDRECacheState,
+    BDRECompileOutput,
+    BDRECompiler,
+    BDREIncrementalCompileState,
+)
 from brian_sphere_llm.model.baseline import _float_value, _int_value
 from brian_sphere_llm.model.brian_model import (
     BrianRouteConfig,
@@ -50,6 +55,7 @@ if torch is not None and flex_attention is not None:
 
     def _create_bdre_causal_block_mask(
         query_positions: torch.Tensor,
+        query_valid: torch.Tensor,
         key_length: int,
     ) -> Any:
         """Build an exact block-sparse mask for packed, absolute-position queries."""
@@ -61,7 +67,9 @@ if torch is not None and flex_attention is not None:
             key_index: torch.Tensor,
         ) -> torch.Tensor:
             del head_index
-            return key_index <= query_positions[batch_index, query_index]
+            return query_valid[batch_index, query_index] & (
+                key_index <= query_positions[batch_index, query_index]
+            )
 
         return create_block_mask(
             causal_mask_mod,
@@ -245,13 +253,16 @@ if torch is not None and flex_attention is not None:
         decoded_key = apply_rotary(decoded_key, key_cosine, key_sine)
         expanded_values = value_codes.unsqueeze(1).expand(-1, heads, -1, -1)
         kernel_options: dict[str, Any] | None = None
-        if kernel_variant == "bwd32":
+        if kernel_variant.startswith("bwd32"):
             kernel_options = {
                 "bwd_BLOCK_M1": 32,
                 "bwd_BLOCK_N1": 32,
                 "bwd_BLOCK_M2": 32,
                 "bwd_BLOCK_N2": 32,
             }
+            if kernel_variant == "bwd32_fwd32":
+                kernel_options["fwd_BLOCK_M"] = 32
+                kernel_options["fwd_BLOCK_N"] = 32
         latent_value = flex_attention(
             query,
             decoded_key,
@@ -265,6 +276,36 @@ if torch is not None and flex_attention is not None:
             query.size(0) * query.size(2),
             heads,
             head_dim,
+        )
+
+    @torch.compile(fullgraph=True, dynamic=True)
+    def _compiled_bdre_batched_blockmask_flex_reader(
+        query: torch.Tensor,
+        decoded_key: torch.Tensor,
+        expanded_values: torch.Tensor,
+        block_mask: Any,
+        kernel_variant: str,
+    ) -> torch.Tensor:
+        """Read multiple independent route experts in one exact Flex graph."""
+
+        kernel_options: dict[str, Any] | None = None
+        if kernel_variant.startswith("bwd32"):
+            kernel_options = {
+                "bwd_BLOCK_M1": 32,
+                "bwd_BLOCK_N1": 32,
+                "bwd_BLOCK_M2": 32,
+                "bwd_BLOCK_N2": 32,
+            }
+            if kernel_variant == "bwd32_fwd32":
+                kernel_options["fwd_BLOCK_M"] = 32
+                kernel_options["fwd_BLOCK_N"] = 32
+        return flex_attention(
+            query,
+            decoded_key,
+            expanded_values,
+            block_mask=block_mask,
+            scale=query.shape[-1] ** -0.5,
+            kernel_options=kernel_options,
         )
 
     @torch.compile(fullgraph=True, dynamic=True)
@@ -289,6 +330,7 @@ else:  # pragma: no cover - exercised only without PyTorch/FlexAttention.
     _compiled_bdre_flex_reader = None
     _compiled_bdre_batched_flex_reader = None
     _compiled_bdre_blockmask_flex_reader = None
+    _compiled_bdre_batched_blockmask_flex_reader = None
     _compiled_bdre_ragged_flex_reader = None
 
 
@@ -318,6 +360,7 @@ class BDREConfig:
     synchronous_attention_backend: str = "per_query_reference"
     flex_reader_group_size: int = 1
     flex_kernel_variant: str = "auto"
+    prefix_compile_mode: str = "recompute"
     depth_visibility_policy: str = "depth_prefix"
     full_bank_compile_mode: str = "loop"
 
@@ -389,6 +432,7 @@ class BDREConfig:
                 minimum=1,
             ),
             flex_kernel_variant=str(execution.get("flex_kernel_variant", "auto")),
+            prefix_compile_mode=str(execution.get("prefix_compile", "recompute")),
             depth_visibility_policy=str(
                 execution.get("depth_visibility_policy", "depth_prefix")
             ),
@@ -442,14 +486,27 @@ class BDREConfig:
             raise ValueError(
                 "BDRE execution.flex_reader_group_size cannot exceed route_pool_blocks."
             )
-        if self.flex_kernel_variant not in {"auto", "bwd32"}:
+        if self.flex_kernel_variant not in {
+            "auto",
+            "bwd32",
+            "bwd32_fwd32",
+        }:
             raise ValueError("Unsupported BDRE execution.flex_kernel_variant.")
+        if self.prefix_compile_mode not in {"recompute", "incremental_exact"}:
+            raise ValueError(
+                "BDRE execution.prefix_compile must be 'recompute' or 'incremental_exact'."
+            )
+        if self.prefix_compile_mode == "incremental_exact" and self.compile_top_k is not None:
+            raise ValueError("Incremental prefix compilation does not support bdre_compile_top_k.")
+        if self.prefix_compile_mode == "incremental_exact" and self.execution_mode != "synchronous_prefix":
+            raise ValueError("Incremental prefix compilation requires synchronous_prefix execution.")
         if (
             self.flex_reader_group_size > 1
-            and self.synchronous_attention_backend != "shared_padded_flex"
+            and self.synchronous_attention_backend
+            not in {"shared_padded_flex", "shared_padded_flex_blockmask"}
         ):
             raise ValueError(
-                "BDRE execution.flex_reader_group_size > 1 requires shared_padded_flex."
+                "BDRE execution.flex_reader_group_size > 1 requires a shared padded Flex backend."
             )
         if self.depth_visibility_policy not in {"depth_prefix", "full_bank"}:
             raise ValueError(
@@ -1338,6 +1395,18 @@ class BrianBDRERouteCore(BrianRouteCore):
         writer_blocks: list[torch.Tensor] = []
         writer_valid: list[torch.Tensor] = []
         step_compile_outputs: list[BDRECompileOutput] = []
+        incremental_compile_state: BDREIncrementalCompileState | None = None
+        flat_writers: tuple[
+            torch.Tensor,
+            torch.Tensor,
+            torch.Tensor,
+            torch.Tensor,
+        ] | None = None
+        use_incremental_compile = (
+            self.bdre_config.prefix_compile_mode == "incremental_exact"
+            and not diagnostics.enabled
+            and not collect_bdre_visualization
+        )
         grouped_mm_weights = (
             self._synchronous_grouped_mm_weights()
             if self.bdre_config.dispatch_mode in {"grouped_mm", "grouped_mm_gpu"}
@@ -1511,14 +1580,29 @@ class BrianBDRERouteCore(BrianRouteCore):
             writer_values.append(step_value.view(batch, chunk, -1))
             writer_blocks.append(selected.clamp(min=0, max=self.config.route_pool_blocks - 1))
             writer_valid.append(valid)
-            compile_output, flat_writers = self._compile_synchronous_prefix_step(
-                writer_keys,
-                writer_values,
-                writer_blocks,
-                writer_valid,
-                reader_step=step,
-                diagnostics=diagnostics,
-            )
+            if use_incremental_compile:
+                started = time.perf_counter()
+                compile_output, incremental_compile_state = (
+                    self.bdre_compiler.compile_prefix_incremental(
+                        step_key,
+                        step_value,
+                        writer_blocks[-1].reshape(-1),
+                        valid.reshape(-1),
+                        self._internal_block_positions(),
+                        writer_step=step,
+                        state=incremental_compile_state,
+                    )
+                )
+                diagnostics.record_compile(compile_output, time.perf_counter() - started)
+            else:
+                compile_output, flat_writers = self._compile_synchronous_prefix_step(
+                    writer_keys,
+                    writer_values,
+                    writer_blocks,
+                    writer_valid,
+                    reader_step=step,
+                    diagnostics=diagnostics,
+                )
             step_compile_outputs.append(compile_output)
             current_keys = compile_output.keys.view(
                 batch,
@@ -1633,16 +1717,26 @@ class BrianBDRERouteCore(BrianRouteCore):
         if not writer_keys:
             raise RuntimeError("Synchronous-prefix routing produced no writer states.")
         for reader_step in range(len(step_compile_outputs), self.config.max_route_steps):
-            compile_output, flat_writers = self._compile_synchronous_prefix_step(
+            if use_incremental_compile:
+                compile_output = step_compile_outputs[-1]
+            else:
+                compile_output, flat_writers = self._compile_synchronous_prefix_step(
+                    writer_keys,
+                    writer_values,
+                    writer_blocks,
+                    writer_valid,
+                    reader_step=reader_step,
+                    diagnostics=diagnostics,
+                )
+            step_compile_outputs.append(compile_output)
+
+        if flat_writers is None:
+            flat_writers = self._flatten_synchronous_prefix_writers(
                 writer_keys,
                 writer_values,
                 writer_blocks,
                 writer_valid,
-                reader_step=reader_step,
-                diagnostics=diagnostics,
             )
-            step_compile_outputs.append(compile_output)
-
         flat_key, flat_value, flat_block, flat_valid = flat_writers
         started = time.perf_counter()
         final_compile = self.bdre_compiler.compile(
@@ -2023,10 +2117,14 @@ class BrianBDRERouteCore(BrianRouteCore):
                 current_values=current_values,
             )
         if (
-            self.bdre_config.synchronous_attention_backend == "shared_padded_flex"
+            self.bdre_config.synchronous_attention_backend
+            in {"shared_padded_flex", "shared_padded_flex_blockmask"}
             and self.bdre_config.flex_reader_group_size > 1
             and query.is_cuda
-            and _compiled_bdre_batched_flex_reader is not None
+            and (
+                _compiled_bdre_batched_flex_reader is not None
+                or _compiled_bdre_batched_blockmask_flex_reader is not None
+            )
             and self.route_blocks[0].block.attn.head_dim >= 16
             and self.bdre_config.value_dim >= 16
             and (not self.training or self.route_blocks[0].block.attn.dropout == 0.0)
@@ -2234,6 +2332,11 @@ class BrianBDRERouteCore(BrianRouteCore):
             dtype=torch.long,
             device=query.device,
         ).index_copy(0, flat_slots, query_positions).view(readers * batch, max_selected)
+        padded_valid = torch.zeros(
+            readers * batch * max_selected,
+            dtype=torch.bool,
+            device=query.device,
+        ).index_fill(0, flat_slots, True).view(readers * batch, max_selected)
 
         key_parts: list[torch.Tensor] = []
         value_parts: list[torch.Tensor] = []
@@ -2275,16 +2378,59 @@ class BrianBDRERouteCore(BrianRouteCore):
         value_read = torch.stack(
             [self.bdre_projections[group.action].value_read for group in groups]
         ).to(dtype=query.dtype)
-        attended = _compiled_bdre_batched_flex_reader(
-            padded_query,
-            key_codes.to(dtype=query.dtype),
-            value_codes.to(dtype=query.dtype),
-            key_read,
-            value_read,
-            key_cosine,
-            key_sine,
-            padded_positions,
-        )
+        if self.bdre_config.synchronous_attention_backend == "shared_padded_flex_blockmask":
+            block_mask = _create_bdre_causal_block_mask(
+                padded_positions,
+                padded_valid,
+                key_codes.size(2),
+            )
+            decoded_key = torch.einsum(
+                "abkr,ahrd->abhkd",
+                key_codes.to(dtype=query.dtype),
+                key_read,
+            ).reshape(
+                readers * batch,
+                attention.n_heads,
+                key_codes.size(2),
+                attention.head_dim,
+            )
+            decoded_key = apply_rotary(decoded_key, key_cosine, key_sine)
+            expanded_values = value_codes.to(dtype=query.dtype).reshape(
+                readers * batch,
+                key_codes.size(2),
+                self.bdre_config.value_dim,
+            ).unsqueeze(1).expand(-1, attention.n_heads, -1, -1)
+            latent_value = _compiled_bdre_batched_blockmask_flex_reader(
+                padded_query,
+                decoded_key,
+                expanded_values,
+                block_mask,
+                self.bdre_config.flex_kernel_variant,
+            )
+            latent_value = latent_value.view(
+                readers,
+                batch,
+                attention.n_heads,
+                max_selected,
+                self.bdre_config.value_dim,
+            )
+            attended = torch.einsum("abhqv,ahvd->abhqd", latent_value, value_read)
+            attended = attended.permute(0, 1, 3, 2, 4).reshape(
+                readers * batch * max_selected,
+                attention.n_heads,
+                attention.head_dim,
+            )
+        else:
+            attended = _compiled_bdre_batched_flex_reader(
+                padded_query,
+                key_codes.to(dtype=query.dtype),
+                value_codes.to(dtype=query.dtype),
+                key_read,
+                value_read,
+                key_cosine,
+                key_sine,
+                padded_positions,
+            )
         return attended.index_select(0, flat_slots).reshape(
             routed_input.size(0),
             -1,
@@ -2300,6 +2446,33 @@ class BrianBDRERouteCore(BrianRouteCore):
         reader_step: int,
         diagnostics: _BDREDiagnostics,
     ) -> tuple[BDRECompileOutput, tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]]:
+        flat_writers = self._flatten_synchronous_prefix_writers(
+            writer_keys,
+            writer_values,
+            writer_blocks,
+            writer_valid,
+        )
+        flat_key, flat_value, flat_block, flat_valid = flat_writers
+        started = time.perf_counter()
+        output = self.bdre_compiler.compile_prefix(
+            flat_key,
+            flat_value,
+            flat_block,
+            flat_valid,
+            self._internal_block_positions(),
+            reader_step=reader_step,
+            collect_metrics=diagnostics.enabled,
+        )
+        diagnostics.record_compile(output, time.perf_counter() - started)
+        return output, flat_writers
+
+    def _flatten_synchronous_prefix_writers(
+        self,
+        writer_keys: list[torch.Tensor],
+        writer_values: list[torch.Tensor],
+        writer_blocks: list[torch.Tensor],
+        writer_valid: list[torch.Tensor],
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         batch, chunk = writer_valid[0].shape
         steps = len(writer_keys)
         key = torch.stack(writer_keys, dim=2)
@@ -2318,18 +2491,7 @@ class BrianBDRERouteCore(BrianRouteCore):
         flat_value = value.reshape(batch * chunk, self.config.max_route_steps, self.bdre_config.value_dim)
         flat_block = block.reshape(batch * chunk, self.config.max_route_steps)
         flat_valid = valid.reshape(batch * chunk, self.config.max_route_steps)
-        started = time.perf_counter()
-        output = self.bdre_compiler.compile_prefix(
-            flat_key,
-            flat_value,
-            flat_block,
-            flat_valid,
-            self._internal_block_positions(),
-            reader_step=reader_step,
-            collect_metrics=diagnostics.enabled,
-        )
-        diagnostics.record_compile(output, time.perf_counter() - started)
-        return output, (flat_key, flat_value, flat_block, flat_valid)
+        return flat_key, flat_value, flat_block, flat_valid
 
     def _finish_synchronous_prefix_block(
         self,
@@ -2495,6 +2657,12 @@ class BrianBDRERouteCore(BrianRouteCore):
             device=query.device,
         ).index_copy(0, flat_slots, query_positions)
         padded_positions = padded_positions.view(active_batches.numel(), max_selected)
+        padded_valid = torch.zeros(
+            active_batches.numel() * max_selected,
+            dtype=torch.bool,
+            device=query.device,
+        ).index_fill(0, flat_slots, True)
+        padded_valid = padded_valid.view(active_batches.numel(), max_selected)
 
         key_parts: list[torch.Tensor] = []
         value_parts: list[torch.Tensor] = []
@@ -2541,7 +2709,11 @@ class BrianBDRERouteCore(BrianRouteCore):
         )
         if use_flex:
             if self.bdre_config.synchronous_attention_backend == "shared_padded_flex_blockmask":
-                block_mask = _create_bdre_causal_block_mask(padded_positions, key_codes.size(1))
+                block_mask = _create_bdre_causal_block_mask(
+                    padded_positions,
+                    padded_valid,
+                    key_codes.size(1),
+                )
                 attended = _compiled_bdre_blockmask_flex_reader(
                     padded_query,
                     key_codes.to(dtype=query.dtype),
