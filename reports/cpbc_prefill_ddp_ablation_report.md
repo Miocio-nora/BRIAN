@@ -196,6 +196,50 @@ supports U up to 4, but the current throughput is not suitable for launching
 four complete 5B runs. At 1,896 global tok/s, one 5B run would require about 31
 days before benchmark and checkpoint overhead.
 
+### CPBC-DP Four-B200 Training Profile
+
+CPBC-DP does not incur an intrinsic regression from the FB/U/DDP additions.
+Controlled, warmed single-B200 measurements on the current branch give:
+
+| Shape | Throughput | Peak allocated | Peak reserved |
+| --- | ---: | ---: | ---: |
+| local BS 16, sequence 2,048, chunk 128, U1 | 3,878 tok/s mean | 36.3 GiB | 57.7 GiB |
+| local BS 8, sequence 2,048, chunk 512, U1 | 8,901 tok/s mean | 47.8 GiB | 72.2 GiB |
+| local BS 14, sequence 2,048, chunk 512, U1 | 11,617 tok/s mean | 99.4 GiB | 156.1 GiB |
+
+The current-branch BS14/C512 result is within 0.4% of the historical 11,659
+tok/s result. The C128 slowdown is therefore an execution-shape cost: it uses
+16 chunks and 16 backward groups instead of four, increasing host dispatch,
+cache compilation, and kernel-launch overhead.
+
+The recommended throughput-oriented four-B200 DP config fixes global batch at
+32 with local batch 8 per rank:
+
+```text
+configs/train/cpbc_r125_5b_dp_u1_c512_ddp4_legacyval.yaml
+```
+
+A real three-step DDP4 smoke produced the following steady-state measurements
+after the one-time first-step warmup:
+
+| Metric | Result |
+| --- | ---: |
+| Global batch / tokens per step | 32 / 65,536 |
+| CPBC chunks / backward groups | 4 / 4 |
+| Gradient horizon | 512 tokens |
+| Gradient synchronization | 9 buckets, 561 MB |
+| Peak allocated per rank | 51.4 GiB |
+| Steady global throughput | 24,563-24,896 tok/s |
+| Steady train step | 2.63-2.67 s |
+| Rank-local checkpoint states | 4, passed |
+
+At approximately 24.7k global tok/s, 5B tokens require about 2.35 days of pure
+training. Evaluation, public benchmarks, checkpointing, and W&B should put a
+formal run closer to 2.5-3 days. This C512 config is appropriate for a fast DP
+training run. It is not a controlled replacement for the C128 DP arm in the
+Depth Visibility ablation: comparing DP-C512 against FB-C128 would also change
+chunk count and gradient horizon.
+
 ## 8. Decision
 
 Implementation and smoke acceptance are complete. The four long-run configs are
@@ -222,6 +266,15 @@ CUDA_VISIBLE_DEVICES=0,1 PYTHONPATH=src \
 python -m torch.distributed.run --standalone --nproc_per_node=2 \
   scripts/train.py \
   --config configs/train/smoke_cpbc_r125_5b_fb_u4_c128_ddp2_legacyval.yaml
+```
+
+Throughput-oriented CPBC-DP training on four B200s:
+
+```bash
+CUDA_VISIBLE_DEVICES=0,1,2,3 PYTHONPATH=src:. \
+python -m torch.distributed.run --standalone --nproc_per_node=4 \
+  scripts/train.py \
+  --config configs/train/cpbc_r125_5b_dp_u1_c512_ddp4_legacyval.yaml
 ```
 
 Single-rank memory calibration with explicit U:

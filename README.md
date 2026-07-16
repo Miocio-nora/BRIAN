@@ -240,10 +240,14 @@ the same comparison measures 1,468 tok/s versus 4,696 tok/s. Peak allocated
 memory falls from 108.7 GiB to 26.7 GiB. The stable batch-14/chunk-512 candidate
 measures 11,659 tok/s median with 99.4 GiB allocated and 156.1 GiB reserved. Its
 kernel-only single-GPU 5B estimate is about 5.0 days; real training remains
-slower. Stateful CPBC DDP is now validated with rank-local caches and one manual
-gradient synchronization per optimizer step. The fixed-global-batch CPBC-FB-U4
-smoke completed on two B200s at global batch 32 and chunk 128, but its measured
-1,896 global tok/s is not sufficient for an unbounded four-arm 5B ablation.
+slower. A throughput-oriented CPBC-DP DDP4 config uses local batch 8, global
+batch 32, chunk 512, and U1. Its three-step four-B200 smoke reached
+24.6-24.9k global tok/s after warmup with about 51.4 GiB peak allocated per
+rank, giving a 5B pure-training estimate of about 2.35 days. Stateful CPBC DDP
+uses rank-local caches and one manual gradient synchronization per optimizer
+step. The fixed-global-batch CPBC-FB-U4 smoke completed on two B200s at global
+batch 32 and chunk 128, but its measured 1,896 global tok/s is not sufficient
+for an unbounded four-arm 5B ablation.
 
 Key BDRE entrypoints:
 
@@ -262,8 +266,10 @@ configs/train/bdre_rckv_r125_5b_synchronous_prefix_b12_c512_shared_explicit_lega
 configs/train/bdre_rckv_r125_5b_synchronous_prefix_b14_c512_shared_explicit_legacyval.yaml
 configs/train/stage5_bdre_tiny_synchronous_prefix_debug.yaml
 configs/model/brian_r125_bdre_cpbc_dp_shared_explicit.yaml
+configs/model/brian_r125_bdre_cpbc_dp_c512_shared_explicit.yaml
 configs/model/brian_r125_bdre_cpbc_fb_shared_explicit.yaml
 configs/train/cpbc_r125_5b_dp_u1_c128_ddp2_legacyval.yaml
+configs/train/cpbc_r125_5b_dp_u1_c512_ddp4_legacyval.yaml
 configs/train/cpbc_r125_5b_fb_u1_c128_ddp2_legacyval.yaml
 configs/train/cpbc_r125_5b_fb_u2_c128_ddp2_legacyval.yaml
 configs/train/cpbc_r125_5b_fb_u4_c128_ddp2_legacyval.yaml
@@ -408,6 +414,15 @@ Calibrate the optimized synchronous-prefix candidate at the formal context lengt
 CUDA_VISIBLE_DEVICES=<gpu> PYTHONPATH=src:. python scripts/benchmark_bdre_tbptt.py \
   --config configs/train/bdre_rckv_r125_5b_synchronous_prefix_b14_c512_shared_explicit_legacyval.yaml \
   --warmup-steps 1 --repeats 20
+```
+
+Run throughput-oriented CPBC-DP on four B200s while preserving global batch 32:
+
+```bash
+CUDA_VISIBLE_DEVICES=0,1,2,3 PYTHONPATH=src:. \
+python -m torch.distributed.run --standalone --nproc_per_node=4 \
+  scripts/train.py \
+  --config configs/train/cpbc_r125_5b_dp_u1_c512_ddp4_legacyval.yaml
 ```
 
 Stateful TBPTT and CPBC support DDP. Cache state remains rank-local; all chunk

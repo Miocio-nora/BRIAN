@@ -1,0 +1,40 @@
+extends: cpbc_r125_5b_dp_u1_c128_ddp2_legacyval.yaml
+run_name: cpbc_r125_5b_dp_u1_c512_ddp4_legacyval
+model_config: ../model/brian_r125_bdre_cpbc_dp_c512_shared_explicit.yaml
+
+# Preserve the established global batch while distributing one microbatch over
+# four ranks. Each optimizer step consumes 32 x 2,048 = 65,536 tokens.
+batch_size: 8
+gradient_accumulation_steps: 1
+expected_world_size: 4
+expected_global_batch_size: 32
+ddp_find_unused_parameters: false
+ddp_broadcast_buffers: false
+
+stateful_tbptt:
+  enabled: true
+  chunk_size: 512
+  detach_interval_chunks: 1
+  gradient_sync_bucket_mb: 64
+
+checkpoint_benchmarks:
+  label: cpbc_r125_5b_dp_u1_c512_ddp4_legacyval
+
+post_train_benchmarks:
+  label: cpbc_r125_5b_dp_u1_c512_ddp4_legacyval
+
+wandb:
+  group: cpbc_r125_5b_dp_ddp4
+  tags:
+    - cpbc
+    - cpbc_dp
+    - depth_prefix_visibility
+    - u1
+    - chunk512
+    - ddp4
+    - local_batch8
+    - global_batch32
+    - r125
+    - 5b
+    - balanced_data
+    - legacy_val
