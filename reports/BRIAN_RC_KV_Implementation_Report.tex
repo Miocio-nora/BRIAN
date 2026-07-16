@@ -1,0 +1,540 @@
+\documentclass[UTF8,twocolumn,10pt,a4paper]{ctexart}
+
+\usepackage[a4paper,left=1.55cm,right=1.55cm,top=1.45cm,bottom=1.60cm,columnsep=0.66cm]{geometry}
+\usepackage{fontspec}
+\setmainfont{DejaVu Serif}
+\setsansfont{DejaVu Sans}
+\setmonofont{DejaVu Sans Mono}
+\IfFontExistsTF{Noto Serif CJK SC}{\setCJKmainfont{Noto Serif CJK SC}}{}
+\IfFontExistsTF{Noto Sans CJK SC}{\setCJKsansfont{Noto Sans CJK SC}}{}
+\IfFontExistsTF{Noto Sans Mono CJK SC}{\setCJKmonofont{Noto Sans Mono CJK SC}}{}
+
+\usepackage{amsmath,amssymb,mathtools,bm}
+\usepackage{booktabs,tabularx,array}
+\usepackage{enumitem}
+\usepackage{microtype}
+\usepackage{xcolor}
+\usepackage[hidelinks]{hyperref}
+
+\hypersetup{
+  pdftitle={BRIAN RC-KV: Implemented Reader-Compiled KV Cache and CPBC Prefill},
+  pdfauthor={YMH-Latent-Sphere},
+  pdfsubject={Implementation-grounded report for reader-compiled KV cache under free routing},
+  pdfkeywords={BRIAN, free routing, RC-KV, BDRE, CPBC, KV cache, TBPTT}
+}
+
+\setlength{\parindent}{1em}
+\setlength{\parskip}{0.12em}
+\renewcommand{\baselinestretch}{1.015}
+\setlength{\abovedisplayskip}{4.4pt plus 1pt minus 1pt}
+\setlength{\belowdisplayskip}{4.4pt plus 1pt minus 1pt}
+\setlength{\abovedisplayshortskip}{2.4pt plus 1pt}
+\setlength{\belowdisplayshortskip}{2.4pt plus 1pt minus 1pt}
+\setlength{\textfloatsep}{7pt plus 2pt minus 2pt}
+\setlength{\dbltextfloatsep}{7pt plus 2pt minus 2pt}
+\setlength{\intextsep}{6pt plus 2pt minus 2pt}
+\setlength{\emergencystretch}{1.5em}
+\ctexset{
+  section={beforeskip=0.72ex plus .2ex,afterskip=0.34ex plus .1ex,format=\large\bfseries},
+  subsection={beforeskip=0.58ex plus .2ex,afterskip=0.26ex plus .1ex,format=\normalsize\bfseries},
+  paragraph={beforeskip=0.45ex plus .15ex,afterskip=0.55em,runin=true,format=\normalsize\bfseries}
+}
+\setlist{nosep,leftmargin=1.45em}
+\allowdisplaybreaks
+
+\newcolumntype{Y}{>{\raggedright\arraybackslash}X}
+\newcommand{\Concat}{\operatorname{Concat}}
+\newcommand{\TopK}{\operatorname{TopK}}
+\newcommand{\softmax}{\operatorname{softmax}}
+\newcommand{\RCKV}{\textsf{RC-KV}}
+\newcommand{\BDRE}{\textsf{BDRE}}
+\newcommand{\CPBC}{\textsf{CPBC}}
+\newcommand{\DP}{\textsf{CPBC-DP}}
+\newcommand{\FB}{\textsf{CPBC-FB}}
+\newcommand{\Serial}{\textsf{BDRE-Serial}}
+\newcommand{\code}[1]{\texttt{#1}}
+
+\title{\vspace{-1.0em}\textbf{BRIAN--\RCKV{}：自由路由下的 Reader-Compiled KV 缓存\\与 Chunkwise Progressive Bank Completion}}
+\author{YMH-Latent-Sphere}
+\date{实现报告，2026 年 7 月 16 日}
+
+\begin{document}
+\maketitle
+\vspace{-1.55em}
+
+\begin{abstract}
+自由路由使不同 token 在同一计算深度访问不同 block，并允许重复访问同一 block；因此，固定层 Transformer 中以 layer identity 为索引的 KV cache 无法直接迁移到 BRIAN。本文给出已经实现的 Reader-Compiled KV Cache（\RCKV{}）系统，而非早期理论规格的复述。系统首先由每个 writer block 独立地将其多头 K/V 压缩到 canonical latent，再由 Block--Depth Relative Encoding（\BDRE{}）按照 reader block、可选 reader step 及球面几何编译 reader-specific cache；reader head 使用独立映射恢复 Key 视角，并在压缩 Value 空间中完成等价聚合。实现同时提供精确 token-serial oracle、三种 current-token self-KV、三类 reader-step cache policy、可选 hard top-$k$ 与独立 K/V 温度。
+
+为解决精确 teacher-forced 训练的串行瓶颈，本文进一步定义 Chunkwise Progressive Bank Completion（\CPBC{}）：chunk 内 token 并行、route depth 串行，cache bank 随 recurrent step 渐进补全，并以严格 token-causal mask 阻止未来信息。实现包含 depth-prefix visibility（\DP{}）和 full-bank visibility（\FB{}）、跨 chunk 的 stateful TBPTT，以及 rank-local state 下的显式 DDP 梯度同步。完整测试验证了因果性、incremental consistency、cache policy 等价性和分布式更新一致性。当前主要 limitation 仍是速度：优化后的两卡 \DP{} 正式运行约为 $2.16\times10^4$ token/s，而匹配的普通 Transformer 约为 $6.19\times10^5$ token/s；该差距主要来自动态分组、碎片化 block kernel、显式 reader attention 与高频 dispatch，而非 canonical compiler 的算术量本身。
+\end{abstract}
+
+\noindent\textbf{关键词：} BRIAN；自由路由；Reader-Compiled KV；BDRE；CPBC；TBPTT
+
+\section{引言}
+固定层 decoder-only Transformer~\cite{vaswani2017attention} 将第 $\ell$ 层写出的历史 Key/Value 交给未来 token 的第 $\ell$ 层读取。该机制隐含一个稳定假设：writer identity 与 reader identity 都由层号 $\ell$ 决定。BRIAN 的 free routing 打破了此假设。token 可以选择不同的 free-block 序列、在路径中跳过 block、重复访问 block，并在不同步数退出。此时把 block $b$ 写出的 K/V 原样暴露给未来任意 reader，不仅混合了不同 head 的坐标系，也把历史路径长度扩展为额外的 attention object 轴。
+
+\RCKV{} 的目标不是压缩计算量，也不是迫使路径变短，而是建立一个适用于自由路由的记忆接口：writer 保留自己的参数化，缓存进入跨路径可组合的 canonical space，reader 仍保留 block- 和 head-specific 的解释能力。本文以当前代码、配置、测试和 B200 实测为准，并对早期理论稿作出以下实现性修正：
+
+\begin{enumerate}
+  \item 默认 persistent cache 仅按 reader block 编译；reader-step 维度是可选语义，而非强制的 depth--block 笛卡尔积。
+  \item free blocks 的 $W_Q,W_K,W_V$、writer canonicalizer 和 reader decoder 均不共享；``shared'' 只表示 canonical cache interface 共享。
+  \item temporal RoPE 在 decoded Key 上显式执行；只有 Value 路径使用严格等价的低维聚合。
+  \item 精确 token-by-token 执行永久保留为因果性与 incremental inference oracle。
+  \item 并行训练采用独立的 \CPBC{} 语义，并显式报告 visibility policy 与梯度截断边界。
+\end{enumerate}
+
+本文不声称当前正式 5B 训练已经证明下游能力提升。本文的贡献是给出真实系统合约、已验证性质、可选机制和剩余性能瓶颈。
+
+\section{模型范围与符号}
+\subsection{当前 R125 实例}
+当前正式实例含两个固定 pre blocks、八个 free route blocks、一个 Exit Block 和两个固定 post blocks。固定 pre/post blocks 具有稳定 layer identity，继续使用标准逐层 autoregressive KV cache；\RCKV{} 只作用于八个 free blocks。表~\ref{tab:scope} 给出已解析配置和实际模型统计。
+
+\begin{table}[t]
+\centering
+\caption{当前 BRIAN-R125--\RCKV{} 实例。}
+\label{tab:scope}
+\small
+\begin{tabular}{lr}
+\toprule
+项目 & 数值 \\
+\midrule
+参数量 & $140{,}308{,}105$ \\
+hidden dimension $d$ & 768 \\
+attention heads $H$ & 12 \\
+head dimension $d_h$ & 64 \\
+fixed pre/free/fixed post & $2/8/2$ \\
+最大 route steps $S_{\max}$ & 16 \\
+route action & hard top-1 \\
+position dimension $p$ & 64 \\
+canonical Key/Value & $r_K=r_V=32$ \\
+context length & 2048 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+令 token $i$ 的有效 free route 为
+\begin{equation}
+  \pi_i=(b_{i,0},b_{i,1},\ldots,b_{i,S_i-1}),
+  \qquad S_i\le S_{\max},
+  \label{eq:route}
+\end{equation}
+其中 $b_{i,s}\in\{0,\ldots,R-1\}$，当前实现 $R=8$。OUT 是第 $R$ 个 route action，但不产生 writer code。用 $v_{i,s}\in\{0,1\}$ 表示 step $s$ 是否为有效 internal write；已退出 token 的 hidden state 不再更新，后续位置仅作为 padding/OUT 处理。
+
+\subsection{球面位置几何}
+系统维护 $\bm z_{\mathrm{IN}}$、八个 $\bm z_b$ 和 $\bm z_{\mathrm{OUT}}$。初始化时 IN/OUT 互为对跖点，internal blocks 在与该轴正交的子空间中形成 regular simplex：
+\begin{align}
+  \bm z_{\mathrm{IN}}^\top\bm z_{\mathrm{OUT}}&=-1,\\
+  \bm z_{\mathrm{IN}}^\top\bm z_b
+  =\bm z_{\mathrm{OUT}}^\top\bm z_b&=0,\\
+  \bm z_b^\top\bm z_{b'}&=-\frac{1}{R-1},\quad b\ne b'.
+  \label{eq:spherical-code}
+\end{align}
+构造后施加固定随机正交旋转。所有 position 可学习，并在读取时归一化。IN 初始化 router 与第一步 position adapter；internal positions 同时服务于 router、block adapter 和 \BDRE{}；OUT 只表示终止位置，不索引 reader cache。权重 $10^{-3}$ 的 Gram-matrix loss 弱保持式~\eqref{eq:spherical-code}，但不构造邻近路径或模仿路径。
+
+\section{Reader-Compiled KV Cache}
+\subsection{Block-specific writer canonicalization}
+token $i$ 在 step $s$ 进入 block $b=b_{i,s}$。令 $\bm h_{i,s}$ 为路由前 hidden state，$g_b(\cdot)$ 表示现有 position adapter，则标准 pre-norm attention 输入为
+\begin{equation}
+  \bm x_{i,s}=\operatorname{RMSNorm}
+  \bigl(\bm h_{i,s}+g_b(\bm z_{i,s})\bigr).
+\end{equation}
+每个 block 的 packed QKV linear 在数学上仍对应独立的 block/head 参数：
+\begin{align}
+  \bm q_{i,s}^{(h)}&=W_{Q,b}^{(h)}\bm x_{i,s},\\
+  \bm k_{i,s}^{(h)}&=W_{K,b}^{(h)}\bm x_{i,s},\\
+  \bm v_{i,s}^{(h)}&=W_{V,b}^{(h)}\bm x_{i,s}.
+\end{align}
+在施加 temporal RoPE 之前，全部 Key heads 和 Value heads 分别沿 feature 轴拼接，并由当前 writer block 的独立矩阵压缩：
+\begin{align}
+  \bm c^K_{i,s}
+  &=A^K_b\Concat_{h=1}^{H}\bm k_{i,s}^{(h)}
+  \in\mathbb R^{r_K},\\
+  \bm c^V_{i,s}
+  &=A^V_b\Concat_{h=1}^{H}\bm v_{i,s}^{(h)}
+  \in\mathbb R^{r_V}.
+  \label{eq:writer-code}
+\end{align}
+实现中的 $A^K_b,A^V_b$ 是每个 free block 独立的无 bias linear。它们不在 block 间共享；canonical space 的可组合性由训练学习，而不是由参数 tying 强制获得。
+
+\subsection{BDRE compiler}
+对 reader block $r$、可选 reader step $\ell$ 与 writer step $s$，实现使用统一分数
+\begin{equation}
+  e_{i,\ell,r,s}
+  =\tau_z\,\bar{\bm z}_r^\top\bar{\bm z}_{b_{i,s}}
+  -\lambda_s d(\ell,s)
+  +\gamma\frac{s+1}{S_{\max}},
+  \label{eq:bdre-score}
+\end{equation}
+其中 $\bar{\bm z}=\bm z/\lVert\bm z\rVert_2$。$d(\ell,s)$ 可取 $|\ell-s|$，当前 \CPBC{} profile 使用归一化形式
+\begin{equation}
+  d(\ell,s)=\frac{|\ell-s|}{S_{\max}-1}.
+\end{equation}
+三项均可独立退化：block-only mode 令 $\lambda_s=0$ 且不需要 $\ell$；late-step bias 由 $\gamma>0$ 开启，默认 $\gamma=0$；position contribution 由 $\tau_z$ 控制。
+
+设 $\mathcal V_{i,\ell}$ 是当前语义允许读取的有效 writer steps。hard compile top-$k_c$ 是可选项：
+\begin{equation}
+  \mathcal I_{i,\ell,r}=
+  \begin{cases}
+    \mathcal V_{i,\ell}, & k_c=\varnothing,\\
+    \TopK_{s\in\mathcal V_{i,\ell}}(e_{i,\ell,r,s};k_c),
+      & \text{otherwise}.
+  \end{cases}
+\end{equation}
+Key 与 Value 共享 support，但采用独立温度：
+\begin{align}
+  \alpha^X_{i,\ell,r,s}
+  &=\frac{\exp(e_{i,\ell,r,s}/T_X)}
+  {\sum_{u\in\mathcal I_{i,\ell,r}}
+    \exp(e_{i,\ell,r,u}/T_X)},\\
+  \bm m^X_{i,\ell,r}
+  &=\sum_{s\in\mathcal I_{i,\ell,r}}
+    \alpha^X_{i,\ell,r,s}\bm c^X_{i,s},
+  \qquad X\in\{K,V\}.
+  \label{eq:compiled-cache}
+\end{align}
+softmax 在 FP32 中执行后再转换回模型 dtype。当前默认 $T_K=0.5$、$T_V=1.0$、$k_c=\varnothing$，因而 Key fusion 比 Value fusion 更尖锐，但所有有效 writer steps 都保留梯度。
+
+\subsection{Persistent state variants}
+实际实现支持表~\ref{tab:cache-modes} 中三类历史状态。block-only 是精确 reference 的最小 persistent form；reader-step 模式可 eager 编译、首次读取时 lazy 编译并 memoize，或保留 writer history 动态重编译。\CPBC{} 强制使用 eager step cache。
+
+\begin{table*}[t]
+\centering
+\caption{已经实现的 persistent cache 组织。$B,T,L,R$ 分别为 batch、token、reader-step 和 free-block 维。}
+\label{tab:cache-modes}
+\small
+\begin{tabularx}{\textwidth}{l l l Y}
+\toprule
+模式 & K/V 主要形状 & R125 BF16 每 token & 实现语义 \\
+\midrule
+block-only & $[B,T,R,r_X]$ & K+V 共 1 KiB & 每个 completed token、每个 reader block 一对 cache \\
+reader-step eager & $[B,T,L,R,r_X]$ & K+V 共 16 KiB & token 完成时编译全部 reader steps \\
+reader-step lazy & block cache + writer history + memo & 按访问增长 & 首次访问 $(r,\ell)$ 时编译整段历史并缓存 \\
+reader-step dynamic & $[B,T,S_{\max},r_X]$ writer history & 约 2 KiB & 每次读取重新融合，仅用于 correctness/cost reference \\
+\bottomrule
+\end{tabularx}
+\end{table*}
+
+在 $T=2048$ 时，reader-step eager 的 canonical K/V 约为每个 sequence 32 MiB；该数字不含 pre/post KV、activation、mask、梯度与 allocator overhead。当前 formal \CPBC{} 使用这一 step-indexed state。
+
+\section{Reader Attention 与 Current-Token Memory}
+\subsection{Head-specific read}
+每个 reader block $r$ 和 head $h$ 拥有独立参数
+\begin{align}
+  B^K_{r,h}&\in\mathbb R^{r_K\times d_h},\\
+  B^V_{r,h}&\in\mathbb R^{r_V\times d_h}.
+\end{align}
+代码中它们分别存为形状 $[H,r_K,d_h]$ 与 $[H,r_V,d_h]$ 的参数。对历史 token $i$，显式 decoded Key 为
+\begin{equation}
+  \widehat{\bm k}_{i,\ell,r}^{(h)}
+  =(B^K_{r,h})^\top\bm m^K_{i,\ell,r}.
+\end{equation}
+query 和 decoded Key 按真实 token position 施加 RoPE~\cite{su2021roformer}：
+\begin{align}
+  \widetilde{\bm q}_{t,\ell,r}^{(h)}
+  &=\operatorname{RoPE}(\bm q_{t,\ell,r}^{(h)},t),\\
+  \widetilde{\bm k}_{i,\ell,r}^{(h)}
+  &=\operatorname{RoPE}(\widehat{\bm k}_{i,\ell,r}^{(h)},i),\\
+  a_{t,i}^{(\ell,r,h)}
+  &=\softmax_{i\le t}
+  \left(\frac{(\widetilde{\bm q}_{t,\ell,r}^{(h)})^\top
+  \widetilde{\bm k}_{i,\ell,r}^{(h)}}{\sqrt{d_h}}\right).
+  \label{eq:reader-attn}
+\end{align}
+
+Value 路径使用严格等价的低维聚合：
+\begin{align}
+  \bm u_{t,\ell,r}^{(h)}
+  &=\sum_{i\le t}a_{t,i}^{(\ell,r,h)}
+  \bm m^V_{i,\ell,r},\\
+  \bm o_{t,\ell,r}^{(h)}
+  &=(B^V_{r,h})^\top\bm u_{t,\ell,r}^{(h)}.
+  \label{eq:latent-value}
+\end{align}
+式~\eqref{eq:latent-value} 只把线性 decode 移到求和之后，不改变注意力定义。Key 路径不能直接使用 $(B^K)\bm q$ 与 latent Key 点积，因为每个历史 Key 具有不同 RoPE rotation；当前唯一允许的 Key read mode 是 \code{explicit\_decode\_rope}。
+
+\subsection{当前 token 的三种 self-KV}
+精确 token-serial backend 支持：
+\begin{itemize}
+  \item \code{bdre\_prefix}：把当前 step code 追加到本 token 的 route prefix，并按当前 reader 编译为一个 self object；
+  \item \code{current\_step}：只使用当前 step 的 $\bm c^K,\bm c^V$；
+  \item \code{none}：只允许 $i<t$ 的历史 token。
+\end{itemize}
+默认 \code{bdre\_prefix} 不产生循环依赖，因为当前 K/V 由 attention input 在 attention output 之前计算。它也不会把同一 token 的每个 writer step 作为独立 temporal object 暴露给 attention。
+
+在 \CPBC{} 中，一个 active chunk 的每个 token 在 reader step $\ell$ 都产生一个 on-the-fly prefix-compiled object；严格的 token mask 只允许 query $t$ 读取 $i\le t$。因此 current-token self object 与同 chunk 先前 token 使用同一 bank 表示，不会重复展开 writer-step 轴。
+
+\section{精确执行：\Serial{}}
+\Serial{} 是 sequence-serial、batch-parallel 的语义 oracle。对 token position $t$，实际执行顺序为：
+\begin{enumerate}
+  \item fixed pre blocks 使用各自的标准 incremental KV 处理 token $t$；
+  \item route position 初始化为 IN，router 在每个 step 为 batch 内 token 选择一个 internal block 或 OUT；
+  \item active token 按选中 block 分组，读取 $i<t$ 的 reader-compiled cache，并按 self-KV mode 加入当前 token；
+  \item 每个有效 step 记录式~\eqref{eq:writer-code} 的 writer code；退出 token 的 hidden state 停止更新；
+  \item 完整 route 结束后才把 token $t$ 编译并提交到 persistent cache；
+  \item Exit Block 与 fixed post blocks 处理 token $t$，随后产生 LM logits。
+\end{enumerate}
+
+完整 teacher-forced \code{forward} 逐 token 调用同一个 incremental kernel；\code{forward\_incremental} 则显式接收并返回 pre/post KV 与 \RCKV{} state，不重算 prefix。测试中两者的 logits 最大差为 0。由于 token $t$ 的 persistent cache 只在 route 完成后提交，未来 suffix 的替换无法改变 prefix logits、router logits 或 cache state。
+
+精确 reader-step mode 对 completed token 可采用 eager/lazy/dynamic 三种物理策略；它们的数学输入均是该 token 的完整有效 route。该语义与后文 chunk 内渐进补全并不总是相同。
+
+\section{CPBC：近似 Prefill}
+\subsection{定义与执行}
+精确 backend 在一张 B200 上仅约 25--28 token/s，无法用于 5B-token 训练。\CPBC{} 将长度 $T$ 的序列切为连续 chunks $\mathcal C_0,\ldots,\mathcal C_{M-1}$，每个 chunk 最多含 $C$ 个 token。它在 token 轴并行，在 route-depth 轴保持串行。
+
+对 chunk $\mathcal C_m$ 与 reader step $\ell$：
+\begin{enumerate}
+  \item fixed pre blocks 对整段 chunk 执行标准 causal attention；
+  \item router 独立地为 $[B,C]$ 中每个 active token 选择 action；
+  \item token 按 reader block 分组计算 Q/K/V 与 canonical writes；
+  \item compiler 只用当前已生成的 $s\le\ell$ writer prefix，为所有 reader blocks 生成 step-$\ell$ bank；
+  \item selected reader 同时读取 completed history 与当前 chunk bank，并施加 $i\le t$ 的绝对 token-causal mask；
+  \item 已退出 token 冻结，其余 token 进入 $\ell+1$；最后持久化 bank，经 fixed post blocks 输出 logits。
+\end{enumerate}
+
+当前 chunk 的合法 writer support 为
+\begin{equation}
+  \mathcal V^{\mathrm{active}}_{i,\ell}
+  =\{s\mid v_{i,s}=1,\ s\le\ell\}.
+  \label{eq:active-prefix}
+\end{equation}
+式~\eqref{eq:active-prefix} 是 hard mask，发生在 compiler softmax 之前；修改 $s>\ell$ 的 writer code 不会改变 earlier reader-step cache。
+
+\subsection{Depth Visibility Policy}
+\CPBC{} 的近似来自 completed chunks 对 route-depth bank 的可见性定义。实现提供两种 policy。
+
+\paragraph{Depth-Prefix Visibility（\DP{}）。}
+active 与 completed token 都保持
+\begin{equation}
+  \mathcal V^{\mathrm{DP}}_{i,\ell}
+  =\{s\mid v_{i,s}=1,\ s\le\ell\}.
+  \label{eq:dp}
+\end{equation}
+因此在固定权重下，改变 chunk boundary 不改变 \DP{} forward value；chunk size 仍会改变 activation shape 与梯度边界。
+
+\paragraph{Full-Bank Visibility（\FB{}）。}
+active chunk 仍使用式~\eqref{eq:active-prefix}，但 chunk 完成后为每个 reader step $\ell$ 使用全部有效 writers 重编译：
+\begin{equation}
+  \mathcal V^{\mathrm{FB}}_{i,\ell}
+  =\{s\mid v_{i,s}=1\},\qquad i\in\mathcal C_{<m}.
+  \label{eq:fb}
+\end{equation}
+reader-step $\ell$ 仍进入式~\eqref{eq:bdre-score}，``full bank'' 只表示 candidate support 包含 completed route。\FB{} 的 forward 依赖 chunk boundary；当 $C=1$ 时，它在已测试配置中与 token-serial completed-route semantics 匹配到 $2\times10^{-5}$ 容差。
+
+\begin{figure*}[t]
+\centering
+\fbox{\parbox{0.96\textwidth}{\small
+\textbf{CPBC bank lifecycle.}
+对 active chunk，route step $\ell$ 只产生 prefix bank $s\le\ell$；同 chunk attention 通过 token-causal mask 读取这些 bank。chunk 完成后，\DP{} 原样持久化每个 depth prefix，\FB{} 则用完整有效 route 为所有 reader steps 重编译。未来 chunk 只读取已持久化 bank。TBPTT detach 改变 autograd history，不改变这些 forward cache values。}}
+\caption{\CPBC{} 中 cache bank 的渐进补全、promotion 与梯度边界。}
+\label{fig:cpbc-life}
+\end{figure*}
+
+\section{Stateful TBPTT 与 DDP}
+\subsection{梯度跨度}
+令训练 chunk size 为 $C$，每经过 $U$ 个 chunks 才 detach persistent state。最大梯度跨度为
+\begin{equation}
+  H_{\mathrm{grad}}=\min(T,C U).
+  \label{eq:grad-horizon}
+\end{equation}
+同一组内的 chunk losses 相加后执行一次 backward；随后 pre/post KV 与 \RCKV{} bank 保留数值但切断 autograd graph。所有 chunks 完成后才执行 optimizer step，避免一个 sequence 同时依赖两个参数版本。
+
+LM loss 以完整 sequence 的有效 next-token label 数归一化：
+\begin{equation}
+  \mathcal L_{\mathrm{LM}}
+  =\frac{1}{B(T-1)}\sum_{n=1}^{B}\sum_{t=0}^{T-2}
+  -\log p_\theta(x_{n,t+1}\mid x_{n,\le t}).
+\end{equation}
+因此 chunk losses 的和与完整 sequence mean loss 一致。$U$ 在固定权重下不改变 forward value，但决定 later chunk loss 能否更新 earlier cache writers。
+
+\subsection{Rank-local state 与手工同步}
+DDP 仅划分 batch，每个 rank 维护自己的 cache state。所有 stateful forwards 在 \code{no\_sync()} 下运行，完整 optimizer-step accumulation 后进行一次显式同步：先 all-reduce parameter-used mask，再把全局使用但本 rank 未使用的参数补零梯度，最后按 dtype/device bucket all-reduce 并除以 world size。当前两卡 formal profile 每步同步约 561 MB gradients，分为 9 个 64 MB 上限 buckets。CPU merged-batch 测试验证了 loss、gradient 与 parameter update 等价。这里的跨 chunk 截断属于 TBPTT~\cite{williams1990tbptt}，但 cache state 与稀疏参数同步是本实现的显式扩展。
+
+\subsection{当前正式训练 profile}
+表~\ref{tab:formal-profile} 是正在运行的实现 profile，而不是所有 \RCKV{} mode 的默认值。
+
+\begin{table}[t]
+\centering
+\caption{当前 formal \DP{} profile。}
+\label{tab:formal-profile}
+\small
+\begin{tabular}{ll}
+\toprule
+设置 & 数值 \\
+\midrule
+execution & \code{synchronous\_prefix} \\
+visibility & \code{depth\_prefix} \\
+attention backend & \code{shared\_padded\_explicit} \\
+dispatch & \code{grouped\_host} \\
+$C,U$ & $512,1$ \\
+DDP & 2 B200 \\
+local/global batch & $16/32$ \\
+tokens/update & 65,536 \\
+precision & BF16 \\
+learning rate & $3\times10^{-4}$ \\
+training budget & 5B tokens \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+当前 routing curriculum 在 step 0--1500 将 router probability 从 0 逐步升至 1，但 route-imitation loss 始终为 0。logit noise 从 0.08 缓慢衰减至 0.008，random-route override 从 0.25 衰减至 0.03。约束包括 min exit step 4、step 12 开始的 exit ramp、最终强制 OUT 和 self-recurrence cap 2。当前 objective 为
+\begin{align}
+  \mathcal L={}&\mathcal L_{\mathrm{LM}}
+  +2\!\times\!10^{-4}\mathcal L_{\mathrm{cost}}
+  +0.02\mathcal L_{\mathrm{selected}}
+  +0.05\mathcal L_{\mathrm{coverage}}\nonumber\\
+  &+0.02\mathcal L_{\mathrm{exit}}
+  +0.001\mathcal L_{\mathrm{geometry}}.
+  \label{eq:objective}
+\end{align}
+location、plain balance、transition-diversity 与 route-imitation 权重为 0。该 routing recipe 是当前实验控制，不是 \RCKV{} 数学定义的一部分。
+
+\section{已实现选项与合法组合}
+表~\ref{tab:options} 总结当前代码可以选择的机制。部分选项是 correctness reference 或 ablation，不应视为推荐生产后端。
+
+\begin{table*}[t]
+\centering
+\caption{\RCKV{}/\CPBC{} 的真实配置表。``Formal'' 指表~\ref{tab:formal-profile} 的当前运行。}
+\label{tab:options}
+\scriptsize
+\setlength{\tabcolsep}{3pt}
+\begin{tabularx}{\textwidth}{p{0.15\textwidth} p{0.25\textwidth} p{0.14\textwidth} Y}
+\toprule
+配置 & 已实现取值 & Formal & 语义/约束 \\
+\midrule
+Execution mode & token-by-token；synchronous-prefix & synchronous-prefix & 前者为 oracle，后者为 CPBC \\
+Depth mode & none；reader-step；synchronous-prefix & synchronous-prefix & CPBC 必须与 synchronous-prefix depth mode 配对 \\
+Visibility policy & depth-prefix；full-bank & depth-prefix & full-bank 仅允许 CPBC \\
+Reader cache & eager；lazy；dynamic & eager & CPBC 强制 eager；其余服务 exact reader-step mode \\
+Self-KV & bdre-prefix；current-step；none & bdre-prefix & CPBC 当前强制 bdre-prefix \\
+Attention backend & per-query-reference；shared-padded-explicit & shared-padded-explicit & 两者数学和梯度等价，后者共享 decoded history \\
+Dispatch & legacy-cuda-scan；grouped-host & grouped-host & 后者每 route step 一次 action D2H 后在 host 分组 \\
+Compiler top-$k$ & null 或正整数 & null & Key/Value 共用 support；不得超过 $S_{\max}$ \\
+$T_K,T_V$ & 正实数 & $0.5,1.0$ & 独立 compiler softmax 温度 \\
+$\tau_z,\lambda_s,\gamma$ & 非负实数 & $1.0,0.25,0$ & formal depth distance 归一化 \\
+Detach interval & $U\ge1$ & 1 & 只改变梯度跨度，不改变固定权重 forward \\
+\bottomrule
+\end{tabularx}
+\end{table*}
+
+实现还设置了硬 guardrails：\RCKV{} v1 只允许 route top-1；\CPBC{} 要求 hard exit；position mode 必须为 spherical code 且 IN position 独立；不得与旧 hidden Global KV、attention-summary Global KV 或 parallel passing 同时启用。Top-2 与 weighted route fusion 尚未纳入该版本。
+
+\section{正确性验证}
+表~\ref{tab:correctness} 汇总已经执行的核心验收。所有比较使用同参数、同输入和同随机条件；BF16 比较使用显式容差。
+
+\begin{table*}[t]
+\centering
+\caption{当前实现的 correctness evidence。}
+\label{tab:correctness}
+\small
+\begin{tabularx}{\textwidth}{Y l}
+\toprule
+检查 & 结果 \\
+\midrule
+Exact full forward 与 stateful incremental & logits 最大差 $0$ \\
+Exact streamed chunks 与未分块 exact forward & forward/loss 一致 \\
+reader-step eager/lazy/dynamic & $\mathrm{atol}=\mathrm{rtol}=10^{-6}$ 内一致 \\
+prefix suffix invariance 与 future-writer intervention & 通过；future token/step 不影响 prefix \\
+\FB{}，chunk 1 与 \Serial{} & reference/shared-explicit 均在 $2\times10^{-5}$ 内一致 \\
+\DP{} chunk-boundary invariance & 通过 \\
+CPBC full forward、stream chunks 与 one-token incremental & 在 $2\times10^{-5}$ 内一致 \\
+$U=1$ 与 $U=2$ & forward loss 相同，gradient 按预期不同 \\
+shared-padded-explicit 与 per-query-reference & logits、loss、cache 与 parameter gradients 一致 \\
+CPU DDP 与 merged global batch & loss、gradient、update 一致 \\
+rank-local unused parameter synchronization & 通过 \\
+B200 CUDA BF16 forward/backward 与 DDP2 smoke & finite 且 checkpoint state 通过 \\
+完整 repository regression & 598 passed，15 个既有 warnings \\
+\bottomrule
+\end{tabularx}
+\end{table*}
+
+上述结果证明实现合约与因果接口成立，但不证明 \DP{} 或 \FB{} 在语言建模与 public benchmark 上优于 baseline。模型选择必须同时观察 PPL、reasoning/public suite、route entropy、path diversity、block coverage、compiler entropy、writer mass 和 cache norm。
+
+\section{性能结果与瓶颈}
+\subsection{Kernel/backend 演进}
+表~\ref{tab:performance} 给出在 B200 上完成的可复现实测。早期 token-serial 只适合作为 oracle；\code{shared\_padded\_explicit} 把同一 $(\mathrm{reader},\ell,\mathrm{batch})$ 的 queries 打包，使 decoded history 在组内共享，并在 latent Value 上聚合。它相对 per-query reference 提升约 $3.2\times$，同时显著降低 activation memory。
+
+\begin{table*}[t]
+\centering
+\caption{R125 BF16 B200 性能。除最后一行外均为单卡完整 forward+backward、包含 warmup 后的测量。}
+\label{tab:performance}
+\small
+\begin{tabular}{lrrrrrr}
+\toprule
+Backend & BS & $T$ & $C$ & token/s & peak allocated & 备注 \\
+\midrule
+Exact token-serial & 32 & 128 & 8 & 28.18 & 3.28 GiB & oracle \\
+Exact token-serial & 32 & 256 & 8 & 25.53 & 4.46 GiB & oracle \\
+CPBC per-query reference & 8 & 2048 & 256 & 1,467.80 & 111,353 MiB & median \\
+CPBC shared-padded-explicit & 8 & 2048 & 256 & 4,695.64 & 27,333 MiB & median \\
+CPBC shared-padded-explicit & 14 & 2048 & 512 & 11,658.95 & 101,808 MiB & stable candidate \\
+Formal \DP{} DDP2 & 32 global & 2048 & 512 & 21,577 & 55.6 GiB/rank & active-run snapshot \\
+\bottomrule
+\end{tabular}
+\end{table*}
+
+最后一行是 2026-07-16 正式运行最近 100 steps 的运行快照，而非隔离的 kernel benchmark：median 为 21,646 token/s，范围 20,549--22,190 token/s。同期匹配数据与 global batch 的普通 Transformer DDP2 最近 100 steps 平均为 618,738 token/s。因此当前 end-to-end gap 约为 $28.7\times$。两种模型的实际 block evaluations 不同，该比例不是纯 attention kernel 比值；但它远大于层数或有效 block 数能够解释的差距。
+
+\subsection{剩余热点}
+profile 与实现检查显示主要瓶颈为：
+\begin{enumerate}
+  \item 每个 route step 把 selected actions 从 GPU 同步到 CPU，并由 Python 构造 active block groups；
+  \item token 分散到八个 free blocks 后形成大量小 QKV、writer projection、FFN 和 index-copy kernels；
+  \item 当前 reader path 显式 decode Key、构造 causal mask、执行 FP32 softmax 与多次 einsum；
+  \item 一个 chunk 仍约触发 28,600 次 kernels，dispatch gap 造成明显 GPU bubbles；
+  \item $C=512,U=1,T=2048$ 每个 optimizer step 执行四次 backward groups，随后同步约 561 MB gradients；
+  \item step-indexed bank 与 route-dependent padding 增加 memory traffic，且不同路径长度使 group shape 高频变化。
+\end{enumerate}
+compiler 本身在当前运行中通常只占少量 wall time；单纯删减 compiler score 或缩短 route 不能解决主要工程问题，也会改变研究目标。下一阶段性能工作应优先验证 GPU-resident packing、grouped expert GEMM 和 fused BDRE reader attention，并以 logits/loss/gradient 等价为验收条件。
+
+\section{局限与尚未回答的问题}
+\paragraph{训练速度。}
+当前 \CPBC{} 已把不可训练的 token-serial 速度提高数百倍，但仍比 matched baseline 慢约一个数量级以上。完整 5B anchor 的墙钟成本仍高，阻碍大规模 ablation。
+
+\paragraph{CPBC 是显式近似语义。}
+\DP{} 对 chunk boundary 前向不变，但它让 completed token 的 reader depth $\ell$ 永久只看 writer prefix $s\le\ell$；\FB{} 更接近 completed-route oracle，却在 active chunk 内仍只能渐进补全并依赖 chunk boundary。二者不能只凭训练 PPL 选取。
+
+\paragraph{TBPTT 截断。}
+$U=1$ 的 512-token gradient horizon 保留 forward cache，却阻断后续 chunk 对早期 writer 的 credit assignment。增大 $U$ 会快速增加 activation memory，质量收益尚未测定。
+
+\paragraph{压缩与 reader takeover。}
+$r_K=r_V=32$ 相对 $d=768$ 是强压缩。block-specific canonicalizers 必须学习可组合坐标系；compiler position term、depth term、self-prefix 和 reader decoder 均可能形成 memory shortcut。需要通过 entropy、writer mass、self-memory concentration 与 public benchmark 联合诊断。
+
+\paragraph{RoPE 限制低维 Key。}
+Value read 已能在 latent space 精确聚合，但 position-dependent RoPE 阻止当前实现把 Key scoring 完全降到 $r_K$ 维。任何 latent-relative-RoPE 优化都必须先给出数学等价式和显式测试。
+
+\paragraph{路由范围。}
+v1 只实现 hard top-1，尚未支持 top-2 reader fusion；八个 free blocks、16 个最大 route steps 和 current routing guardrails 也尚未证明是规模最优解。
+
+\section{实验协议}
+当前 baseline 与 \DP{} C512/U1 5B runs 是 matched anchors，但不是 visibility ablation。后续机制验证按以下顺序进行：
+\begin{enumerate}
+  \item 在相同 $C,U$、global batch、数据与 token budget 下比较 \DP{} 与 \FB{}；
+  \item 只在胜出的 visibility 上比较 $U=1,2,4$；
+  \item 以 C128/U4 对 C512/U1，在相同 512-token gradient horizon 下测 prefill granularity；
+  \item 从胜出配置分别比较 \code{bdre\_prefix} 与 \code{current\_step}、depth score on/off 和 compiler position on/off；
+  \item hard top-$k$ 与温度只在 compiler entropy 或 writer domination 出现异常时启动。
+\end{enumerate}
+首轮每个 arm 使用 250M tokens，并在约 $1/3,2/3,1$ 进度执行 legacy validation、reasoning S600 与 public S600。只有综合能力、route/cache 稳定性和性能均成立的配置才晋级 2B；不构造每 arm 5B 的笛卡尔积。
+
+\section{结论}
+当前实现将自由路由中的 KV memory 分成三个清晰层次：block/head-specific attention 负责写入与读取的局部坐标系，canonical K/V latent 提供跨路径接口，\BDRE{} 依据 reader geometry 和可选 depth 规则把完整 writer route 编译成每 token 的 reader-specific object。\Serial{} 给出精确因果 oracle；\CPBC{} 通过 chunk 内 token 并行和 route-depth 串行实现可训练的近似 prefill，并用 DP/FB 明确暴露其历史可见性选择。stateful TBPTT 与手工 DDP 同步进一步保证 cache 生命周期和 optimizer update 一致。
+
+系统的功能、因果性和分布式训练接口已经实现并通过测试；目前不能回避的 limitation 是执行效率。下一阶段的关键不是继续堆叠 routing loss，而是在不改变 \RCKV{}/\CPBC{} 语义的前提下消除 host synchronization、小 kernel 和显式 reader attention 开销，再用受控 ablation 判断该记忆结构的真实能力收益。
+
+\begin{thebibliography}{9}
+\small
+\bibitem{vaswani2017attention}
+A. Vaswani et al., ``Attention Is All You Need,'' \emph{NeurIPS}, 2017.
+
+\bibitem{su2021roformer}
+J. Su et al., ``RoFormer: Enhanced Transformer with Rotary Position Embedding,'' \emph{Neurocomputing}, 2024; arXiv:2104.09864.
+
+\bibitem{williams1990tbptt}
+R. J. Williams and J. Peng, ``An Efficient Gradient-Based Algorithm for On-Line Training of Recurrent Network Trajectories,'' \emph{Neural Computation}, 1990.
+
+\bibitem{fedus2022switch}
+W. Fedus, B. Zoph, and N. Shazeer, ``Switch Transformers: Scaling to Trillion Parameter Models with Simple and Efficient Sparsity,'' \emph{JMLR}, 2022.
+\end{thebibliography}
+
+\end{document}
