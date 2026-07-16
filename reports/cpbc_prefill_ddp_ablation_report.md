@@ -1,7 +1,8 @@
 # CPBC Approximate Prefill, Stateful DDP, and Ablation Report
 
-**Status:** implementation and smoke validation complete; long-run quality
-ablation prepared but not launched
+**Status:** implementation and smoke validation complete; the matched 5B
+baseline and CPBC-DP-C512-U1 anchors are running; remaining quality ablations
+are planned but not launched
 
 **Date:** 2026-07-16
 
@@ -335,3 +336,100 @@ CUDA_VISIBLE_DEVICES=0 PYTHONPATH=src python scripts/benchmark_bdre_tbptt.py \
   --batch-size 16 --sequence-length 2048 --chunk-size 128 \
   --detach-interval-chunks 4
 ```
+
+## 10. Prioritized Ablation Plan
+
+### 10.1 Running Anchors
+
+These runs establish the matched end-to-end reference, but they do not isolate
+CPBC visibility, chunk size, or gradient horizon:
+
+| ID | Model | Configuration | Status | Purpose |
+| --- | --- | --- | --- | --- |
+| A0 | plain Transformer | balanced 5B, DDP2, global BS 32, legacy val | running | matched architecture baseline |
+| A1 | BDRE CPBC-DP | C512, U1, balanced 5B, DDP2, global BS 32, legacy val | running | current full BDRE anchor |
+
+The A0/A1 comparison must report quality and route/cache behavior together
+with throughput. It must not be described as a DP-versus-FB ablation.
+
+### 10.2 P0: Execution Optimization Ablations
+
+Run these as fixed-weight, warmed 20-100-step benchmarks after A0 releases
+GPUs 2-3. They are engineering equivalence tests, not long quality runs.
+
+| ID | Change from current explicit backend | Primary measurement |
+| --- | --- | --- |
+| E0 | current `shared_padded_explicit` reference | reference logits, loss, gradients, kernels, memory, tok/s |
+| E1 | GPU-resident route packing/group construction | remove route-step host synchronization |
+| E2 | grouped free-block projections/MLP execution | reduce small per-block launches |
+| E3 | fused BDRE reader attention | remove decoded score/mask/softmax/einsum intermediates |
+| E4 | E1 + E2 + E3 integrated | end-to-end speedup and peak memory |
+
+Each optimized arm must match E0 on forward values and gradients within a
+declared BF16 tolerance, and pass suffix-causality and streamed-state tests.
+Chunk size may be benchmarked for speed, but it cannot be changed inside a
+quality comparison and then attributed to another variable.
+
+### 10.3 P1: Core CPBC Quality Ablations
+
+Do not launch these at 5B per arm. First use a 250M-token pilot (3,815 optimizer
+steps at 65,536 tokens/step) with checkpoints and the full evaluation contract
+near one-third, two-thirds, and the end.
+
+| ID | Controlled comparison | Question answered |
+| --- | --- | --- |
+| Q1 | DP-U1 vs FB-U1 at the same chunk size | Does completed-history full-bank visibility help? |
+| Q2 | U1 vs U2 vs U4 under the Q1-winning visibility, same chunk | How much cross-chunk gradient horizon is useful? |
+| Q3 | C128-U4 vs C512-U1 under one visibility | At a matched 512-token horizon, how much does prefill granularity matter? |
+| Q4 | exact BDRE-Serial vs selected CPBC policy on a bounded short-context diagnostic | What approximation error remains relative to the serial oracle? |
+
+Q1 is the first required quality ablation. Q2 is adaptive: reuse the winning
+Q1 U1 arm, then add only U2 and U4. Q3 must not be interpreted as a pure U
+ablation; it deliberately measures chunk-boundary approximation at a matched
+maximum gradient horizon. Q4 remains a diagnostic because exact serial
+training is not computationally viable at 5B.
+
+### 10.4 P2: BDRE Semantic Ablations
+
+Run these one at a time from the best P1 configuration. They must not be
+expanded into a Cartesian sweep.
+
+| Priority | Controlled comparison | Trigger / purpose |
+| --- | --- | --- |
+| S1 | `bdre_prefix` self K/V vs `current_step` self K/V | required; tests whether accumulated self memory is a shortcut |
+| S2 | depth scoring off vs `reader_step` depth scoring | required; separates compiler depth scoring from CPBC visibility |
+| S3 | compiler position term on vs off | required; tests whether position-conditioned fusion helps or dominates |
+| S4 | compile-all vs hard top-k 8 | only after cache-weight entropy is healthy; tests sparsification |
+| S5 | K/V temperatures 0.5/1.0 vs 1.0/1.0 | only if compiler entropy or writer domination is abnormal |
+
+`self_kv_mode: none`, late-step bias, top-k 12/4, and temperature sweeps are
+diagnostics only. They should not consume long-run budget without a preceding
+metric showing the corresponding failure mode.
+
+### 10.5 Fixed Contract and Promotion Rule
+
+All quality arms use balanced training data, the legacy validation split,
+sequence length 2,048, global batch 32, the same seed, optimizer, router
+settings, token order, and evaluation points. The decision table must include:
+
+```text
+legacy val loss and PPL
+reasoning S600 exact and teacher accuracy
+public S600 average and task breakdown
+route entropy, path diversity, block coverage, and route length
+compiler entropy, writer mass, self-memory mass, and cache norms
+throughput, GPU utilization, and peak CUDA memory
+```
+
+PPL alone cannot promote an arm. Promote only a 250M winner to 2B; promote to
+5B only if the 2B checkpoints show a consistent public/reasoning improvement
+without route or cache takeover. The existing A1 run remains the 5B anchor, so
+there is no justification for a full 5B grid.
+
+### 10.6 Deferred Existing Knobs
+
+Slow noise, selective balance, coverage floor, self-recurrence cap, route
+length limits, and disabled location bias already come from the accepted
+route-core configuration. Do not re-ablate them during the CPBC/BDRE semantic
+study. Ain/anchor combinations, generic top-1/top-2 comparisons, 16/32-block
+scaling, and fine-grained block sizing remain separate future packages.
