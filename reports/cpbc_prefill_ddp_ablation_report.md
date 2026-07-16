@@ -8,6 +8,11 @@ are planned but not launched
 
 **Branch:** `bdre-synchronous-prefix-ddp`
 
+**Performance follow-up:** the accepted grouped-MM backend raises the same
+formal DDP2 shape to 28.6-30.6k global tok/s. See
+[`rc_kv_deep_acceleration_report.md`](./rc_kv_deep_acceleration_report.md).
+The tables below retain the original CPBC/DDP ablation measurements.
+
 ## 1. Method Name
 
 **Chunkwise Progressive Bank Completion (CPBC)** is an approximate prefill

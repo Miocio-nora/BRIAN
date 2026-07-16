@@ -65,7 +65,7 @@
 \begin{abstract}
 自由路由使不同 token 在同一计算深度访问不同 block，并允许重复访问同一 block；因此，固定层 Transformer 中以 layer identity 为索引的 KV cache 无法直接迁移到 BRIAN。本文给出已经实现的 Reader-Compiled KV Cache（\RCKV{}）系统，而非早期理论规格的复述。系统首先由每个 writer block 独立地将其多头 K/V 压缩到 canonical latent，再由 Block--Depth Relative Encoding（\BDRE{}）按照 reader block、可选 reader step 及球面几何编译 reader-specific cache；reader head 使用独立映射恢复 Key 视角，并在压缩 Value 空间中完成等价聚合。实现同时提供精确 token-serial oracle、三种 current-token self-KV、三类 reader-step cache policy、可选 hard top-$k$ 与独立 K/V 温度。
 
-为解决精确 teacher-forced 训练的串行瓶颈，本文进一步定义 Chunkwise Progressive Bank Completion（\CPBC{}）：chunk 内 token 并行、route depth 串行，cache bank 随 recurrent step 渐进补全，并以严格 token-causal mask 阻止未来信息。实现包含 depth-prefix visibility（\DP{}）和 full-bank visibility（\FB{}）、跨 chunk 的 stateful TBPTT，以及 rank-local state 下的显式 DDP 梯度同步。完整测试验证了因果性、incremental consistency、cache policy 等价性和分布式更新一致性。当前主要 limitation 仍是速度：优化后的两卡 \DP{} 正式运行约为 $2.16\times10^4$ token/s，而匹配的普通 Transformer 约为 $6.19\times10^5$ token/s；该差距主要来自动态分组、碎片化 block kernel、显式 reader attention 与高频 dispatch，而非 canonical compiler 的算术量本身。
+为解决精确 teacher-forced 训练的串行瓶颈，本文进一步定义 Chunkwise Progressive Bank Completion（\CPBC{}）：chunk 内 token 并行、route depth 串行，cache bank 随 recurrent step 渐进补全，并以严格 token-causal mask 阻止未来信息。实现包含 depth-prefix visibility（\DP{}）和 full-bank visibility（\FB{}）、跨 chunk 的 stateful TBPTT，以及 rank-local state 下的显式 DDP 梯度同步。完整测试验证了因果性、incremental consistency、cache policy 等价性和分布式更新一致性。grouped expert GEMM、窄 reader-cache gather 与低频完整 routing summary 将两卡 \DP{} 正式 shape 提升到约 $2.96\times10^4$ token/s；匹配的普通 Transformer 约为 $6.19\times10^5$ token/s。剩余差距主要来自动态分组、碎片化 kernel、显式 reader attention 与高频 dispatch，而非 canonical compiler 的算术量本身。
 \end{abstract}
 
 \noindent\textbf{关键词：} BRIAN；自由路由；Reader-Compiled KV；BDRE；CPBC；TBPTT
@@ -365,7 +365,7 @@ DDP 仅划分 batch，每个 rank 维护自己的 cache state。所有 stateful 
 execution & \code{synchronous\_prefix} \\
 visibility & \code{depth\_prefix} \\
 attention backend & \code{shared\_padded\_explicit} \\
-dispatch & \code{grouped\_host} \\
+dispatch & \code{grouped\_mm} \\
 $C,U$ & $512,1$ \\
 DDP & 2 B200 \\
 local/global batch & $16/32$ \\
@@ -408,7 +408,7 @@ Visibility policy & depth-prefix；full-bank & depth-prefix & full-bank 仅允�
 Reader cache & eager；lazy；dynamic & eager & CPBC 强制 eager；其余服务 exact reader-step mode \\
 Self-KV & bdre-prefix；current-step；none & bdre-prefix & CPBC 当前强制 bdre-prefix \\
 Attention backend & per-query-reference；shared-padded-explicit & shared-padded-explicit & 两者数学和梯度等价，后者共享 decoded history \\
-Dispatch & legacy-cuda-scan；grouped-host & grouped-host & 后者每 route step 一次 action D2H 后在 host 分组 \\
+Dispatch & legacy-cuda-scan；grouped-host；grouped-mm & grouped-mm & grouped-mm 批处理 routed expert projections \\
 Compiler top-$k$ & null 或正整数 & null & Key/Value 共用 support；不得超过 $S_{\max}$ \\
 $T_K,T_V$ & 正实数 & $0.5,1.0$ & 独立 compiler softmax 温度 \\
 $\tau_z,\lambda_s,\gamma$ & 非负实数 & $1.0,0.25,0$ & formal depth distance 归一化 \\
@@ -443,7 +443,7 @@ shared-padded-explicit 与 per-query-reference & logits、loss、cache 与 param
 CPU DDP 与 merged global batch & loss、gradient、update 一致 \\
 rank-local unused parameter synchronization & 通过 \\
 B200 CUDA BF16 forward/backward 与 DDP2 smoke & finite 且 checkpoint state 通过 \\
-完整 repository regression & 598 passed，15 个既有 warnings \\
+完整 repository regression & 600 passed，15 个既有 warnings \\
 \bottomrule
 \end{tabularx}
 \end{table*}
@@ -468,24 +468,25 @@ Exact token-serial & 32 & 256 & 8 & 25.53 & 4.46 GiB & oracle \\
 CPBC per-query reference & 8 & 2048 & 256 & 1,467.80 & 111,353 MiB & median \\
 CPBC shared-padded-explicit & 8 & 2048 & 256 & 4,695.64 & 27,333 MiB & median \\
 CPBC shared-padded-explicit & 14 & 2048 & 512 & 11,658.95 & 101,808 MiB & stable candidate \\
-Formal \DP{} DDP2 & 32 global & 2048 & 512 & 21,577 & 55.6 GiB/rank & active-run snapshot \\
+CPBC grouped-MM & 16 & 2048 & 512 & 15,167 & 120,947 MiB & accepted single-B200 shape \\
+Formal \DP{} grouped-MM DDP2 & 32 global & 2048 & 512 & 28,638--30,609 & 124.5 GiB/rank & accepted smoke \\
 \bottomrule
 \end{tabular}
 \end{table*}
 
-最后一行是 2026-07-16 正式运行最近 100 steps 的运行快照，而非隔离的 kernel benchmark：median 为 21,646 token/s，范围 20,549--22,190 token/s。同期匹配数据与 global batch 的普通 Transformer DDP2 最近 100 steps 平均为 618,738 token/s。因此当前 end-to-end gap 约为 $28.7\times$。两种模型的实际 block evaluations 不同，该比例不是纯 attention kernel 比值；但它远大于层数或有效 block 数能够解释的差距。
+最后一行是保持 global batch 32 的三步 DDP2 acceptance smoke；两个 steady steps 平均约 29,624 token/s。旧 DDP2 smoke 平均约 16,276 token/s，因此相同正式 shape 的提升约为 82\%。同期匹配数据与 global batch 的普通 Transformer 平均为 618,738 token/s，当前 end-to-end gap 仍约为 $20.9\times$。两种模型的实际 block evaluations 不同，该比例不是纯 attention kernel 比值；但它仍远大于层数或有效 block 数能够解释的差距。
 
 \subsection{剩余热点}
 profile 与实现检查显示主要瓶颈为：
 \begin{enumerate}
   \item 每个 route step 把 selected actions 从 GPU 同步到 CPU，并由 Python 构造 active block groups；
-  \item token 分散到八个 free blocks 后形成大量小 QKV、writer projection、FFN 和 index-copy kernels；
+  \item grouped GEMM 已合并主要 expert projections，但 reader、mask、softmax、packing 与 index-copy 仍形成大量小 kernels；
   \item 当前 reader path 显式 decode Key、构造 causal mask、执行 FP32 softmax 与多次 einsum；
-  \item 一个 chunk 仍约触发 28,600 次 kernels，dispatch gap 造成明显 GPU bubbles；
+  \item 一个 profiled chunk 仍约触发 20,100 次 kernels，dispatch gap 造成明显 GPU bubbles；
   \item $C=512,U=1,T=2048$ 每个 optimizer step 执行四次 backward groups，随后同步约 561 MB gradients；
   \item step-indexed bank 与 route-dependent padding 增加 memory traffic，且不同路径长度使 group shape 高频变化。
 \end{enumerate}
-compiler 本身在当前运行中通常只占少量 wall time；单纯删减 compiler score 或缩短 route 不能解决主要工程问题，也会改变研究目标。下一阶段性能工作应优先验证 GPU-resident packing、grouped expert GEMM 和 fused BDRE reader attention，并以 logits/loss/gradient 等价为验收条件。
+compiler 本身在当前运行中通常只占少量 wall time；单纯删减 compiler score 或缩短 route 不能解决主要工程问题，也会改变研究目标。grouped expert GEMM 与窄 cache gather 已实现；下一阶段性能工作应优先验证 GPU-resident packing、routed RMSNorm fusion 和 memory-bounded BDRE reader attention，并以 logits/loss/gradient 等价为验收条件。
 
 \section{局限与尚未回答的问题}
 \paragraph{训练速度。}

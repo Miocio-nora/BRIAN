@@ -6,6 +6,11 @@
 
 **Branch:** `bdre-synchronous-prefix-kernel-opt`
 
+**Performance follow-up:** the accepted grouped-MM backend and current B200
+numbers are documented in
+[`rc_kv_deep_acceleration_report.md`](./rc_kv_deep_acceleration_report.md).
+The measurements below remain the pre-grouped-MM reference.
+
 ## 1. Scope
 
 This branch optimizes the mathematically equivalent `synchronous_prefix`

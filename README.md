@@ -247,11 +247,21 @@ rank, giving a 5B pure-training estimate of about 2.35 days. The more
 resource-efficient DDP2 config uses local batch 16 and reaches 16.0-16.6k
 global tok/s with 123.7 GiB peak allocated per rank, for about 3.56 days of pure
 5B training. It retains 66% of four-card throughput with half the GPUs and is
-the recommended default when wall time is not the only objective. Stateful
+the historical reference when wall time is not the only objective. Stateful
 CPBC DDP uses rank-local caches and one manual gradient synchronization per
 optimizer step. The fixed-global-batch CPBC-FB-U4 smoke completed on two B200s
 at global batch 32 and chunk 128, but its measured 1,896 global tok/s is not
 sufficient for an unbounded four-arm 5B ablation.
+
+The accepted `grouped_mm` backend batches routed expert projections with
+PyTorch grouped GEMM, directly gathers the requested reader cache slice, and
+skips compiler observability reductions on steps that do not request a full
+routing summary. At the formal local-BS16 shape it reaches 15,167 tok/s on one
+B200, up 30.1% from the pre-optimization reference with essentially unchanged
+allocated memory. A DDP2 smoke at the same global batch reaches 28.6-30.6k
+global tok/s after warmup, reducing the pure 5B estimate to about 1.95 days.
+The full routing summary is recorded every 10 steps; the detached terminal
+route animation can still update every step.
 
 Key BDRE entrypoints:
 
@@ -271,10 +281,13 @@ configs/train/bdre_rckv_r125_5b_synchronous_prefix_b14_c512_shared_explicit_lega
 configs/train/stage5_bdre_tiny_synchronous_prefix_debug.yaml
 configs/model/brian_r125_bdre_cpbc_dp_shared_explicit.yaml
 configs/model/brian_r125_bdre_cpbc_dp_c512_shared_explicit.yaml
+configs/model/brian_r125_bdre_cpbc_dp_c512_grouped_mm.yaml
 configs/model/brian_r125_bdre_cpbc_fb_shared_explicit.yaml
 configs/train/baseline_r125_5b_balanced_ddp2_legacyval.yaml
 configs/train/cpbc_r125_5b_dp_u1_c128_ddp2_legacyval.yaml
 configs/train/cpbc_r125_5b_dp_u1_c512_ddp2_legacyval.yaml
+configs/train/cpbc_r125_5b_dp_u1_c512_grouped_mm_ddp2_legacyval.yaml
+configs/train/smoke_cpbc_r125_5b_dp_u1_c512_grouped_mm_ddp2_legacyval.yaml
 configs/train/cpbc_r125_5b_dp_u1_c512_ddp4_legacyval.yaml
 configs/train/cpbc_r125_5b_fb_u1_c128_ddp2_legacyval.yaml
 configs/train/cpbc_r125_5b_fb_u2_c128_ddp2_legacyval.yaml
@@ -300,6 +313,9 @@ The CPBC name, FB/DP Depth Visibility Policy, `U` gradient horizon, stateful
 DDP contract, fixed-global-batch ablation matrix, and B200 smoke results are
 recorded in
 [reports/cpbc_prefill_ddp_ablation_report.md](./reports/cpbc_prefill_ddp_ablation_report.md).
+The grouped-MM implementation, profiler evidence, rejected full-reader fusion,
+and final B200/DDP2 acceptance are recorded in
+[reports/rc_kv_deep_acceleration_report.md](./reports/rc_kv_deep_acceleration_report.md).
 
 ## Live Route Sphere
 
@@ -440,7 +456,18 @@ PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
 PYTHONPATH=src:. \
 python -m torch.distributed.run --standalone --nproc_per_node=2 \
   scripts/train.py \
-  --config configs/train/cpbc_r125_5b_dp_u1_c512_ddp2_legacyval.yaml
+  --config configs/train/cpbc_r125_5b_dp_u1_c512_grouped_mm_ddp2_legacyval.yaml
+```
+
+Run its bounded three-step acceptance smoke with:
+
+```bash
+CUDA_VISIBLE_DEVICES=0,1 \
+PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
+PYTHONPATH=src:. \
+python -m torch.distributed.run --standalone --nproc_per_node=2 \
+  scripts/train.py \
+  --config configs/train/smoke_cpbc_r125_5b_dp_u1_c512_grouped_mm_ddp2_legacyval.yaml
 ```
 
 Stateful TBPTT and CPBC support DDP. Cache state remains rank-local; all chunk

@@ -1,16 +1,19 @@
 # BRIAN RC-KV / CPBC Implementation Report
 
-**Status:** RC-KV exact oracle, CPBC approximate prefill, stateful TBPTT, and
-stateful DDP are implemented and validated
+**Status:** RC-KV exact oracle, CPBC approximate prefill, stateful TBPTT/DDP,
+and the grouped-MM training backend are implemented and validated
 
 **Date:** 2026-07-16
 
 **Working model:** `BRIAN-R125-BDRE-RCKV-v1`
 
-**Current branch:** `bdre-synchronous-prefix-ddp`
+**Current acceleration branch:** `rc-kv-deep-acceleration`
 
 **Academic report:**
 [`BRIAN_RC_KV_Implementation_Report.tex`](./BRIAN_RC_KV_Implementation_Report.tex)
+
+**Acceleration report:**
+[`rc_kv_deep_acceleration_report.md`](./rc_kv_deep_acceleration_report.md)
 
 ## 1. Executive Summary
 
@@ -49,9 +52,9 @@ identical to serial execution. Its depth visibility policy is explicit:
 - **CPBC-FB:** CPBC with Full-Bank Depth Visibility.
 
 The system has passed causal, incremental, cache-policy, gradient, and DDP
-correctness tests. The unresolved limitation is execution speed. The current
-two-B200 CPBC-DP run reaches about `21.6k token/s`, while the matched baseline
-reaches about `619k token/s`; this is an end-to-end gap of about `28.7x`.
+correctness tests. The accepted grouped-MM backend reaches about `29.6k
+token/s` on two B200s at the formal global batch, while the matched baseline
+reaches about `619k token/s`; this remains an end-to-end gap of about `20.9x`.
 These measurements do not establish a downstream quality conclusion.
 
 Existing Non-Global, hidden-state Global KV, attention-summary Global KV, and
@@ -400,12 +403,19 @@ configs/model/brian_r125_bdre_cpbc_dp_c512_shared_explicit.yaml
 configs/train/cpbc_r125_5b_dp_u1_c512_ddp2_legacyval.yaml
 ```
 
+The accepted accelerated equivalents are:
+
+```text
+configs/model/brian_r125_bdre_cpbc_dp_c512_grouped_mm.yaml
+configs/train/cpbc_r125_5b_dp_u1_c512_grouped_mm_ddp2_legacyval.yaml
+```
+
 | Setting | Formal value |
 | --- | --- |
 | Execution | `synchronous_prefix` (CPBC) |
 | Visibility | `depth_prefix` (CPBC-DP) |
 | Attention backend | `shared_padded_explicit` |
-| Dispatch | `grouped_host` |
+| Dispatch | `grouped_mm` |
 | Chunk size `C` | 512 |
 | TBPTT detach interval `U` | 1 |
 | Hardware | 2 B200 GPUs |
@@ -417,6 +427,7 @@ configs/train/cpbc_r125_5b_dp_u1_c512_ddp2_legacyval.yaml
 | Learning rate | `3e-4` |
 | Token budget | 5B |
 | Validation compatibility | legacy validation profile |
+| Full routing summary | every 10 optimizer steps |
 
 Global batch is intentionally held at 32 when changing DDP world size. Batch
 per rank changes to preserve this experiment-level control.
@@ -461,7 +472,7 @@ the mathematical definition of RC-KV.
 | Reader cache | `eager`, `lazy`, `dynamic` | `eager` |
 | Self-KV | `bdre_prefix`, `current_step`, `none` | `bdre_prefix` |
 | Reader attention | `per_query_reference`, `shared_padded_explicit` | `shared_padded_explicit` |
-| Dispatch | `legacy_cuda_scan`, `grouped_host` | `grouped_host` |
+| Dispatch | `legacy_cuda_scan`, `grouped_host`, `grouped_mm` | `grouped_mm` |
 | Compiler top-k | `null` or positive integer | `null` |
 | Key/Value temperatures | positive and independent | `0.5 / 1.0` |
 | Position/depth/late weights | non-negative | `1.0 / 0.25 / 0` |
@@ -497,7 +508,7 @@ Hard validation rules include:
 | CPU DDP vs merged global batch | loss, gradients, and updates agree |
 | Rank-local unused parameter synchronization | passed |
 | B200 BF16 forward/backward and DDP2 smoke | finite; checkpoint state passed |
-| Full repository regression | `598 passed`, `15` pre-existing warnings |
+| Full repository regression | `600 passed`, `15` pre-existing warnings |
 
 These checks establish the implementation and causal interface. They do not
 show that CPBC-DP, CPBC-FB, or RC-KV improves language modeling or public
@@ -514,12 +525,14 @@ cache norms.
 | CPBC per-query reference | 8 | 2048 | 256 | 1,467.80 token/s | 111,353 MiB | median |
 | CPBC shared-padded-explicit | 8 | 2048 | 256 | 4,695.64 token/s | 27,333 MiB | median |
 | CPBC shared-padded-explicit | 14 | 2048 | 512 | 11,658.95 token/s | 101,808 MiB | stable single-GPU candidate |
-| Formal CPBC-DP DDP2 | 32 global | 2048 | 512 | 21,577 token/s | 55.6 GiB/rank | active-run snapshot |
+| CPBC grouped-MM | 16 | 2048 | 512 | 15,167 token/s | 120,947 MiB | accepted single-B200 formal shape |
+| Formal CPBC-DP DDP2, grouped-MM | 32 global | 2048 | 512 | 28,638-30,609 token/s | 124.5 GiB/rank | accepted three-step smoke |
 
-The formal row is the latest-100-step snapshot captured on 2026-07-16, not an
-isolated kernel benchmark. Median throughput was `21,646 token/s`, with a
-`20,549-22,190 token/s` range. The matched Transformer baseline averaged
-`618,738 token/s`, producing an end-to-end gap of about `28.7x`.
+The accepted DDP2 smoke preserves global batch 32 and 65,536 tokens per
+optimizer step. Its two steady steps averaged about `29,624 token/s`; the old
+DDP2 smoke averaged about `16,276 token/s`. This is an approximately `82%`
+end-to-end improvement for the same formal shape. The matched Transformer
+baseline averaged `618,738 token/s`, so a large system-level gap remains.
 
 The two models do not execute the same number of block evaluations, so this is
 not a pure attention-kernel ratio. The gap is nevertheless much larger than
@@ -529,21 +542,21 @@ route length alone can explain.
 
 Profiling and code inspection identify the dominant costs:
 
-1. each route step copies selected actions from GPU to CPU for host grouping;
-2. routing scatters tokens across eight blocks, creating many small QKV,
-   writer-projection, FFN, and index-copy kernels;
+1. each route step still copies selected actions from GPU to CPU for grouping;
+2. routing and reader attention still launch many small elementwise, packing,
+   mask, softmax, and index-copy kernels;
 3. the exact reader path explicitly decodes Keys, builds causal masks, performs
    FP32 softmax, and launches multiple einsums;
-4. one chunk still launches about `28,600` kernels, leaving dispatch bubbles;
+4. one profiled chunk still launches about `20,100` kernels, leaving dispatch bubbles;
 5. `C=512,U=1,T=2048` executes four backward groups per optimizer step and then
    synchronizes about `561 MB` of gradients;
 6. step-indexed banks, route-dependent padding, and variable group shapes add
    memory traffic.
 
-The BDRE compiler arithmetic is usually a small fraction of wall time. The
-next performance work should target GPU-resident grouping, grouped expert
-GEMM, and fused reader attention while preserving logits, loss, cache, and
-gradient equivalence.
+Grouped expert GEMM, narrow cache gathers, and conditional compiler metrics
+are implemented. The next performance work should target GPU-resident
+grouping, routed RMSNorm fusion, and memory-bounded reader attention while
+preserving logits, loss, cache, and gradient equivalence.
 
 ## 15. Metrics and Visualization
 
@@ -638,8 +651,9 @@ exact causal oracle; and CPBC provides a trainable approximate prefill with
 explicit DP/FB visibility semantics. Stateful TBPTT and manual DDP gradient
 synchronization preserve cache lifecycle and optimizer consistency.
 
-Functionality, causality, incremental behavior, and distributed training have
-been validated. The next engineering priority is reducing host synchronization,
-small-kernel fragmentation, and explicit reader-attention overhead without
-changing RC-KV/CPBC semantics. Quality claims must wait for the controlled
-benchmark and ablation sequence above.
+Functionality, causality, incremental behavior, grouped expert compute, and
+distributed training have been validated. The next engineering priority is
+reducing the remaining host synchronization, small-kernel fragmentation, and
+explicit reader-attention overhead without changing RC-KV/CPBC semantics.
+Quality claims must wait for the controlled benchmark and ablation sequence
+above.

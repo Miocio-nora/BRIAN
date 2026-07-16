@@ -213,6 +213,7 @@ class BDRECompiler(ModuleBase):
         *,
         reader_step: int | torch.Tensor | None = None,
         reader_actions: torch.Tensor | None = None,
+        collect_metrics: bool = True,
     ) -> BDRECompileOutput:
         """Compile `[B,S,r]` writer codes for all readers or selected readers."""
 
@@ -238,7 +239,11 @@ class BDRECompiler(ModuleBase):
         value_weights = self._weights(scores, support, self.value_temperature)
         keys = torch.einsum("brs,bsk->brk", key_weights.to(writer_keys.dtype), writer_keys)
         values = torch.einsum("brs,bsv->brv", value_weights.to(writer_values.dtype), writer_values)
-        metrics = self._metrics(key_weights, value_weights, writer_valid, support)
+        metrics = (
+            self._metrics(key_weights, value_weights, writer_valid, support)
+            if collect_metrics
+            else {}
+        )
         return BDRECompileOutput(keys, values, key_weights, value_weights, metrics)
 
     def compile_prefix(
@@ -251,6 +256,7 @@ class BDRECompiler(ModuleBase):
         *,
         reader_step: int,
         reader_actions: torch.Tensor | None = None,
+        collect_metrics: bool = True,
     ) -> BDRECompileOutput:
         """Compile the writer prefix visible at one synchronous route step."""
 
@@ -268,6 +274,7 @@ class BDRECompiler(ModuleBase):
             block_positions,
             reader_step=reader_step,
             reader_actions=reader_actions,
+            collect_metrics=collect_metrics,
         )
 
     def compile_all_reader_steps(

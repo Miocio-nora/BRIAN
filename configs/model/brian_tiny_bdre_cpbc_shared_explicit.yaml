@@ -1,0 +1,5 @@
+extends: brian_tiny_bdre_rckv_synchronous_prefix.yaml
+model_name: brian_tiny_bdre_cpbc_shared_explicit
+
+execution:
+  attention_backend: shared_padded_explicit

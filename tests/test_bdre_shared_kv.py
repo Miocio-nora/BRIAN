@@ -68,6 +68,7 @@ def _synchronous_config(
     chunk_size: int = 8,
     attention_backend: str = "per_query_reference",
     depth_visibility_policy: str = "depth_prefix",
+    dispatch_mode: str = "grouped_host",
 ) -> BDREConfig:
     return replace(
         _config(
@@ -78,6 +79,7 @@ def _synchronous_config(
         ),
         synchronous_attention_backend=attention_backend,
         depth_visibility_policy=depth_visibility_policy,
+        dispatch_mode=dispatch_mode,
     )
 
 
@@ -158,6 +160,35 @@ def test_bdre_hard_topk_and_temperatures_are_effective_and_differentiable() -> N
     (output.keys.square().mean() + output.values.square().mean()).backward()
     assert writer_key.grad is not None and torch.isfinite(writer_key.grad).all()
     assert writer_value.grad is not None and torch.isfinite(writer_value.grad).all()
+
+
+def test_bdre_compiler_can_skip_observability_metrics_without_changing_cache() -> None:
+    compiler = BDRECompiler(
+        max_route_steps=4,
+        key_temperature=0.5,
+        value_temperature=1.0,
+    )
+    writer_key = torch.randn(2, 4, 5)
+    writer_value = torch.randn(2, 4, 7)
+    writer_blocks = torch.tensor([[0, 1, 2, 0], [2, 1, 0, 2]])
+    valid = torch.ones(2, 4, dtype=torch.bool)
+    positions = F.normalize(torch.randn(3, 8), dim=-1)
+
+    observed = compiler.compile(writer_key, writer_value, writer_blocks, valid, positions)
+    unobserved = compiler.compile(
+        writer_key,
+        writer_value,
+        writer_blocks,
+        valid,
+        positions,
+        collect_metrics=False,
+    )
+
+    assert unobserved.metrics == {}
+    assert torch.equal(observed.keys, unobserved.keys)
+    assert torch.equal(observed.values, unobserved.values)
+    assert torch.equal(observed.key_weights, unobserved.key_weights)
+    assert torch.equal(observed.value_weights, unobserved.value_weights)
 
 
 def test_synchronous_prefix_compiler_masks_future_writer_steps() -> None:
@@ -622,6 +653,54 @@ def test_shared_padded_explicit_matches_per_query_reference_gradients() -> None:
     ):
         assert reference_parameter.grad is not None and optimized_parameter.grad is not None
         assert torch.allclose(reference_parameter.grad, optimized_parameter.grad, atol=2e-5, rtol=2e-5)
+
+
+def test_grouped_mm_dispatch_matches_grouped_host_outputs_and_gradients() -> None:
+    torch.manual_seed(69)
+    reference = BrianBDRERouteCore(
+        _synchronous_config(
+            chunk_size=8,
+            attention_backend="shared_padded_explicit",
+        )
+    ).train()
+    grouped_mm = BrianBDRERouteCore(
+        _synchronous_config(
+            chunk_size=8,
+            attention_backend="shared_padded_explicit",
+            dispatch_mode="grouped_mm",
+        )
+    ).train()
+    grouped_mm.load_state_dict(reference.state_dict())
+    input_ids = torch.randint(0, 64, (3, 7))
+
+    reference_output = reference(
+        input_ids,
+        targets=input_ids,
+        route_mode="fixed",
+        pseudo_policy="sequential",
+    )
+    grouped_output = grouped_mm(
+        input_ids,
+        targets=input_ids,
+        route_mode="fixed",
+        pseudo_policy="sequential",
+    )
+    reference_output["loss"].backward()
+    grouped_output["loss"].backward()
+
+    assert torch.allclose(reference_output["logits"], grouped_output["logits"], atol=2e-5, rtol=2e-5)
+    assert torch.allclose(reference_output["loss"], grouped_output["loss"], atol=2e-6, rtol=2e-6)
+    for reference_parameter, grouped_parameter in (
+        (reference.token_embedding.weight, grouped_mm.token_embedding.weight),
+        (reference.route_blocks[0].position_adapter.weight, grouped_mm.route_blocks[0].position_adapter.weight),
+        (reference.route_blocks[0].block.attn.qkv.weight, grouped_mm.route_blocks[0].block.attn.qkv.weight),
+        (reference.route_blocks[0].block.attn.out.weight, grouped_mm.route_blocks[0].block.attn.out.weight),
+        (reference.route_blocks[0].block.ffn.w1.weight, grouped_mm.route_blocks[0].block.ffn.w1.weight),
+        (reference.bdre_projections[0].key_write.weight, grouped_mm.bdre_projections[0].key_write.weight),
+        (reference.bdre_projections[0].key_read, grouped_mm.bdre_projections[0].key_read),
+    ):
+        assert reference_parameter.grad is not None and grouped_parameter.grad is not None
+        assert torch.allclose(reference_parameter.grad, grouped_parameter.grad, atol=2e-5, rtol=2e-5)
 
 
 def test_synchronous_prefix_visualization_masks_future_writer_steps() -> None:

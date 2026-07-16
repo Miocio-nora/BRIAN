@@ -1,0 +1,5 @@
+extends: brian_tiny_bdre_cpbc_shared_explicit.yaml
+model_name: brian_tiny_bdre_cpbc_grouped_mm
+
+execution:
+  dispatch: grouped_mm

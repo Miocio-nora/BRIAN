@@ -155,8 +155,15 @@ class BDREConfig:
             raise ValueError("BDRE v1 supports only latent_aggregate Value reads.")
         if self.execution_mode not in {"token_by_token", "synchronous_prefix"}:
             raise ValueError("BDRE execution.mode must be 'token_by_token' or 'synchronous_prefix'.")
-        if self.dispatch_mode not in {"legacy_cuda_scan", "grouped_host"}:
-            raise ValueError("BDRE execution.dispatch must be 'legacy_cuda_scan' or 'grouped_host'.")
+        if self.dispatch_mode not in {
+            "legacy_cuda_scan",
+            "grouped_host",
+            "grouped_mm",
+        }:
+            raise ValueError(
+                "BDRE execution.dispatch must be 'legacy_cuda_scan', 'grouped_host', "
+                "or 'grouped_mm'."
+            )
         if self.synchronous_attention_backend not in {"per_query_reference", "shared_padded_explicit"}:
             raise ValueError(
                 "BDRE execution.attention_backend must be 'per_query_reference' or 'shared_padded_explicit'."
@@ -180,6 +187,14 @@ class BDREConfig:
             raise ValueError("full_bank depth visibility is available only for synchronous_prefix execution.")
         elif self.synchronous_attention_backend != "per_query_reference":
             raise ValueError("Shared padded attention is available only for synchronous_prefix execution.")
+        if self.dispatch_mode == "grouped_mm" and (
+            self.execution_mode != "synchronous_prefix"
+            or self.synchronous_attention_backend != "shared_padded_explicit"
+        ):
+            raise ValueError(
+                "Grouped MM dispatch requires synchronous_prefix execution with "
+                "shared_padded_explicit attention."
+            )
         if not self.position_geometry_normalize:
             raise ValueError("BDRE v1 requires normalized position geometry.")
         if self.route.top_k != 1 or self.route.later_top_k != 1:
@@ -199,6 +214,27 @@ class _SynchronousActionGroup:
     active_batches: torch.Tensor
     flat_slots: torch.Tensor
     max_selected: int
+
+
+@dataclass(frozen=True)
+class _SynchronousGroupedMMDispatch:
+    indexes: torch.Tensor
+    actions: torch.Tensor
+    offsets: torch.Tensor
+    groups: tuple[_SynchronousActionGroup, ...]
+
+
+@dataclass(frozen=True)
+class _SynchronousGroupedMMWeights:
+    position_adapter: torch.Tensor | None
+    attn_norm: torch.Tensor
+    qkv: torch.Tensor
+    key_write: torch.Tensor
+    value_write: torch.Tensor
+    attention_out: torch.Tensor
+    ffn_norm: torch.Tensor
+    ffn_gate_up: torch.Tensor
+    ffn_down: torch.Tensor
 
 
 class BDREBlockProjection(ModuleBase):
@@ -339,7 +375,8 @@ def _chunk_transformer_block(
 
 
 class _BDREDiagnostics:
-    def __init__(self) -> None:
+    def __init__(self, *, enabled: bool = True) -> None:
+        self.enabled = enabled
         self.started = time.perf_counter()
         self.compile_seconds = 0.0
         self.self_prefix_seconds = 0.0
@@ -352,6 +389,8 @@ class _BDREDiagnostics:
 
     def record_compile(self, output: BDRECompileOutput, elapsed: float) -> None:
         self.compile_seconds += elapsed
+        if not output.metrics:
+            return
         self.compile_output_count += 1
         for name, value in output.metrics.items():
             detached = value.detach().float()
@@ -491,7 +530,7 @@ class BrianBDRERouteCore(BrianRouteCore):
         hard_exit = self.config.hard_exit if hard_exit is None else hard_exit
         route_targets = self._targets_for_mode(route_mode, pseudo_policy, input_ids)
         state = self.empty_incremental_state()
-        diagnostics = _BDREDiagnostics()
+        diagnostics = _BDREDiagnostics(enabled=summarize_routing)
         logits_by_token: list[torch.Tensor] = []
         last_route_info: dict[str, Any] | None = None
         last_router_records: list[dict[str, Any]] | None = None
@@ -697,7 +736,7 @@ class BrianBDRERouteCore(BrianRouteCore):
             if route_targets is not None
             else self._targets_for_mode(route_mode, pseudo_policy, input_ids)
         )
-        diagnostics = _BDREDiagnostics()
+        diagnostics = _BDREDiagnostics(enabled=summarize_routing)
         start_position = state.cache.tokens
         logits_by_token: list[torch.Tensor] = []
         last_route_info: dict[str, Any] | None = None
@@ -795,7 +834,7 @@ class BrianBDRERouteCore(BrianRouteCore):
             raise ValueError("BDRE synchronous-prefix execution requires hard exit.")
         route_targets = self._targets_for_mode(route_mode, pseudo_policy, input_ids)
         state = self.empty_incremental_state()
-        diagnostics = _BDREDiagnostics()
+        diagnostics = _BDREDiagnostics(enabled=summarize_routing)
         logits_by_chunk: list[torch.Tensor] = []
         last_route_info: dict[str, Any] | None = None
         last_router_records: list[dict[str, Any]] | None = None
@@ -905,7 +944,7 @@ class BrianBDRERouteCore(BrianRouteCore):
             if route_targets is not None
             else self._targets_for_mode(route_mode, pseudo_policy, input_ids)
         )
-        diagnostics = _BDREDiagnostics()
+        diagnostics = _BDREDiagnostics(enabled=summarize_routing)
         logits, next_state, route_info, router_records = self._run_synchronous_prefix_chunk(
             input_ids,
             state,
@@ -1000,6 +1039,11 @@ class BrianBDRERouteCore(BrianRouteCore):
         writer_blocks: list[torch.Tensor] = []
         writer_valid: list[torch.Tensor] = []
         step_compile_outputs: list[BDRECompileOutput] = []
+        grouped_mm_weights = (
+            self._synchronous_grouped_mm_weights()
+            if self.bdre_config.dispatch_mode == "grouped_mm"
+            else None
+        )
 
         for step in range(max_steps):
             exited_before = exited
@@ -1084,44 +1128,68 @@ class BrianBDRERouteCore(BrianRouteCore):
             prepared: list[
                 tuple[int, torch.Tensor, torch.Tensor, torch.Tensor, _SynchronousActionGroup | None]
             ] = []
-            if self.bdre_config.synchronous_attention_backend == "shared_padded_explicit":
-                packed_groups = self._active_synchronous_action_groups(
+            grouped_mm_prepared: tuple[
+                _SynchronousGroupedMMDispatch,
+                torch.Tensor,
+                torch.Tensor,
+            ] | None = None
+            if grouped_mm_weights is not None:
+                dispatch = self._synchronous_grouped_mm_dispatch(
                     flat_selected,
-                    flat_valid,
                     chunk=chunk,
                 )
-                action_groups = [
-                    (group.action, group.indexes, group)
-                    for group in packed_groups
-                ]
-            else:
-                reference_groups, _ = self._active_action_groups(flat_selected, flat_valid)
-                action_groups = [
-                    (action, indexes, None)
-                    for action, indexes in reference_groups
-                ]
-
-            for action, indexes, pack_group in action_groups:
-                block = self.route_blocks[action]
-                projection = self.bdre_projections[action]
-                selected_hidden = flat_hidden.index_select(0, indexes).unsqueeze(1)
-                selected_position = flat_position.index_select(0, indexes)
-                routed_input = selected_hidden + block._position_bias(self._block_position(selected_position))
-                attn_input = block.block.attn_norm(routed_input)
-                attention = block.block.attn
-                dim = attn_input.size(-1)
-                query, key, value = attention.qkv(attn_input).chunk(3, dim=-1)
-                query = query.view(-1, 1, attention.n_heads, attention.head_dim).transpose(1, 2).squeeze(2)
-                key = key.view(-1, 1, attention.n_heads, attention.head_dim).transpose(1, 2)
-                value = value.view(-1, 1, attention.n_heads, attention.head_dim).transpose(1, 2)
-                canonical_key = projection.key_write(key.transpose(1, 2).reshape(-1, 1, dim)).squeeze(1)
-                canonical_value = projection.value_write(value.transpose(1, 2).reshape(-1, 1, dim)).squeeze(1)
-                if step_key is None or step_value is None:
+                if dispatch is not None:
+                    routed_input, query, canonical_key, canonical_value = self._prepare_synchronous_grouped_mm_step(
+                        flat_hidden,
+                        flat_position,
+                        flat_selected,
+                        dispatch,
+                        grouped_mm_weights,
+                    )
                     step_key = canonical_key.new_zeros((batch * chunk, self.bdre_config.key_dim))
                     step_value = canonical_value.new_zeros((batch * chunk, self.bdre_config.value_dim))
-                step_key = step_key.index_copy(0, indexes, canonical_key)
-                step_value = step_value.index_copy(0, indexes, canonical_value)
-                prepared.append((action, indexes, routed_input, query, pack_group))
+                    step_key = step_key.index_copy(0, dispatch.indexes, canonical_key)
+                    step_value = step_value.index_copy(0, dispatch.indexes, canonical_value)
+                    grouped_mm_prepared = (dispatch, routed_input, query)
+            else:
+                if self.bdre_config.synchronous_attention_backend == "shared_padded_explicit":
+                    packed_groups = self._active_synchronous_action_groups(
+                        flat_selected,
+                        flat_valid,
+                        chunk=chunk,
+                    )
+                    action_groups = [
+                        (group.action, group.indexes, group)
+                        for group in packed_groups
+                    ]
+                else:
+                    reference_groups, _ = self._active_action_groups(flat_selected, flat_valid)
+                    action_groups = [
+                        (action, indexes, None)
+                        for action, indexes in reference_groups
+                    ]
+
+                for action, indexes, pack_group in action_groups:
+                    block = self.route_blocks[action]
+                    projection = self.bdre_projections[action]
+                    selected_hidden = flat_hidden.index_select(0, indexes).unsqueeze(1)
+                    selected_position = flat_position.index_select(0, indexes)
+                    routed_input = selected_hidden + block._position_bias(self._block_position(selected_position))
+                    attn_input = block.block.attn_norm(routed_input)
+                    attention = block.block.attn
+                    dim = attn_input.size(-1)
+                    query, key, value = attention.qkv(attn_input).chunk(3, dim=-1)
+                    query = query.view(-1, 1, attention.n_heads, attention.head_dim).transpose(1, 2).squeeze(2)
+                    key = key.view(-1, 1, attention.n_heads, attention.head_dim).transpose(1, 2)
+                    value = value.view(-1, 1, attention.n_heads, attention.head_dim).transpose(1, 2)
+                    canonical_key = projection.key_write(key.transpose(1, 2).reshape(-1, 1, dim)).squeeze(1)
+                    canonical_value = projection.value_write(value.transpose(1, 2).reshape(-1, 1, dim)).squeeze(1)
+                    if step_key is None or step_value is None:
+                        step_key = canonical_key.new_zeros((batch * chunk, self.bdre_config.key_dim))
+                        step_value = canonical_value.new_zeros((batch * chunk, self.bdre_config.value_dim))
+                    step_key = step_key.index_copy(0, indexes, canonical_key)
+                    step_value = step_value.index_copy(0, indexes, canonical_value)
+                    prepared.append((action, indexes, routed_input, query, pack_group))
 
             if step_key is None or step_value is None:
                 if not writer_keys or not writer_values:
@@ -1155,23 +1223,39 @@ class BrianBDRERouteCore(BrianRouteCore):
             )
 
             next_flat_hidden = flat_hidden
-            for action, indexes, routed_input, query, pack_group in prepared:
-                block_output = self._finish_synchronous_prefix_block(
-                    self.route_blocks[action],
-                    self.bdre_projections[action],
+            if grouped_mm_prepared is not None:
+                dispatch, routed_input, query = grouped_mm_prepared
+                block_output = self._finish_synchronous_prefix_grouped_mm(
                     routed_input,
                     query,
-                    indexes=indexes,
+                    dispatch=dispatch,
+                    weights=grouped_mm_weights,
                     chunk=chunk,
                     start_position=start_position,
-                    reader_action=action,
                     reader_step=step,
                     historical_state=state.cache,
                     current_keys=current_keys,
                     current_values=current_values,
-                    pack_group=pack_group,
                 )
-                next_flat_hidden = next_flat_hidden.index_copy(0, indexes, block_output.squeeze(1))
+                next_flat_hidden = next_flat_hidden.index_copy(0, dispatch.indexes, block_output)
+            else:
+                for action, indexes, routed_input, query, pack_group in prepared:
+                    block_output = self._finish_synchronous_prefix_block(
+                        self.route_blocks[action],
+                        self.bdre_projections[action],
+                        routed_input,
+                        query,
+                        indexes=indexes,
+                        chunk=chunk,
+                        start_position=start_position,
+                        reader_action=action,
+                        reader_step=step,
+                        historical_state=state.cache,
+                        current_keys=current_keys,
+                        current_values=current_values,
+                        pack_group=pack_group,
+                    )
+                    next_flat_hidden = next_flat_hidden.index_copy(0, indexes, block_output.squeeze(1))
             hidden = next_flat_hidden.view(batch, chunk, -1)
 
             if hard_exit:
@@ -1251,6 +1335,7 @@ class BrianBDRERouteCore(BrianRouteCore):
             flat_block,
             flat_valid,
             self._internal_block_positions(),
+            collect_metrics=diagnostics.enabled,
         )
         diagnostics.record_compile(final_compile, time.perf_counter() - started)
         diagnostics.writer_counts.append(flat_valid.sum(dim=-1))
@@ -1278,6 +1363,7 @@ class BrianBDRERouteCore(BrianRouteCore):
                     flat_valid,
                     self._internal_block_positions(),
                     reader_step=reader_step,
+                    collect_metrics=diagnostics.enabled,
                 )
                 diagnostics.record_compile(output, time.perf_counter() - started)
                 historical_step_outputs.append(output)
@@ -1349,6 +1435,255 @@ class BrianBDRERouteCore(BrianRouteCore):
         next_state = BDREIncrementalState(tuple(pre_states), tuple(post_states), next_cache)
         return logits_out, next_state, route_info, router_records
 
+    def _synchronous_grouped_mm_weights(self) -> _SynchronousGroupedMMWeights:
+        if not self.route_blocks:
+            raise ValueError("grouped_mm dispatch requires at least one route block.")
+        first = self.route_blocks[0]
+        if any(block.position_injection != first.position_injection for block in self.route_blocks):
+            raise ValueError("grouped_mm dispatch requires a common position injection mode.")
+
+        first_parameter = next(self.route_blocks[0].parameters())
+        grouped_dtype = first_parameter.dtype
+        if first_parameter.is_cuda and torch.is_autocast_enabled("cuda"):
+            grouped_dtype = torch.get_autocast_dtype("cuda")
+
+        def grouped_matrix(parameters: list[torch.Tensor]) -> torch.Tensor:
+            matrix = torch.stack(parameters).transpose(-1, -2).contiguous()
+            return matrix.to(dtype=grouped_dtype)
+
+        position_adapter = None
+        if first.position_injection != "direct_add":
+            position_weights = []
+            for block in self.route_blocks:
+                if block.position_adapter is None:
+                    raise ValueError("grouped_mm dispatch is missing a position adapter.")
+                position_weights.append(block.position_adapter.weight)
+            position_adapter = grouped_matrix(position_weights)
+
+        return _SynchronousGroupedMMWeights(
+            position_adapter=position_adapter,
+            attn_norm=torch.stack([block.block.attn_norm.weight for block in self.route_blocks]),
+            qkv=grouped_matrix([block.block.attn.qkv.weight for block in self.route_blocks]),
+            key_write=grouped_matrix([projection.key_write.weight for projection in self.bdre_projections]),
+            value_write=grouped_matrix([projection.value_write.weight for projection in self.bdre_projections]),
+            attention_out=grouped_matrix([block.block.attn.out.weight for block in self.route_blocks]),
+            ffn_norm=torch.stack([block.block.ffn_norm.weight for block in self.route_blocks]),
+            ffn_gate_up=grouped_matrix(
+                [
+                    torch.cat((block.block.ffn.w1.weight, block.block.ffn.w2.weight), dim=0)
+                    for block in self.route_blocks
+                ]
+            ),
+            ffn_down=grouped_matrix([block.block.ffn.w3.weight for block in self.route_blocks]),
+        )
+
+    def _synchronous_grouped_mm_dispatch(
+        self,
+        selected: torch.Tensor,
+        *,
+        chunk: int,
+    ) -> _SynchronousGroupedMMDispatch | None:
+        selected_host = selected.detach().to(device="cpu")
+        index_parts: list[torch.Tensor] = []
+        group_metadata: list[
+            tuple[int, int, torch.Tensor, torch.Tensor, torch.Tensor, int]
+        ] = []
+        counts: list[int] = []
+        cursor = 0
+        for action in range(self.config.route_pool_blocks):
+            indexes_host = torch.nonzero(
+                selected_host == action,
+                as_tuple=False,
+            ).flatten()
+            count = int(indexes_host.numel())
+            counts.append(count)
+            if not count:
+                continue
+            index_parts.append(indexes_host)
+            batch_indexes = torch.div(indexes_host, chunk, rounding_mode="floor")
+            active_batches, batch_counts = torch.unique_consecutive(batch_indexes, return_counts=True)
+            active_rows = torch.repeat_interleave(torch.arange(active_batches.numel()), batch_counts)
+            row_starts = torch.cumsum(batch_counts, dim=0) - batch_counts
+            local_slots = torch.arange(count) - row_starts[active_rows]
+            max_selected = int(batch_counts.max().item())
+            group_metadata.append(
+                (action, cursor, active_batches, active_rows, local_slots, max_selected)
+            )
+            cursor += count
+        if not index_parts:
+            return None
+
+        indexes = torch.cat(index_parts).to(device=selected.device)
+        actions = selected.index_select(0, indexes)
+        offsets = torch.tensor(counts, dtype=torch.int32, device=selected.device).cumsum(
+            dim=0,
+            dtype=torch.int32,
+        )
+        groups: list[_SynchronousActionGroup] = []
+        for action, start, active_batches, active_rows, local_slots, max_selected in group_metadata:
+            end = start + counts[action]
+            flat_slots = active_rows * max_selected + local_slots
+            groups.append(
+                _SynchronousActionGroup(
+                    action=action,
+                    indexes=indexes[start:end],
+                    active_batches=active_batches.to(device=selected.device),
+                    flat_slots=flat_slots.to(device=selected.device),
+                    max_selected=max_selected,
+                )
+            )
+        return _SynchronousGroupedMMDispatch(
+            indexes=indexes,
+            actions=actions,
+            offsets=offsets,
+            groups=tuple(groups),
+        )
+
+    @staticmethod
+    def _grouped_mm_linear(
+        inputs: torch.Tensor,
+        matrices: torch.Tensor,
+        offsets: torch.Tensor,
+    ) -> torch.Tensor:
+        grouped_mm = getattr(F, "grouped_mm", None)
+        if inputs.is_cuda and matrices.dtype == torch.bfloat16 and grouped_mm is not None:
+            return grouped_mm(inputs.to(dtype=matrices.dtype), matrices, offs=offsets)
+
+        ends = offsets.detach().to(device="cpu", dtype=torch.int64).tolist()
+        outputs: list[torch.Tensor] = []
+        start = 0
+        for action, end in enumerate(ends):
+            outputs.append(inputs[start:end] @ matrices[action])
+            start = end
+        return torch.cat(outputs, dim=0)
+
+    @staticmethod
+    def _grouped_mm_rms_norm(
+        inputs: torch.Tensor,
+        norm_weights: torch.Tensor,
+        actions: torch.Tensor,
+        eps: float,
+    ) -> torch.Tensor:
+        selected_weights = F.embedding(actions, norm_weights).to(dtype=inputs.dtype)
+        scale = torch.rsqrt(inputs.pow(2).mean(dim=-1, keepdim=True) + eps)
+        return selected_weights * inputs * scale
+
+    def _prepare_synchronous_grouped_mm_step(
+        self,
+        flat_hidden: torch.Tensor,
+        flat_position: torch.Tensor,
+        flat_selected: torch.Tensor,
+        dispatch: _SynchronousGroupedMMDispatch,
+        weights: _SynchronousGroupedMMWeights,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        del flat_selected
+        selected_hidden = flat_hidden.index_select(0, dispatch.indexes)
+        selected_position = self._block_position(flat_position.index_select(0, dispatch.indexes))
+        if weights.position_adapter is None:
+            position_bias = selected_position
+        else:
+            position_bias = self._grouped_mm_linear(
+                selected_position,
+                weights.position_adapter,
+                dispatch.offsets,
+            )
+        routed_input = selected_hidden + position_bias
+        attn_input = self._grouped_mm_rms_norm(
+            routed_input,
+            weights.attn_norm,
+            dispatch.actions,
+            self.route_blocks[0].block.attn_norm.eps,
+        )
+        qkv = self._grouped_mm_linear(attn_input, weights.qkv, dispatch.offsets)
+        dim = attn_input.size(-1)
+        query, key, value = qkv.chunk(3, dim=-1)
+        attention = self.route_blocks[0].block.attn
+        query = query.view(-1, attention.n_heads, attention.head_dim)
+        canonical_key = self._grouped_mm_linear(key, weights.key_write, dispatch.offsets)
+        canonical_value = self._grouped_mm_linear(value, weights.value_write, dispatch.offsets)
+        return routed_input, query, canonical_key, canonical_value
+
+    def _finish_synchronous_prefix_grouped_mm(
+        self,
+        routed_input: torch.Tensor,
+        query: torch.Tensor,
+        *,
+        dispatch: _SynchronousGroupedMMDispatch,
+        weights: _SynchronousGroupedMMWeights,
+        chunk: int,
+        start_position: int,
+        reader_step: int,
+        historical_state: BDRECacheState,
+        current_keys: torch.Tensor,
+        current_values: torch.Tensor,
+    ) -> torch.Tensor:
+        attended_all = self._read_synchronous_prefix_grouped_mm_per_action(
+            routed_input,
+            query,
+            dispatch=dispatch,
+            chunk=chunk,
+            start_position=start_position,
+            reader_step=reader_step,
+            historical_state=historical_state,
+            current_keys=current_keys,
+            current_values=current_values,
+        )
+        attention_output = self._grouped_mm_linear(
+            attended_all,
+            weights.attention_out,
+            dispatch.offsets,
+        )
+        routed = routed_input + attention_output
+        ffn_input = self._grouped_mm_rms_norm(
+            routed,
+            weights.ffn_norm,
+            dispatch.actions,
+            self.route_blocks[0].block.ffn_norm.eps,
+        )
+        gate, up = self._grouped_mm_linear(
+            ffn_input,
+            weights.ffn_gate_up,
+            dispatch.offsets,
+        ).chunk(2, dim=-1)
+        hidden = F.silu(gate) * up
+        return routed + self._grouped_mm_linear(hidden, weights.ffn_down, dispatch.offsets)
+
+    def _read_synchronous_prefix_grouped_mm_per_action(
+        self,
+        routed_input: torch.Tensor,
+        query: torch.Tensor,
+        *,
+        dispatch: _SynchronousGroupedMMDispatch,
+        chunk: int,
+        start_position: int,
+        reader_step: int,
+        historical_state: BDRECacheState,
+        current_keys: torch.Tensor,
+        current_values: torch.Tensor,
+    ) -> torch.Tensor:
+        attended_parts: list[torch.Tensor] = []
+        cursor = 0
+        for group in dispatch.groups:
+            end = cursor + group.indexes.numel()
+            attended = self._read_synchronous_prefix_block_shared_explicit(
+                self.route_blocks[group.action],
+                self.bdre_projections[group.action],
+                routed_input[cursor:end].unsqueeze(1),
+                query[cursor:end],
+                indexes=group.indexes,
+                chunk=chunk,
+                start_position=start_position,
+                reader_action=group.action,
+                reader_step=reader_step,
+                historical_state=historical_state,
+                current_keys=current_keys,
+                current_values=current_values,
+                pack_group=group,
+            )
+            attended_parts.append(attended.squeeze(1))
+            cursor = end
+        return torch.cat(attended_parts, dim=0)
+
     def _compile_synchronous_prefix_step(
         self,
         writer_keys: list[torch.Tensor],
@@ -1385,6 +1720,7 @@ class BrianBDRERouteCore(BrianRouteCore):
             flat_valid,
             self._internal_block_positions(),
             reader_step=reader_step,
+            collect_metrics=diagnostics.enabled,
         )
         diagnostics.record_compile(output, time.perf_counter() - started)
         return output, (flat_key, flat_value, flat_block, flat_valid)
@@ -1487,6 +1823,42 @@ class BrianBDRERouteCore(BrianRouteCore):
         current_values: torch.Tensor,
         pack_group: _SynchronousActionGroup,
     ) -> torch.Tensor:
+        attended = self._read_synchronous_prefix_block_shared_explicit(
+            block,
+            projection,
+            routed_input,
+            query,
+            indexes=indexes,
+            chunk=chunk,
+            start_position=start_position,
+            reader_action=reader_action,
+            reader_step=reader_step,
+            historical_state=historical_state,
+            current_keys=current_keys,
+            current_values=current_values,
+            pack_group=pack_group,
+        )
+        attention = block.block.attn
+        routed = routed_input + attention.out(attended)
+        return routed + block.block.ffn(block.block.ffn_norm(routed))
+
+    def _read_synchronous_prefix_block_shared_explicit(
+        self,
+        block: Any,
+        projection: BDREBlockProjection,
+        routed_input: torch.Tensor,
+        query: torch.Tensor,
+        *,
+        indexes: torch.Tensor,
+        chunk: int,
+        start_position: int,
+        reader_action: int,
+        reader_step: int,
+        historical_state: BDRECacheState,
+        current_keys: torch.Tensor,
+        current_values: torch.Tensor,
+        pack_group: _SynchronousActionGroup,
+    ) -> torch.Tensor:
         local_positions = indexes % chunk
         active_batches = pack_group.active_batches
         flat_slots = pack_group.flat_slots
@@ -1518,14 +1890,26 @@ class BrianBDRERouteCore(BrianRouteCore):
         if start_position:
             if historical_state.step_keys is None or historical_state.step_values is None:
                 raise ValueError("Synchronous-prefix history is missing step cache tensors.")
-            historical_keys = historical_state.step_keys.index_select(0, active_batches)
-            historical_values = historical_state.step_values.index_select(0, active_batches)
-            key_parts.append(historical_keys[:, :, reader_step, reader_action, :])
-            value_parts.append(historical_values[:, :, reader_step, reader_action, :])
-        selected_current_keys = current_keys.index_select(0, active_batches)
-        selected_current_values = current_values.index_select(0, active_batches)
-        key_parts.append(selected_current_keys[:, :, reader_action, :])
-        value_parts.append(selected_current_values[:, :, reader_action, :])
+            key_parts.append(
+                historical_state.step_keys[
+                    active_batches,
+                    :,
+                    reader_step,
+                    reader_action,
+                    :,
+                ]
+            )
+            value_parts.append(
+                historical_state.step_values[
+                    active_batches,
+                    :,
+                    reader_step,
+                    reader_action,
+                    :,
+                ]
+            )
+        key_parts.append(current_keys[active_batches, :, reader_action, :])
+        value_parts.append(current_values[active_batches, :, reader_action, :])
         key_codes = torch.cat(key_parts, dim=1)
         value_codes = torch.cat(value_parts, dim=1)
 
@@ -1574,8 +1958,7 @@ class BrianBDRERouteCore(BrianRouteCore):
             projection.value_read,
         ).to(dtype=routed_input.dtype)
         attended = attended.reshape(routed_input.size(0), 1, -1)
-        routed = routed_input + attention.out(attended)
-        return routed + block.block.ffn(block.block.ffn_norm(routed))
+        return attended
 
     def _forward_one_token(
         self,
