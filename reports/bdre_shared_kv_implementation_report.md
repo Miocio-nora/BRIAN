@@ -744,3 +744,23 @@ and the current candidate is documented in
 [rc_kv_static_route_step_report.md](./rc_kv_static_route_step_report.md).
 Quality claims must wait for the controlled benchmark and ablation sequence
 above.
+
+## 19. Triton Reader Follow-up
+
+The optional Triton fused reader preserves the RC-KV parameterization,
+CPBC-DP visibility policy, routing decisions, and cache semantics. It changes
+only the compressed reader execution path. The formal C2048/U1 DDP2 run on two
+B200 GPUs completed the balanced 5B budget in 6 h 47 min 36 s and sustained a
+219,409 token/s median after startup, reducing the matched baseline gap from
+4.10x to 2.82x. Peak allocated memory was approximately 48.3 GiB per rank.
+
+Six legacy-validation checkpoints were evaluated with reasoning S600 and
+public S600 after correcting BDRE checkpoint reconstruction in the benchmark
+loader. Validation loss improved through the final 76,294-step checkpoint, but
+reasoning peaked at step 75,000 and public accuracy peaked at step 60,000.
+Aggregate normalized block entropy increased to approximately 0.95, with no
+block-usage collapse. These results establish step 75,000 as the best balanced
+checkpoint and reinforce that final PPL is not a sufficient selection rule.
+The complete matrix, benchmark recovery, and serial-inference utilization
+analysis are in
+[rc_kv_triton_dp_c2048_5b_report.md](./rc_kv_triton_dp_c2048_5b_report.md).

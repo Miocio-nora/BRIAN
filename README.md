@@ -292,6 +292,15 @@ BF16 reduction tolerance. The online compiler automatically falls back to full
 recomputation when detailed compiler diagnostics or visualization weights are
 requested.
 
+An optional Triton reader backend preserves the same RC-KV model and routing
+contract while fusing the compressed reader path. The formal two-B200
+CPBC-DP/C2048/U1 run completed the balanced 5B budget in 6 h 47 min, sustained
+a 219,409 token/s median, and reduced the matched baseline gap to 2.82x.
+Checkpoint benchmarks peak at step 75,000 for reasoning and step 60,000 for the
+public S600 average; the final checkpoint is best only by validation loss and
+PPL. Results and evaluator limitations are recorded in
+[reports/rc_kv_triton_dp_c2048_5b_report.md](./reports/rc_kv_triton_dp_c2048_5b_report.md).
+
 Ragged multi-reader attention and GPU-resident dispatch remain experimental;
 GPU dispatch improved the ragged path to 28,050 tok/s, but its all-reader K/V
 expansion costs about 83.6 GiB and is not recommended.
@@ -320,6 +329,7 @@ configs/model/brian_r125_bdre_cpbc_dp_c2048_grouped_mm_flex.yaml
 configs/model/brian_r125_bdre_cpbc_dp_c2048_grouped_mm_flex_blockmask.yaml
 configs/model/brian_r125_bdre_cpbc_dp_c2048_grouped_mm_flex_blockmask_group8_incremental.yaml
 configs/model/brian_r125_bdre_cpbc_dp_c2048_grouped_mm_gpu_static_blockmask_incremental.yaml
+configs/model/brian_r125_bdre_cpbc_dp_c2048_triton_fused_reader_incremental.yaml
 configs/model/brian_r125_bdre_cpbc_fb_shared_explicit.yaml
 configs/model/brian_r125_bdre_cpbc_fb_c128_grouped_mm_flex.yaml
 configs/train/baseline_r125_5b_balanced_ddp2_legacyval.yaml
@@ -330,6 +340,7 @@ configs/train/cpbc_r125_5b_dp_u1_c2048_grouped_mm_flex_ddp2_legacyval.yaml
 configs/train/cpbc_r125_5b_dp_u1_c2048_grouped_mm_flex_blockmask_ddp2_legacyval.yaml
 configs/train/cpbc_r125_5b_dp_u1_c2048_grouped_mm_flex_blockmask_group8_incremental_ddp2_legacyval.yaml
 configs/train/cpbc_r125_5b_dp_u1_c2048_grouped_mm_gpu_static_blockmask_incremental_ddp2_legacyval.yaml
+configs/train/cpbc_r125_5b_dp_u1_c2048_triton_fused_reader_incremental_ddp2_legacyval.yaml
 configs/train/cpbc_r125_5b_fb_u1_c128_grouped_mm_flex_ddp2_legacyval.yaml
 configs/train/smoke_cpbc_r125_5b_dp_u1_c512_grouped_mm_ddp2_legacyval.yaml
 configs/train/cpbc_r125_5b_dp_u1_c512_ddp4_legacyval.yaml
@@ -373,6 +384,9 @@ The GPU-static route-step workspace, precomposed writer projection, compiled
 pointwise paths, complete acceptance evidence, and current 4.10x baseline gap
 are recorded in
 [reports/rc_kv_static_route_step_report.md](./reports/rc_kv_static_route_step_report.md).
+The Triton DP-C2048 formal 5B run, six-checkpoint capability matrix, benchmark
+loader recovery, and remaining inference bottleneck are recorded in
+[reports/rc_kv_triton_dp_c2048_5b_report.md](./reports/rc_kv_triton_dp_c2048_5b_report.md).
 
 ## Live Route Sphere
 
