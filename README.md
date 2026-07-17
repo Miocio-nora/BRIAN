@@ -298,7 +298,10 @@ CPBC-DP/C2048/U1 run completed the balanced 5B budget in 6 h 47 min, sustained
 a 219,409 token/s median, and reduced the matched baseline gap to 2.82x.
 Checkpoint benchmarks peak at step 75,000 for reasoning and step 60,000 for the
 public S600 average; the final checkpoint is best only by validation loss and
-PPL. Results and evaluator limitations are recorded in
+PPL. Against the matched 5B baseline, final PPL and public S600 are effectively
+tied at the current resolution, while reasoning exact remains 5.5 percentage
+points lower and training is 2.82x slower. Results and evaluator limitations
+are recorded in
 [reports/rc_kv_triton_dp_c2048_5b_report.md](./reports/rc_kv_triton_dp_c2048_5b_report.md).
 
 Ragged multi-reader attention and GPU-resident dispatch remain experimental;

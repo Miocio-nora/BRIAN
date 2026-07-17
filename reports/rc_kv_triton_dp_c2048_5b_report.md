@@ -60,7 +60,38 @@ show block-usage collapse. The reported `route_path_diversity=1.0` is not a
 useful cross-sample diversity statistic in this evaluator because reasoning
 examples are processed one at a time.
 
-## 4. Benchmark Recovery
+## 4. Matched Baseline Comparison
+
+The matched baseline uses the same balanced 5B corpus, global batch 32, two
+B200 GPUs, legacy validation, and S600 benchmark definitions. It has 137.84M
+parameters versus 140.31M for RC-KV, so RC-KV is 1.79% larger.
+
+| Metric | Baseline | RC-KV | Difference |
+| --- | ---: | ---: | ---: |
+| Step-75k validation loss | **1.3737** | 1.3791 | +0.0054 |
+| Step-75k PPL | **3.9499** | 3.9713 | +0.0214 |
+| Step-75k reasoning exact | **0.8767** | 0.8217 | -5.50 pp |
+| Step-75k teacher accuracy | **0.9668** | 0.9484 | -1.84 pp |
+| Step-75k public average | 0.3883 | **0.3900** | +0.17 pp |
+| Best public average | 0.3900 (76,294) | **0.4017 (60k)** | +1.17 pp |
+| Matched training throughput | **618,738 token/s** | 219,409 token/s | 2.82x slower |
+| First-to-final step wall time | **2 h 25 min** | 6 h 48 min | 2.80x longer |
+| Peak allocated memory per rank | **32.9 GiB** | 48.3 GiB | 1.47x higher |
+
+Final validation is effectively tied: RC-KV is worse by 0.0011 loss and 0.0044
+PPL. Public S600 is also statistically unresolved at this sample count. At the
+best public points, RC-KV leads by seven correct answers out of 600; at aligned
+step 60k it leads by eight. In contrast, the reasoning gap is material. At step
+75k, the baseline alone solves 71 examples that RC-KV misses, while RC-KV alone
+solves 38 examples that the baseline misses.
+
+The current result therefore does not establish an overall capability win over
+the fixed Transformer. It establishes near-baseline language modeling and
+public-task quality under free routing and shared compressed memory, with a
+remaining reasoning, training-efficiency, memory, and inference-efficiency
+cost.
+
+## 5. Benchmark Recovery
 
 Legacy validation ran every 5,000 steps and was uploaded under `eval/*`. The
 original post-checkpoint reasoning and public subprocesses failed because the
@@ -76,7 +107,7 @@ to the original W&B run under `benchmark_backfill/*`, with the complete matrix
 in `benchmark_backfill/checkpoint_matrix`. The original failed return codes are
 retained as audit history.
 
-## 5. Inference Efficiency Limitation
+## 6. Inference Efficiency Limitation
 
 The current benchmark workers use only about 2.1 GiB and 28-32% of one B200.
 This is an evaluator limitation, not evidence that the Triton training path is
@@ -98,12 +129,14 @@ with per-sample RC-KV state, and persistent evaluator workers that swap
 checkpoint weights. A BF16 Triton inference mode should remain separate from
 the FP32 reference until numerical equivalence is quantified.
 
-## 6. Conclusion
+## 7. Conclusion
 
 The formal DP-C2048 run completed the full 5B budget in under seven hours and
 reduced the matched baseline training gap from 4.10x to 2.82x. It maintains
 healthy aggregate block usage and reaches its strongest reasoning result at
 75,000 steps. Its non-monotonic capability metrics confirm that validation PPL
-alone is insufficient for checkpoint selection. Training throughput is now
-usable; the next performance bottleneck is the serial, non-incremental
-benchmark execution path.
+alone is insufficient for checkpoint selection. RC-KV matches baseline
+validation and public S600 within the current resolution but remains 5.5
+percentage points behind on reasoning exact. Training throughput is now usable;
+the next performance bottleneck is the serial, non-incremental benchmark
+execution path.
