@@ -425,9 +425,12 @@ throughput, while public S600 remains inconclusive and peak activation memory
 roughly doubles. Its matched contract, checkpoint trajectory, task-level
 trade-offs, routing audit, and C512 diagnosis are recorded in
 [reports/q2_fb_c128_u4_250m_launch.md](./reports/q2_fb_c128_u4_250m_launch.md).
-The matched C128-U2 follow-up tests the intermediate 256-token gradient horizon
-against U1 and U4 while preserving the same FB C128 forward semantics. Its
-contract and decision rule are recorded in
+The matched C128-U2 follow-up tested the intermediate 256-token gradient
+horizon while preserving the same FB C128 forward semantics. It was rejected
+as the current candidate: final reasoning exact reached 16.00% versus 27.67%
+for U1 and 37.67% for U4, despite effectively matched PPL and public S600.
+Its checkpoint trajectory, task-level regression, routing audit, and decision
+are recorded in
 [reports/q4_fb_c128_u2_250m_launch.md](./reports/q4_fb_c128_u2_250m_launch.md).
 The C128-U8 follow-up tests a 1,024-token gradient horizon before committing to
 full-sequence BPTT. Its matched contract and decision rule are recorded in
