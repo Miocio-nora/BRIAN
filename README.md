@@ -429,6 +429,13 @@ The matched C128-U2 follow-up tests the intermediate 256-token gradient horizon
 against U1 and U4 while preserving the same FB C128 forward semantics. Its
 contract and decision rule are recorded in
 [reports/q4_fb_c128_u2_250m_launch.md](./reports/q4_fb_c128_u2_250m_launch.md).
+The C128-U8 follow-up tests a 1,024-token gradient horizon before committing to
+full-sequence BPTT. Its matched contract and decision rule are recorded in
+[reports/q5_fb_c128_u8_250m_launch.md](./reports/q5_fb_c128_u8_250m_launch.md).
+The C128-U16 endpoint has passed a bounded DDP2 smoke but its formal run is held
+until U8 resolves whether longer horizons continue to help. Its prepared
+contract and resource measurements are recorded in
+[reports/q6_fb_c128_u16_250m_preparation.md](./reports/q6_fb_c128_u16_250m_preparation.md).
 
 ## Live Route Sphere
 
