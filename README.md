@@ -362,6 +362,7 @@ configs/train/cpbc_r125_5b_dp_u1_c512_ddp4_legacyval.yaml
 configs/train/cpbc_r125_5b_fb_u1_c128_ddp2_legacyval.yaml
 configs/train/cpbc_r125_5b_fb_u2_c128_ddp2_legacyval.yaml
 configs/train/cpbc_r125_5b_fb_u4_c128_ddp2_legacyval.yaml
+configs/train/cpbc_r125_5b_fb_u4_c128_triton_fused_reader_incremental_ddp2_legacyval.yaml
 configs/train/q2_cpbc_r125_250m_fb_u4_c128_triton_ddp2_legacyval.yaml
 configs/train/q3_cpbc_r125_250m_fb_u1_c512_triton_ddp2_legacyval.yaml
 ```
@@ -442,6 +443,10 @@ The C128-U16 endpoint has passed a bounded DDP2 smoke but its formal run is held
 because U8 did not improve over U4. Its prepared contract and resource
 measurements are recorded in
 [reports/q6_fb_c128_u16_250m_preparation.md](./reports/q6_fb_c128_u16_250m_preparation.md).
+The selected formal C128-U4 run keeps global batch 32 on two B200 GPUs and uses
+the accepted Triton fused-reader/incremental backend. Its launch contract,
+checkpoint schedule, expected cost, and operational commands are recorded in
+[reports/cpbc_fb_c128_u4_5b_launch.md](./reports/cpbc_fb_c128_u4_5b_launch.md).
 
 ## Live Route Sphere
 

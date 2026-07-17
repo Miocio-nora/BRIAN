@@ -1,0 +1,30 @@
+extends: cpbc_r125_5b_fb_u1_c128_triton_fused_reader_incremental_ddp2_legacyval.yaml
+run_name: cpbc_r125_5b_fb_u4_c128_triton_fused_reader_incremental_ddp2_legacyval
+resume: true
+
+stateful_tbptt:
+  detach_interval_chunks: 4
+
+checkpoint_benchmarks:
+  label: cpbc_r125_5b_fb_u4_c128_triton_fused_reader_incremental_ddp2_legacyval
+
+post_train_benchmarks:
+  label: cpbc_r125_5b_fb_u4_c128_triton_fused_reader_incremental_ddp2_legacyval
+
+wandb:
+  group: cpbc_fb_triton_fused_reader_c128_ddp2
+  tags:
+    - cpbc
+    - cpbc_fb
+    - triton_fused_reader
+    - full_bank_visibility
+    - c128
+    - u4
+    - gradient_horizon_512
+    - ddp2
+    - local_batch16
+    - global_batch32
+    - r125
+    - 5b
+    - balanced_data
+    - legacy_val
