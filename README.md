@@ -418,10 +418,12 @@ exact fell from 27.67% to 9.50%, concentrated in copy and reverse. The matched
 initialization, completion-boundary caveat, checkpoint matrix, and decision are
 recorded in
 [reports/q3_fb_c512_250m_launch.md](./reports/q3_fb_c512_250m_launch.md).
-The controlled FB-C128-U4 250M gradient-horizon pilot retains C128 completion
-semantics while extending continuous gradients from 128 to 512 tokens. Its
-matched contract, U4 memory/throughput cost, and three-checkpoint decision rule
-are recorded in
+The controlled FB-C128-U4 250M gradient-horizon run retains C128 completion
+semantics while extending continuous gradients from 128 to 512 tokens. It
+improves final S600 reasoning exact from 27.67% to 37.67% at near-equal PPL and
+throughput, while public S600 remains inconclusive and peak activation memory
+roughly doubles. Its matched contract, checkpoint trajectory, task-level
+trade-offs, routing audit, and C512 diagnosis are recorded in
 [reports/q2_fb_c128_u4_250m_launch.md](./reports/q2_fb_c128_u4_250m_launch.md).
 
 ## Live Route Sphere
