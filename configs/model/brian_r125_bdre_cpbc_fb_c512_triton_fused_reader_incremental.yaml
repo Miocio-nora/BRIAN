@@ -1,0 +1,5 @@
+extends: brian_r125_bdre_cpbc_fb_c128_triton_fused_reader_incremental.yaml
+model_name: brian_r125_bdre_cpbc_fb_c512_triton_fused_reader_incremental
+
+execution:
+  chunk_size: 512

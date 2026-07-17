@@ -346,6 +346,7 @@ configs/model/brian_r125_bdre_cpbc_dp_c2048_grouped_mm_gpu_static_blockmask_incr
 configs/model/brian_r125_bdre_cpbc_dp_c2048_triton_fused_reader_incremental.yaml
 configs/model/brian_r125_bdre_cpbc_fb_shared_explicit.yaml
 configs/model/brian_r125_bdre_cpbc_fb_c128_grouped_mm_flex.yaml
+configs/model/brian_r125_bdre_cpbc_fb_c512_triton_fused_reader_incremental.yaml
 configs/train/baseline_r125_5b_balanced_ddp2_legacyval.yaml
 configs/train/cpbc_r125_5b_dp_u1_c128_ddp2_legacyval.yaml
 configs/train/cpbc_r125_5b_dp_u1_c512_ddp2_legacyval.yaml
@@ -361,6 +362,7 @@ configs/train/cpbc_r125_5b_dp_u1_c512_ddp4_legacyval.yaml
 configs/train/cpbc_r125_5b_fb_u1_c128_ddp2_legacyval.yaml
 configs/train/cpbc_r125_5b_fb_u2_c128_ddp2_legacyval.yaml
 configs/train/cpbc_r125_5b_fb_u4_c128_ddp2_legacyval.yaml
+configs/train/q3_cpbc_r125_250m_fb_u1_c512_triton_ddp2_legacyval.yaml
 ```
 
 Training logs include compile timing, writer-step counts, K/V compile entropy,
@@ -409,6 +411,10 @@ The matched CPBC-DP/FB C128-U1 250M visibility pilot, initialization hash,
 three-checkpoint evaluation contract, DDP2 smoke results, and GPU 0-1 serial
 queue are recorded in
 [reports/q1_cpbc_visibility_250m_launch.md](./reports/q1_cpbc_visibility_250m_launch.md).
+The follow-up FB-C512-U1 250M pilot, matched initialization, 3.0x smoke
+throughput gain, completion-boundary caveat, and three-checkpoint decision rule
+are recorded in
+[reports/q3_fb_c512_250m_launch.md](./reports/q3_fb_c512_250m_launch.md).
 
 ## Live Route Sphere
 
