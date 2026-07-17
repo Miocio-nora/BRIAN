@@ -63,6 +63,9 @@ end-to-end duration at approximately 36-38 hours.
 
 ## 5. Launch And Monitoring
 
+The formal run started at `2026-07-18 02:27 JST`. Its W&B run is
+`mio_nora/brian-sphere-llm/1l8fnxmu`.
+
 ```bash
 CUDA_VISIBLE_DEVICES=0,1 bash scripts/run_cpbc_fb_c128_u4_5b.sh
 ```
@@ -76,3 +79,10 @@ runs/cpbc_r125_5b_fb_u4_c128_triton_fused_reader_incremental_ddp2_legacyval/trai
 
 The run directory also contains the terminal-dashboard event stream,
 checkpoints, evaluation logs, route visualizations, and the W&B run metadata.
+
+Initial acceptance reached step 53 with finite loss, a 37.6k token/s median
+over the latest 30 updates, 17.5 GiB peak CUDA allocation per rank, 0.994
+normalized block entropy, and 16 distinct paths for the 16 monitored samples.
+The observed loss moved from 113.6 on the compile-heavy first update to 41.6
+at step 53. No startup routing collapse, DDP error, or W&B upload failure was
+observed.
