@@ -9,6 +9,7 @@ from brian_sphere_llm.data.dataloader import build_dataloader
 from brian_sphere_llm.eval.difficulty import summarize_difficulty_samples
 from brian_sphere_llm.model.baseline import BaselineConfig, BaselineLM
 from brian_sphere_llm.model.brian_model import BrianRouteConfig, BrianRouteCore
+from brian_sphere_llm.model.bdre_model import BDREConfig, BrianBDRERouteCore
 from brian_sphere_llm.routing.schedule import scheduled_value
 from brian_sphere_llm.train.checkpoint import load_checkpoint
 from brian_sphere_llm.train.stage_runner import train_mode_for_stage
@@ -386,6 +387,8 @@ def _build_model_from_run(run_dir: Path) -> Any:
     if architecture == "brian_route_core":
         if "base" not in model_config:
             model_config["base"] = _resolve_brian_base_config(config, model_config)
+        if model_config.get("bdre_shared_kv") is True:
+            return BrianBDRERouteCore(BDREConfig.from_dict(model_config))
         return BrianRouteCore(BrianRouteConfig.from_dict(model_config))
     raise ValueError(f"Unknown run architecture: {architecture}")
 

@@ -2,6 +2,7 @@ import pytest
 
 torch = pytest.importorskip("torch")
 
+from brian_sphere_llm.eval import difficulty_report
 from brian_sphere_llm.eval.difficulty import summarize_difficulty_samples
 from brian_sphere_llm.eval.difficulty_report import (
     _assign_difficulty_bins,
@@ -146,6 +147,33 @@ def test_difficulty_report_config_helpers_reject_boolean_integer_values() -> Non
         _effective_batch_size(None, {"batch_size": True})
     with pytest.raises(ValueError, match="max_batches"):
         _int_value(True, "max_batches", minimum=1)
+
+
+def test_build_model_from_run_selects_bdre_model_for_shared_kv(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    resolved = {
+        "model_config_resolved": {
+            "architecture": "brian_route_core",
+            "bdre_shared_kv": True,
+            "base": {"vocab_size": 32},
+        }
+    }
+    sentinel = object()
+    monkeypatch.setattr(difficulty_report, "load_config", lambda _path: resolved)
+    monkeypatch.setattr(
+        difficulty_report.BDREConfig,
+        "from_dict",
+        lambda _config: "bdre-config",
+    )
+    monkeypatch.setattr(
+        difficulty_report,
+        "BrianBDRERouteCore",
+        lambda config: sentinel if config == "bdre-config" else None,
+    )
+
+    assert difficulty_report._build_model_from_run(tmp_path) is sentinel
 
 
 def test_baseline_difficulty_bins_are_ce_ordered() -> None:
