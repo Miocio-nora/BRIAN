@@ -405,6 +405,10 @@ The strict incremental and fast-capability evaluator profiles, B200 timing,
 numerical-equivalence boundaries, and remaining decode bottleneck are recorded
 in
 [reports/rc_kv_inference_acceleration_report.md](./reports/rc_kv_inference_acceleration_report.md).
+The matched CPBC-DP/FB C128-U1 250M visibility pilot, initialization hash,
+three-checkpoint evaluation contract, DDP2 smoke results, and GPU 0-1 serial
+queue are recorded in
+[reports/q1_cpbc_visibility_250m_launch.md](./reports/q1_cpbc_visibility_250m_launch.md).
 
 ## Live Route Sphere
 

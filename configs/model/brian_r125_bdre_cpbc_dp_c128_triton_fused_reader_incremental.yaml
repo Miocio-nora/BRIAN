@@ -1,0 +1,13 @@
+extends: brian_r125_bdre_cpbc_dp_c128_grouped_mm_flex.yaml
+model_name: brian_r125_bdre_cpbc_dp_c128_triton_fused_reader_incremental
+
+execution:
+  dispatch: grouped_mm_gpu
+  attention_backend: shared_padded_flex_blockmask
+  flex_reader_group_size: 8
+  flex_kernel_variant: bwd32_fwd32
+  decoded_key_rope: compiled
+  writer_projection: precomposed
+  route_pointwise: compiled
+  prefix_compile: incremental_exact
+  reader_kernel: triton_fused

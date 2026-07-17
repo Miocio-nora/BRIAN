@@ -1,0 +1,54 @@
+extends: cpbc_r125_5b_fb_u1_c128_triton_fused_reader_incremental_ddp2_legacyval.yaml
+run_name: q1_cpbc_r125_250m_fb_u1_c128_triton_ddp2_legacyval
+resume: true
+
+max_steps: 3815
+eval_interval: 1272
+save_interval: 1272
+
+checkpoint_retention:
+  enabled: true
+  interval: 1272
+  keep_last: 4
+  include_optimizer: false
+  include_rng_state: false
+
+checkpoint_benchmarks:
+  enabled: true
+  interval: 1272
+  output_dir: runs/q1_cpbc_r125_250m_fb_u1_c128_triton_ddp2_legacyval/benchmarks
+  label: q1_cpbc_r125_250m_fb_u1_c128_triton_ddp2_legacyval
+  fail_on_error: false
+  reasoning:
+    enabled: true
+    config: configs/eval/reasoning_eval_s600_incremental.yaml
+  public:
+    enabled: true
+    config: configs/eval/public_benchmark_s600.yaml
+
+post_train_benchmarks:
+  enabled: false
+
+route_path_visualization:
+  interval: 1272
+
+bdre_cache_visualization:
+  interval: 1272
+
+wandb:
+  group: q1_cpbc_visibility_r125_250m
+  tags:
+    - q1_visibility
+    - cpbc
+    - cpbc_fb
+    - full_bank_visibility
+    - triton_fused_reader
+    - c128
+    - u1
+    - ddp2
+    - local_batch16
+    - global_batch32
+    - r125
+    - token_budget_250m
+    - balanced_data
+    - legacy_val
