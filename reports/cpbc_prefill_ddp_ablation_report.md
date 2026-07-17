@@ -1,10 +1,10 @@
 # CPBC Approximate Prefill, Stateful DDP, and Ablation Report
 
-**Status:** implementation and smoke validation complete; the matched 5B
-baseline and CPBC-DP-C512-U1 anchors are running; remaining quality ablations
-are planned but not launched
+**Status:** implementation and smoke validation complete; matched C128 250M
+visibility and U1/U2/U4/U8 quality pilots complete; C128-FB-U4 selected for the
+first formal 5B FB run
 
-**Date:** 2026-07-16
+**Updated:** 2026-07-18
 
 **Branch:** `bdre-synchronous-prefix-ddp`
 
@@ -287,11 +287,17 @@ reducing wall time by roughly 1.2 days is worth occupying two additional GPUs.
 
 ## 8. Decision
 
-Implementation and smoke acceptance are complete. The four long-run configs are
-prepared, but no quality conclusion exists until controlled checkpoints are
-trained and evaluated. A bounded-token pilot should be approved before a full
-ablation, and CPBC throughput needs more work if the intended budget is near 5B
-tokens per arm.
+Implementation, smoke acceptance, and the bounded 250M quality pilots are
+complete. At matched C128 FB semantics, final reasoning exact is 27.67%,
+16.00%, 37.67%, and 31.83% for U1, U2, U4, and U8 respectively. Public S600 is
+effectively flat across the arms, while PPL differs by less than 2%.
+
+U4 is selected for the first formal 5B FB run. It exceeds U8 by 5.83 reasoning
+points while using 17.5 GiB instead of 29.5 GiB allocated per rank. U16 remains
+held after smoke validation. The formal 5B launch must extend the optimized
+Triton C128-FB-U1 configuration and override only
+`stateful_tbptt.detach_interval_chunks: 4`; the older U4 configuration uses the
+pre-Triton backend.
 
 ## 9. Commands
 

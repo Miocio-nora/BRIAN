@@ -432,12 +432,15 @@ for U1 and 37.67% for U4, despite effectively matched PPL and public S600.
 Its checkpoint trajectory, task-level regression, routing audit, and decision
 are recorded in
 [reports/q4_fb_c128_u2_250m_launch.md](./reports/q4_fb_c128_u2_250m_launch.md).
-The C128-U8 follow-up tests a 1,024-token gradient horizon before committing to
-full-sequence BPTT. Its matched contract and decision rule are recorded in
+The completed C128-U8 follow-up reached 31.83% reasoning exact versus 37.67%
+for U4, with no public-suite gain, 68% more allocated memory, and slightly lower
+throughput. U4 is therefore selected for the first formal 5B FB run. The
+checkpoint trajectory, paired-sample analysis, routing audit, and decision are
+recorded in
 [reports/q5_fb_c128_u8_250m_launch.md](./reports/q5_fb_c128_u8_250m_launch.md).
 The C128-U16 endpoint has passed a bounded DDP2 smoke but its formal run is held
-until U8 resolves whether longer horizons continue to help. Its prepared
-contract and resource measurements are recorded in
+because U8 did not improve over U4. Its prepared contract and resource
+measurements are recorded in
 [reports/q6_fb_c128_u16_250m_preparation.md](./reports/q6_fb_c128_u16_250m_preparation.md).
 
 ## Live Route Sphere

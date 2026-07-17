@@ -679,6 +679,24 @@ and public S600 at roughly 1/3, 2/3, and full progress. Only configurations
 that jointly preserve capability, route/cache stability, and performance
 should advance to 2B. A Cartesian product of 5B runs is not justified.
 
+### 16.1 Completed 250M Decision
+
+The matched C128 FB gradient-horizon pilots completed on the Triton reader
+backend:
+
+| U | Horizon | PPL | Reason exact | Teacher acc. | Public S600 | Peak/rank |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | 128 | 8.128 | 27.67% | 77.78% | 34.67% | 8,465 MiB |
+| 2 | 256 | 8.085 | 16.00% | 74.41% | 33.50% | 11,217 MiB |
+| 4 | 512 | **7.994** | **37.67%** | **83.06%** | 33.33% | 17,531 MiB |
+| 8 | 1,024 | 8.042 | 31.83% | 80.19% | 32.00% | 29,505 MiB |
+
+The curve is non-monotonic and PPL does not select capability. U4 is selected
+for the first formal 5B FB run: it leads U8 by 5.83 points on reasoning exact,
+uses 41% less allocated memory, and has no public-suite deficit that favors
+U8. U16 passed a bounded smoke but is held because U8 did not improve over U4.
+Subsequent mechanism ablations should therefore branch from C128-FB-U4.
+
 ## 17. Limitations and Guardrails
 
 ### 17.1 Training Speed
@@ -701,8 +719,9 @@ Training PPL alone cannot choose between them.
 The current C2048/U1 profile has a full-context 2,048-token gradient horizon.
 Historical C512/U1 has a 512-token horizon: its cache values remain available
 across chunks, but later chunks cannot assign gradient credit before the detach
-boundary. Increasing `U` raises activation memory quickly; the quality benefit
-has not yet been measured.
+boundary. For C128-FB, measured quality peaks at U4 among U1/U2/U4/U8 for the
+current 250M seed; increasing U is not monotonically beneficial and raises
+activation memory quickly.
 
 ### 17.4 Compression and Reader Takeover
 

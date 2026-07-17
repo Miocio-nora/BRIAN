@@ -46,9 +46,9 @@ material copy/public regression or route/cache instability. PPL alone is not
 an acceptance criterion.
 
 U16 should be launched only if U8 improves over U4 and leaves the upper endpoint
-unresolved. If U8 is flat or regresses, U16 remains held while the U2/U4 region
-is selected. Any future concurrent run must treat live throughput as
-host-contended rather than an isolated speed comparison.
+unresolved. U8 ultimately finished below U4, so U16 remains held and U4 is
+selected. Any future concurrent run must treat live throughput as host-contended
+rather than an isolated speed comparison.
 
 ## 4. DDP2 Smoke
 
@@ -74,8 +74,9 @@ using the same host.
 ## 5. Status
 
 The U16 smoke and formal configuration are retained as an endpoint asset, but
-the formal 250M run is intentionally held. U8 was selected as the next
-higher-information gradient-horizon experiment.
+the formal 250M run is intentionally held. U8 reached 31.83% reasoning exact
+versus 37.67% for U4 while requiring substantially more memory. The first
+formal 5B FB run therefore advances C128-U4, not U16.
 
 Prepared command, not currently launched:
 
