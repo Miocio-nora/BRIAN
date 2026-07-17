@@ -411,9 +411,11 @@ The matched CPBC-DP/FB C128-U1 250M visibility pilot, initialization hash,
 three-checkpoint evaluation contract, DDP2 smoke results, and GPU 0-1 serial
 queue are recorded in
 [reports/q1_cpbc_visibility_250m_launch.md](./reports/q1_cpbc_visibility_250m_launch.md).
-The follow-up FB-C512-U1 250M pilot, matched initialization, 3.0x smoke
-throughput gain, completion-boundary caveat, and three-checkpoint decision rule
-are recorded in
+The completed FB-C512-U1 250M pilot reached a 3.07x training-throughput gain but
+was rejected as the operational default: final PPL matched C128 while reasoning
+exact fell from 27.67% to 9.50%, concentrated in copy and reverse. The matched
+initialization, completion-boundary caveat, checkpoint matrix, and decision are
+recorded in
 [reports/q3_fb_c512_250m_launch.md](./reports/q3_fb_c512_250m_launch.md).
 
 ## Live Route Sphere
