@@ -1,0 +1,29 @@
+extends: q1_cpbc_r125_250m_fb_u1_c128_triton_ddp2_legacyval.yaml
+run_name: q2_cpbc_r125_250m_fb_u4_c128_triton_ddp2_legacyval
+resume: true
+
+stateful_tbptt:
+  detach_interval_chunks: 4
+
+checkpoint_benchmarks:
+  output_dir: runs/q2_cpbc_r125_250m_fb_u4_c128_triton_ddp2_legacyval/benchmarks
+  label: q2_cpbc_r125_250m_fb_u4_c128_triton_ddp2_legacyval
+
+wandb:
+  group: q2_cpbc_gradient_horizon_r125_250m
+  tags:
+    - q2_gradient_horizon
+    - cpbc
+    - cpbc_fb
+    - full_bank_visibility
+    - triton_fused_reader
+    - c128
+    - u4
+    - gradient_horizon_512
+    - ddp2
+    - local_batch16
+    - global_batch32
+    - r125
+    - token_budget_250m
+    - balanced_data
+    - legacy_val

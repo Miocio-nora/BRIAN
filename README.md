@@ -362,6 +362,7 @@ configs/train/cpbc_r125_5b_dp_u1_c512_ddp4_legacyval.yaml
 configs/train/cpbc_r125_5b_fb_u1_c128_ddp2_legacyval.yaml
 configs/train/cpbc_r125_5b_fb_u2_c128_ddp2_legacyval.yaml
 configs/train/cpbc_r125_5b_fb_u4_c128_ddp2_legacyval.yaml
+configs/train/q2_cpbc_r125_250m_fb_u4_c128_triton_ddp2_legacyval.yaml
 configs/train/q3_cpbc_r125_250m_fb_u1_c512_triton_ddp2_legacyval.yaml
 ```
 
@@ -417,6 +418,11 @@ exact fell from 27.67% to 9.50%, concentrated in copy and reverse. The matched
 initialization, completion-boundary caveat, checkpoint matrix, and decision are
 recorded in
 [reports/q3_fb_c512_250m_launch.md](./reports/q3_fb_c512_250m_launch.md).
+The controlled FB-C128-U4 250M gradient-horizon pilot retains C128 completion
+semantics while extending continuous gradients from 128 to 512 tokens. Its
+matched contract, U4 memory/throughput cost, and three-checkpoint decision rule
+are recorded in
+[reports/q2_fb_c128_u4_250m_launch.md](./reports/q2_fb_c128_u4_250m_launch.md).
 
 ## Live Route Sphere
 
