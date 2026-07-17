@@ -1032,6 +1032,7 @@ class BrianBDRERouteCore(BrianRouteCore):
         router_probability: float | None = None,
         global_step: int = 0,
         collect_bdre_visualization: bool = False,
+        summarize_routing: bool = True,
     ) -> dict[str, Any]:
         """Advance one token without recomputing the prefix."""
 
@@ -1051,12 +1052,13 @@ class BrianBDRERouteCore(BrianRouteCore):
                 router_probability=router_probability,
                 global_step=global_step,
                 collect_bdre_visualization=collect_bdre_visualization,
+                summarize_routing=summarize_routing,
             )
             return output
         state = state or self.empty_incremental_state()
         constraints = _routing_constraints_mapping(routing_constraints)
         options = _routing_options_mapping(routing_options)
-        diagnostics = _BDREDiagnostics()
+        diagnostics = _BDREDiagnostics(enabled=summarize_routing)
         route_targets = self._targets_for_mode(route_mode, pseudo_policy, input_ids)
         logits, next_state, route_info, _ = self._forward_one_token(
             input_ids,
@@ -1074,9 +1076,10 @@ class BrianBDRERouteCore(BrianRouteCore):
             collect_router_space=False,
             collect_bdre_visualization=collect_bdre_visualization,
         )
-        metrics = diagnostics.metrics(next_state.cache, self.position_table.geometry_metrics())
-        summary = summarize_routes(route_info, self.config.route_pool_blocks)
-        summary.update(metrics)
+        summary: dict[str, Any] = {}
+        if summarize_routing:
+            summary = summarize_routes(route_info, self.config.route_pool_blocks)
+            summary.update(diagnostics.metrics(next_state.cache, self.position_table.geometry_metrics()))
         output = {
             "logits": logits,
             "route_info": route_info,

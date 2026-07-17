@@ -1,0 +1,4 @@
+extends: reasoning_eval_s600.yaml
+generation_mode: batched_incremental
+teacher_mode: exact_length_batch
+batch_size: 64

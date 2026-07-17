@@ -304,6 +304,17 @@ points lower and training is 2.82x slower. Results and evaluator limitations
 are recorded in
 [reports/rc_kv_triton_dp_c2048_5b_report.md](./reports/rc_kv_triton_dp_c2048_5b_report.md).
 
+RC-KV benchmark inference now supports exact-length batched incremental
+generation and optional exact-length teacher/public scoring. On one B200, the
+step-75k reasoning S600 wall time falls from 670.51 s to 402.41 s in strict
+incremental mode and 150.10 s in the explicit fast-capability profile. Public
+S600 falls from 195.19 s to 74.21 s with unchanged predictions. Strict and fast
+profiles remain separate because batched floating-point reductions can change
+route telemetry or choice scores near decision boundaries. The implementation,
+equivalence limits, rejected precision shortcuts, and measurements are recorded
+in
+[reports/rc_kv_inference_acceleration_report.md](./reports/rc_kv_inference_acceleration_report.md).
+
 Ragged multi-reader attention and GPU-resident dispatch remain experimental;
 GPU dispatch improved the ragged path to 28,050 tok/s, but its all-reader K/V
 expansion costs about 83.6 GiB and is not recommended.
@@ -390,6 +401,10 @@ are recorded in
 The Triton DP-C2048 formal 5B run, six-checkpoint capability matrix, benchmark
 loader recovery, and remaining inference bottleneck are recorded in
 [reports/rc_kv_triton_dp_c2048_5b_report.md](./reports/rc_kv_triton_dp_c2048_5b_report.md).
+The strict incremental and fast-capability evaluator profiles, B200 timing,
+numerical-equivalence boundaries, and remaining decode bottleneck are recorded
+in
+[reports/rc_kv_inference_acceleration_report.md](./reports/rc_kv_inference_acceleration_report.md).
 
 ## Live Route Sphere
 

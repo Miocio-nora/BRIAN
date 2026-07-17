@@ -4,9 +4,21 @@ model_config: ../model/brian_r125_bdre_cpbc_dp_c2048_triton_fused_reader_increme
 
 checkpoint_benchmarks:
   label: cpbc_r125_5b_dp_u1_c2048_triton_fused_reader_incremental_ddp2_legacyval
+  reasoning:
+    enabled: true
+    config: configs/eval/reasoning_eval_s600_incremental.yaml
+  public:
+    enabled: true
+    config: configs/eval/public_benchmark_s600.yaml
 
 post_train_benchmarks:
   label: cpbc_r125_5b_dp_u1_c2048_triton_fused_reader_incremental_ddp2_legacyval
+  reasoning:
+    enabled: true
+    config: configs/eval/reasoning_eval_s600_incremental.yaml
+  public:
+    enabled: true
+    config: configs/eval/public_benchmark_s600.yaml
 
 wandb:
   group: cpbc_dp_triton_fused_reader_c2048_ddp2

@@ -35,6 +35,20 @@ def test_eval_cli_arg_overrides_preserve_zero_values() -> None:
     assert module._float_arg_or_config(0.0, {"min_step_delta": 1.0}, "min_step_delta", default=1.0) == 0.0
 
 
+def test_rc_kv_inference_eval_profiles_are_explicit() -> None:
+    strict = load_config("configs/eval/reasoning_eval_s600_incremental.yaml")
+    reasoning_fast = load_config("configs/eval/reasoning_eval_s600_fast.yaml")
+    public_fast = load_config("configs/eval/public_benchmark_s600_fast.yaml")
+
+    assert strict["generation_mode"] == "batched_incremental"
+    assert strict["teacher_mode"] == "reference"
+    assert strict["batch_size"] == 64
+    assert reasoning_fast["generation_mode"] == "batched_incremental"
+    assert reasoning_fast["teacher_mode"] == "exact_length_batch"
+    assert reasoning_fast["batch_size"] == 64
+    assert public_fast["batch_size"] == 64
+
+
 def _eval_names_supported_by_cli(path: Path) -> set[str]:
     tree = ast.parse(path.read_text(encoding="utf-8"))
     supported = {"routing_eval"}

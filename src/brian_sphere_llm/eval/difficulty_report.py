@@ -290,9 +290,70 @@ def _forward_routed_for_eval(
     config: dict[str, Any],
     route_mode: str,
     global_step: int,
+    summarize_routing: bool = True,
 ) -> dict[str, Any]:
     if route_mode == "baseline":
         return model(batch)
+    kwargs = _routed_eval_kwargs(config, route_mode=route_mode, global_step=global_step)
+    return model(
+        batch,
+        targets=None,
+        loss_weights=kwargs.pop("loss_weights"),
+        summarize_routing=summarize_routing,
+        **kwargs,
+    )
+
+
+def _forward_routed_stream_chunk_for_eval(
+    model: Any,
+    batch: "torch.Tensor",
+    state: Any | None,
+    *,
+    config: dict[str, Any],
+    route_mode: str,
+    global_step: int,
+    summarize_routing: bool = False,
+) -> dict[str, Any]:
+    if route_mode == "baseline" or not hasattr(model, "forward_stream_chunk"):
+        raise TypeError("The evaluated model does not support routed stream chunks.")
+    kwargs = _routed_eval_kwargs(config, route_mode=route_mode, global_step=global_step)
+    return model.forward_stream_chunk(
+        batch,
+        state,
+        loss_weights=kwargs.pop("loss_weights"),
+        summarize_routing=summarize_routing,
+        **kwargs,
+    )
+
+
+def _forward_routed_incremental_for_eval(
+    model: Any,
+    batch: "torch.Tensor",
+    state: Any,
+    *,
+    config: dict[str, Any],
+    route_mode: str,
+    global_step: int,
+    summarize_routing: bool = False,
+) -> dict[str, Any]:
+    if route_mode == "baseline" or not hasattr(model, "forward_incremental"):
+        raise TypeError("The evaluated model does not support routed incremental decoding.")
+    kwargs = _routed_eval_kwargs(config, route_mode=route_mode, global_step=global_step)
+    kwargs.pop("loss_weights")
+    return model.forward_incremental(
+        batch,
+        state,
+        summarize_routing=summarize_routing,
+        **kwargs,
+    )
+
+
+def _routed_eval_kwargs(
+    config: dict[str, Any],
+    *,
+    route_mode: str,
+    global_step: int,
+) -> dict[str, Any]:
     routing_cfg = _mapping_config(config, "routing")
     loss_weights = dict(_mapping_config(config, "loss_weights"))
     router_probability = None
@@ -300,23 +361,21 @@ def _forward_routed_for_eval(
         schedule = routing_cfg.get("schedule", [])
         router_probability = scheduled_value(schedule, global_step, "router_probability", 0.0)
         loss_weights["route"] = scheduled_value(schedule, global_step, "lambda_route", loss_weights.get("route", 0.0))
-    return model(
-        batch,
-        targets=None,
-        route_mode=route_mode,
-        pseudo_policy=str(routing_cfg.get("pseudo_policy", "sequential")),
-        loss_weights=loss_weights,
-        routing_constraints=_mapping_config(dict(routing_cfg), "constraints"),
-        routing_options=routing_cfg,
-        hard_exit=_bool_mapping_value(
+    return {
+        "route_mode": route_mode,
+        "pseudo_policy": str(routing_cfg.get("pseudo_policy", "sequential")),
+        "loss_weights": loss_weights,
+        "routing_constraints": _mapping_config(dict(routing_cfg), "constraints"),
+        "routing_options": routing_cfg,
+        "hard_exit": _bool_mapping_value(
             routing_cfg,
             "hard_exit",
             default=str(config.get("stage")) == "stage4_output_action",
             name="routing.hard_exit",
         ),
-        router_probability=router_probability,
-        global_step=global_step,
-    )
+        "router_probability": router_probability,
+        "global_step": global_step,
+    }
 
 
 def _bool_mapping_value(mapping: Mapping[str, Any], key: str, *, default: bool, name: str) -> bool:

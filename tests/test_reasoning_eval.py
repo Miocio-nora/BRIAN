@@ -12,6 +12,7 @@ from brian_sphere_llm.eval.reasoning import (
     _report_checks,
     _routing_summary,
     _visible_cot_token_count,
+    batched_greedy_generate,
     evaluate_reasoning_sample,
     generate_reasoning_samples,
     normalize_answer,
@@ -42,6 +43,35 @@ class TinyReasoningModel:
                 "route_entropy": 0.5,
             },
         }
+
+
+class TinyIncrementalModel:
+    def __init__(self, vocab_size: int = 260) -> None:
+        self.vocab_size = vocab_size
+        self.stream_batch_sizes: list[int] = []
+        self.incremental_batch_sizes: list[int] = []
+
+    def __call__(self, input_ids, **_kwargs):
+        next_ids = (input_ids + 1) % self.vocab_size
+        logits = torch.zeros(*input_ids.shape, self.vocab_size, device=input_ids.device)
+        logits.scatter_(2, next_ids.unsqueeze(-1), 10.0)
+        return {"logits": logits, "routing_summary": {}}
+
+    def forward_stream_chunk(self, input_ids, state=None, **_kwargs):
+        self.stream_batch_sizes.append(input_ids.size(0))
+        output = self(input_ids)
+        output["incremental_state"] = {
+            "tokens": input_ids.size(1)
+            if state is None
+            else state["tokens"] + input_ids.size(1)
+        }
+        return output
+
+    def forward_incremental(self, input_ids, state, **_kwargs):
+        self.incremental_batch_sizes.append(input_ids.size(0))
+        output = self(input_ids)
+        output["incremental_state"] = {"tokens": state["tokens"] + 1}
+        return output
 
 
 def test_generate_reasoning_samples_cycles_tasks_and_difficulties() -> None:
@@ -198,3 +228,51 @@ def test_evaluate_reasoning_sample_exact_match_with_fake_model() -> None:
     assert row["answer_token_count"] == len(answer_ids)
     assert row["visible_cot_tokens"] == 0
     assert row["routing_average_route_steps"] == 2.0
+
+
+def test_batched_greedy_generation_groups_shapes_and_reuses_incremental_state() -> None:
+    model = TinyIncrementalModel()
+    prompts = [[1, 2], [7, 8], [3, 4, 5]]
+
+    generated = batched_greedy_generate(
+        model,
+        prompts,
+        new_token_counts=[3, 3, 2],
+        batch_size=2,
+        config={"stage": "stage4_pure_free_sphere", "routing": {"hard_exit": True}},
+        route_mode="free",
+        global_step=0,
+        context_length=16,
+        device=torch.device("cpu"),
+    )
+
+    assert generated == [[3, 4, 5], [9, 10, 11], [6, 7]]
+    assert model.stream_batch_sizes == [2, 1]
+    assert model.incremental_batch_sizes == [2, 2, 1]
+
+
+def test_reference_greedy_generation_keeps_routing_summary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model = TinyIncrementalModel()
+    summarize_calls: list[bool] = []
+
+    def record_forward(model, input_ids, *, summarize_routing=True, **_kwargs):
+        summarize_calls.append(summarize_routing)
+        return model(input_ids)
+
+    monkeypatch.setattr(reasoning_eval, "_forward_routed_for_eval", record_forward)
+
+    generated = reasoning_eval.greedy_generate(
+        model,
+        [1, 2],
+        new_tokens=2,
+        config={"stage": "stage4_pure_free_sphere"},
+        route_mode="free",
+        global_step=0,
+        context_length=16,
+        device=torch.device("cpu"),
+    )
+
+    assert generated == [3, 4]
+    assert summarize_calls == [True, True]

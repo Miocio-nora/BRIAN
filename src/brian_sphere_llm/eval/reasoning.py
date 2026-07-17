@@ -1,14 +1,23 @@
 from __future__ import annotations
 
+from collections import defaultdict
 from collections.abc import Mapping
 import math
 import random
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from brian_sphere_llm.data.tokenize import load_tokenizer
-from brian_sphere_llm.eval.difficulty_report import _checkpoint_step, _forward_routed_for_eval, _load_model_for_run
+from brian_sphere_llm.eval.difficulty_report import (
+    _checkpoint_step,
+    _forward_routed_for_eval,
+    _forward_routed_incremental_for_eval,
+    _forward_routed_stream_chunk_for_eval,
+    _load_model_for_run,
+)
+from brian_sphere_llm.routing.metrics import summarize_routes
 from brian_sphere_llm.train.stage_runner import train_mode_for_stage
 from brian_sphere_llm.utils.config import load_config
 from brian_sphere_llm.utils.logging import write_json, write_jsonl
@@ -27,6 +36,14 @@ class ReasoningSample:
     answer: str
 
 
+@dataclass(frozen=True)
+class _PreparedReasoningSample:
+    sample: ReasoningSample
+    answer_ids: tuple[int, ...]
+    full_ids: tuple[int, ...]
+    teacher_start: int
+
+
 def make_reasoning_report(
     run_dir: str | Path,
     *,
@@ -38,6 +55,9 @@ def make_reasoning_report(
     device_name: str = "auto",
     task_families: list[str] | None = None,
     difficulties: list[str] | None = None,
+    generation_mode: str = "reference",
+    generation_batch_size: int = 1,
+    teacher_mode: str = "reference",
 ) -> Path:
     if torch is None:
         raise ModuleNotFoundError("PyTorch is required for reasoning eval.")
@@ -50,22 +70,80 @@ def make_reasoning_report(
     route_mode = train_mode_for_stage(str(config["stage"]))
     global_step = _checkpoint_step(run_dir, checkpoint)
     context_length = _context_length(config)
-    samples = list(generate_reasoning_samples(sample_count, seed=seed, task_families=task_families, difficulties=difficulties))
-    rows: list[dict[str, Any]] = []
-    with torch.no_grad():
-        for index, sample in enumerate(samples):
-            row = evaluate_reasoning_sample(
+    samples = list(
+        generate_reasoning_samples(
+            sample_count,
+            seed=seed,
+            task_families=task_families,
+            difficulties=difficulties,
+        )
+    )
+    if generation_mode not in {"reference", "batched_incremental"}:
+        raise ValueError("generation_mode must be 'reference' or 'batched_incremental'.")
+    if teacher_mode not in {"reference", "exact_length_batch"}:
+        raise ValueError("teacher_mode must be 'reference' or 'exact_length_batch'.")
+    if teacher_mode == "exact_length_batch" and generation_mode != "batched_incremental":
+        raise ValueError("exact_length_batch teacher mode requires batched_incremental generation.")
+    if (
+        isinstance(generation_batch_size, bool)
+        or not isinstance(generation_batch_size, int)
+        or generation_batch_size < 1
+    ):
+        raise ValueError("generation_batch_size must be a positive integer.")
+    evaluation_started = time.perf_counter()
+    generated_by_sample: list[list[int]] | None = None
+    generation_seconds: float | None = None
+    if generation_mode == "batched_incremental":
+        prompt_ids = [_prompt_ids(tokenizer, sample.prompt)[-context_length:] for sample in samples]
+        answer_lengths = [len(tokenizer.encode(sample.answer, add_special_tokens=False)) for sample in samples]
+        generation_started = time.perf_counter()
+        with torch.inference_mode():
+            generated_by_sample = batched_greedy_generate(
                 model,
-                tokenizer,
-                sample,
+                prompt_ids,
+                new_token_counts=answer_lengths,
+                batch_size=generation_batch_size,
                 config=config,
                 route_mode=route_mode,
                 global_step=global_step,
                 context_length=context_length,
-                sample_id=index,
                 device=device,
             )
-            rows.append(row)
+        generation_seconds = time.perf_counter() - generation_started
+    teacher_started = time.perf_counter()
+    with torch.inference_mode():
+        if generated_by_sample is not None and teacher_mode == "exact_length_batch":
+            rows = evaluate_reasoning_samples_batched(
+                model,
+                tokenizer,
+                samples,
+                generated_by_sample=generated_by_sample,
+                batch_size=generation_batch_size,
+                config=config,
+                route_mode=route_mode,
+                global_step=global_step,
+                context_length=context_length,
+                device=device,
+            )
+        else:
+            rows = [
+                evaluate_reasoning_sample(
+                    model,
+                    tokenizer,
+                    sample,
+                    config=config,
+                    route_mode=route_mode,
+                    global_step=global_step,
+                    context_length=context_length,
+                    sample_id=index,
+                    device=device,
+                    generated_ids=None if generated_by_sample is None else generated_by_sample[index],
+                )
+                for index, sample in enumerate(samples)
+            ]
+    teacher_elapsed = time.perf_counter() - teacher_started
+    teacher_seconds = teacher_elapsed if generated_by_sample is not None else None
+    evaluation_seconds = time.perf_counter() - evaluation_started
 
     if output_path is None:
         output_path = run_dir / "reasoning_report.json"
@@ -85,6 +163,21 @@ def make_reasoning_report(
         "sample_count": len(rows),
         "seed": seed,
         "context_length": context_length,
+        "inference": {
+            "generation_mode": generation_mode,
+            "generation_batch_size": generation_batch_size,
+            "teacher_mode": teacher_mode,
+            "routing_equivalence": "numeric" if teacher_mode == "exact_length_batch" else "reference",
+            "generation_seconds": generation_seconds,
+            "teacher_seconds": teacher_seconds,
+            "evaluation_seconds": evaluation_seconds,
+            "incremental_cache": bool(
+                generation_mode == "batched_incremental"
+                and route_mode != "baseline"
+                and hasattr(model, "forward_stream_chunk")
+                and hasattr(model, "forward_incremental")
+            ),
+        },
         "samples_path": str(sample_output_path),
         "overall": overall,
         "by_task_family": _group_summary(rows, "task_family"),
@@ -126,6 +219,7 @@ def evaluate_reasoning_sample(
     context_length: int,
     sample_id: int,
     device: "torch.device",
+    generated_ids: list[int] | None = None,
 ) -> dict[str, Any]:
     prompt_ids = _prompt_ids(tokenizer, sample.prompt)
     answer_ids = tokenizer.encode(sample.answer, add_special_tokens=False)
@@ -140,16 +234,105 @@ def evaluate_reasoning_sample(
     end = start + len(answer_ids)
     teacher_predictions = logits[0, start:end].argmax(dim=-1).detach().cpu().tolist()
     teacher_accuracy = _token_accuracy(teacher_predictions, answer_ids)
-    generated_ids = greedy_generate(
-        model,
-        prompt_ids[-context_length:],
-        new_tokens=len(answer_ids),
-        config=config,
-        route_mode=route_mode,
-        global_step=global_step,
-        context_length=context_length,
-        device=device,
+    if generated_ids is None:
+        generated_ids = greedy_generate(
+            model,
+            prompt_ids[-context_length:],
+            new_tokens=len(answer_ids),
+            config=config,
+            route_mode=route_mode,
+            global_step=global_step,
+            context_length=context_length,
+            device=device,
+        )
+    return _reasoning_row(
+        tokenizer,
+        sample,
+        sample_id=sample_id,
+        answer_ids=answer_ids,
+        generated_ids=generated_ids,
+        teacher_accuracy=teacher_accuracy,
+        routing_summary=outputs.get("routing_summary", {}),
     )
+
+
+def evaluate_reasoning_samples_batched(
+    model: Any,
+    tokenizer: Any,
+    samples: list[ReasoningSample],
+    *,
+    generated_by_sample: list[list[int]],
+    batch_size: int,
+    config: dict[str, Any],
+    route_mode: str,
+    global_step: int,
+    context_length: int,
+    device: "torch.device",
+) -> list[dict[str, Any]]:
+    if len(samples) != len(generated_by_sample):
+        raise ValueError("samples and generated_by_sample must have the same length.")
+    prepared = [_prepare_reasoning_sample(tokenizer, sample, context_length) for sample in samples]
+    groups: dict[int, list[int]] = defaultdict(list)
+    for index, item in enumerate(prepared):
+        groups[len(item.full_ids)].append(index)
+    rows: list[dict[str, Any] | None] = [None] * len(samples)
+    num_internal_blocks = int(getattr(getattr(model, "config", None), "route_pool_blocks", 0))
+
+    for indexes in groups.values():
+        for start in range(0, len(indexes), batch_size):
+            batch_indexes = indexes[start : start + batch_size]
+            batch_items = [prepared[index] for index in batch_indexes]
+            input_ids = torch.tensor(
+                [item.full_ids for item in batch_items],
+                dtype=torch.long,
+                device=device,
+            )
+            outputs = _forward_routed_for_eval(
+                model,
+                input_ids,
+                config=config,
+                route_mode=route_mode,
+                global_step=global_step,
+                summarize_routing=False,
+            )
+            predictions = outputs["logits"].argmax(dim=-1).detach().cpu()
+            routing_summaries = _per_sample_routing_summaries(
+                outputs.get("route_info"),
+                batch_size=len(batch_items),
+                num_internal_blocks=num_internal_blocks,
+            )
+            for local_index, (sample_index, item) in enumerate(
+                zip(batch_indexes, batch_items, strict=True)
+            ):
+                answer_ids = list(item.answer_ids)
+                teacher_predictions = predictions[
+                    local_index,
+                    item.teacher_start : item.teacher_start + len(answer_ids),
+                ].tolist()
+                rows[sample_index] = _reasoning_row(
+                    tokenizer,
+                    item.sample,
+                    sample_id=sample_index,
+                    answer_ids=answer_ids,
+                    generated_ids=generated_by_sample[sample_index],
+                    teacher_accuracy=_token_accuracy(teacher_predictions, answer_ids),
+                    routing_summary=routing_summaries[local_index],
+                )
+    if any(row is None for row in rows):
+        raise RuntimeError("Batched reasoning evaluation did not produce every row.")
+    return [row for row in rows if row is not None]
+
+
+def _reasoning_row(
+    tokenizer: Any,
+    sample: ReasoningSample,
+    *,
+    sample_id: int,
+    answer_ids: list[int],
+    generated_ids: list[int],
+    teacher_accuracy: float,
+    routing_summary: Mapping[str, Any],
+) -> dict[str, Any]:
     generated_text = _decode(tokenizer, generated_ids)
     exact_match = normalize_answer(generated_text) == normalize_answer(sample.answer)
     row: dict[str, Any] = {
@@ -165,11 +348,70 @@ def evaluate_reasoning_sample(
         "answer_token_count": len(answer_ids),
         "visible_cot_tokens": _visible_cot_token_count(generated_ids, answer_ids),
     }
-    for key, value in outputs.get("routing_summary", {}).items():
+    for key, value in routing_summary.items():
         number = _num(value)
         if number is not None:
             row[f"routing_{key}"] = number
     return row
+
+
+def _prepare_reasoning_sample(
+    tokenizer: Any,
+    sample: ReasoningSample,
+    context_length: int,
+) -> _PreparedReasoningSample:
+    prompt_ids = _prompt_ids(tokenizer, sample.prompt)
+    answer_ids = tokenizer.encode(sample.answer, add_special_tokens=False)
+    if not answer_ids:
+        raise ValueError("Reasoning sample produced an empty answer.")
+    full_ids = (prompt_ids + answer_ids)[-context_length:]
+    prompt_len = min(len(prompt_ids), len(full_ids) - len(answer_ids))
+    return _PreparedReasoningSample(
+        sample=sample,
+        answer_ids=tuple(answer_ids),
+        full_ids=tuple(full_ids),
+        teacher_start=max(0, prompt_len - 1),
+    )
+
+
+def _per_sample_routing_summaries(
+    route_info: Mapping[str, Any] | None,
+    *,
+    batch_size: int,
+    num_internal_blocks: int,
+) -> list[dict[str, Any]]:
+    if not route_info or num_internal_blocks < 1:
+        return [{} for _ in range(batch_size)]
+    cpu_info = _route_info_to_cpu(route_info)
+    summaries: list[dict[str, Any]] = []
+    for sample_index in range(batch_size):
+        sample_info: dict[str, Any] = {}
+        for key, value in cpu_info.items():
+            if key in {"random_route_override_count", "self_recur_cap_count"}:
+                continue
+            if isinstance(value, list):
+                sample_info[key] = [
+                    item[sample_index : sample_index + 1]
+                    if isinstance(item, torch.Tensor) and item.dim() > 0 and item.size(0) == batch_size
+                    else item
+                    for item in value
+                ]
+            elif isinstance(value, torch.Tensor) and value.dim() > 0 and value.size(0) == batch_size:
+                sample_info[key] = value[sample_index : sample_index + 1]
+            else:
+                sample_info[key] = value
+        summaries.append(summarize_routes(sample_info, num_internal_blocks))
+    return summaries
+
+
+def _route_info_to_cpu(value: Any) -> Any:
+    if isinstance(value, torch.Tensor):
+        return value.detach().cpu()
+    if isinstance(value, Mapping):
+        return {key: _route_info_to_cpu(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_route_info_to_cpu(item) for item in value]
+    return value
 
 
 def greedy_generate(
@@ -188,11 +430,143 @@ def greedy_generate(
     for _ in range(new_tokens):
         window = current[-context_length:]
         input_ids = torch.tensor([window], dtype=torch.long, device=device)
-        outputs = _forward_routed_for_eval(model, input_ids, config=config, route_mode=route_mode, global_step=global_step)
+        outputs = _forward_routed_for_eval(
+            model,
+            input_ids,
+            config=config,
+            route_mode=route_mode,
+            global_step=global_step,
+        )
         next_id = int(outputs["logits"][0, -1].argmax().detach().cpu())
         generated.append(next_id)
         current.append(next_id)
     return generated
+
+
+def batched_greedy_generate(
+    model: Any,
+    prompt_ids: list[list[int]],
+    *,
+    new_token_counts: list[int],
+    batch_size: int,
+    config: dict[str, Any],
+    route_mode: str,
+    global_step: int,
+    context_length: int,
+    device: "torch.device",
+) -> list[list[int]]:
+    """Generate equal-shape groups together and reuse RC-KV state when available."""
+
+    if len(prompt_ids) != len(new_token_counts):
+        raise ValueError("prompt_ids and new_token_counts must have the same length.")
+    if isinstance(batch_size, bool) or not isinstance(batch_size, int) or batch_size < 1:
+        raise ValueError("batch_size must be a positive integer.")
+    generated: list[list[int] | None] = [None] * len(prompt_ids)
+    groups: dict[tuple[int, int], list[int]] = defaultdict(list)
+    fallback: list[int] = []
+    for index, (prompt, count) in enumerate(zip(prompt_ids, new_token_counts, strict=True)):
+        if not prompt:
+            raise ValueError("Batched generation requires non-empty prompts.")
+        if count < 1:
+            raise ValueError("Batched generation requires positive new-token counts.")
+        if len(prompt) + count > context_length:
+            fallback.append(index)
+        else:
+            groups[(len(prompt), count)].append(index)
+
+    use_incremental_cache = (
+        route_mode != "baseline"
+        and hasattr(model, "forward_stream_chunk")
+        and hasattr(model, "forward_incremental")
+    )
+    for (_, count), indexes in groups.items():
+        for start in range(0, len(indexes), batch_size):
+            batch_indexes = indexes[start : start + batch_size]
+            batch_prompts = torch.tensor(
+                [prompt_ids[index] for index in batch_indexes],
+                dtype=torch.long,
+                device=device,
+            )
+            batch_generated = _greedy_generate_equal_shape_batch(
+                model,
+                batch_prompts,
+                new_tokens=count,
+                config=config,
+                route_mode=route_mode,
+                global_step=global_step,
+                use_incremental_cache=use_incremental_cache,
+            )
+            for index, token_ids in zip(batch_indexes, batch_generated, strict=True):
+                generated[index] = token_ids
+
+    for index in fallback:
+        generated[index] = greedy_generate(
+            model,
+            prompt_ids[index],
+            new_tokens=new_token_counts[index],
+            config=config,
+            route_mode=route_mode,
+            global_step=global_step,
+            context_length=context_length,
+            device=device,
+        )
+    if any(value is None for value in generated):
+        raise RuntimeError("Batched generation did not produce every requested sample.")
+    return [list(value) for value in generated if value is not None]
+
+
+def _greedy_generate_equal_shape_batch(
+    model: Any,
+    prompt_batch: "torch.Tensor",
+    *,
+    new_tokens: int,
+    config: dict[str, Any],
+    route_mode: str,
+    global_step: int,
+    use_incremental_cache: bool,
+) -> list[list[int]]:
+    generated: list[torch.Tensor] = []
+    if use_incremental_cache:
+        outputs = _forward_routed_stream_chunk_for_eval(
+            model,
+            prompt_batch,
+            None,
+            config=config,
+            route_mode=route_mode,
+            global_step=global_step,
+            summarize_routing=False,
+        )
+        state = outputs["incremental_state"]
+        next_ids = outputs["logits"][:, -1].argmax(dim=-1)
+        generated.append(next_ids)
+        for _ in range(1, new_tokens):
+            outputs = _forward_routed_incremental_for_eval(
+                model,
+                next_ids.unsqueeze(1),
+                state,
+                config=config,
+                route_mode=route_mode,
+                global_step=global_step,
+                summarize_routing=False,
+            )
+            state = outputs["incremental_state"]
+            next_ids = outputs["logits"][:, -1].argmax(dim=-1)
+            generated.append(next_ids)
+    else:
+        current = prompt_batch
+        for _ in range(new_tokens):
+            outputs = _forward_routed_for_eval(
+                model,
+                current,
+                config=config,
+                route_mode=route_mode,
+                global_step=global_step,
+                summarize_routing=False,
+            )
+            next_ids = outputs["logits"][:, -1].argmax(dim=-1)
+            generated.append(next_ids)
+            current = torch.cat((current, next_ids.unsqueeze(1)), dim=1)
+    return torch.stack(generated, dim=1).detach().cpu().tolist()
 
 
 def summarize_reasoning_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:

@@ -48,6 +48,18 @@ def main() -> None:
     parser.add_argument("--split", default=None, help="Dataset split override.")
     parser.add_argument("--max-batches", type=int, default=None, help="Maximum eval batches override.")
     parser.add_argument("--batch-size", type=int, default=None, help="Batch size override.")
+    parser.add_argument(
+        "--generation-mode",
+        choices=("reference", "batched_incremental"),
+        default=None,
+        help="Reasoning generation backend override.",
+    )
+    parser.add_argument(
+        "--teacher-mode",
+        choices=("reference", "exact_length_batch"),
+        default=None,
+        help="Reasoning teacher-forced scoring backend override.",
+    )
     parser.add_argument("--tflops-per-gpu", type=float, default=None, help="Reference TFLOPs/GPU for compute reports.")
     parser.add_argument("--utilization", type=float, default=None, help="Reference utilization for compute reports.")
     parser.add_argument("--min-active-compute-range", type=float, default=None, help="Minimum active compute range for cost reports.")
@@ -210,6 +222,9 @@ def main() -> None:
             device_name=str(config.get("device", "auto")),
             task_families=list(config.get("task_families", ["copy", "reverse", "arithmetic", "rewrite"])),
             difficulties=list(config.get("difficulties", ["easy", "medium", "hard"])),
+            generation_mode=str(args.generation_mode or config.get("generation_mode", "reference")),
+            generation_batch_size=_int_arg_or_config(args.batch_size, config, "batch_size", default=1),
+            teacher_mode=str(args.teacher_mode or config.get("teacher_mode", "reference")),
         )
     elif eval_name == "long_context_eval":
         if not args.run:
@@ -430,6 +445,7 @@ def main() -> None:
             sample_count=_int_arg_or_config(args.sample_count, config, "sample_count", default=50),
             seed=_int_config(config, "seed", default=1),
             device_name=str(config.get("device", "auto")),
+            batch_size=_int_arg_or_config(args.batch_size, config, "batch_size", default=1),
             length_normalized=_bool_config(config, "length_normalized", default=True),
         )
     else:

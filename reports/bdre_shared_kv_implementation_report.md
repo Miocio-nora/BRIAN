@@ -764,3 +764,24 @@ checkpoint and reinforce that final PPL is not a sufficient selection rule.
 The complete matrix, benchmark recovery, and serial-inference utilization
 analysis are in
 [rc_kv_triton_dp_c2048_5b_report.md](./rc_kv_triton_dp_c2048_5b_report.md).
+
+## 20. Benchmark Inference Follow-up
+
+Reasoning generation now has an additive batched incremental evaluator. Exact
+prompt/answer shapes are grouped, each prompt is prefilled once through the
+RC-KV stream interface, and generated tokens advance the retained state through
+`forward_incremental`. Teacher-forced reasoning and public choices also have an
+optional exact-length batch path. Legacy batch-of-one paths remain available.
+
+On the formal step-75k checkpoint and one B200, strict incremental reasoning
+reduces S600 wall time from 670.51 s to 402.41 s with no core or selected-route
+metric mismatches. The explicit batch-64 fast profile reaches 150.10 s with
+identical capability results, while public S600 falls from 195.19 s to 74.21 s
+with identical predictions. Fast batching is not used as the strict routing or
+choice-score authority because floating-point reduction order can alter paths or
+scores near decision boundaries. BF16 and TF32 shortcuts were rejected after
+both changed core S30 results without useful speed gains.
+
+The implementation contract, configuration entrypoints, A/B matrix, and next
+decode-kernel boundary are documented in
+[rc_kv_inference_acceleration_report.md](./rc_kv_inference_acceleration_report.md).
