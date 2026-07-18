@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from datetime import timedelta
 from typing import Any
 
 try:
@@ -29,7 +30,7 @@ def is_main_process() -> bool:
     return rank() == 0
 
 
-def init_distributed(device: Any | None = None) -> bool:
+def init_distributed(device: Any | None = None, *, timeout_seconds: int | None = None) -> bool:
     if not is_distributed():
         return False
     if torch is None or not torch.distributed.is_available():
@@ -40,10 +41,14 @@ def init_distributed(device: Any | None = None) -> bool:
     if device is not None and getattr(device, "type", None) == "cuda":
         torch.cuda.set_device(local_rank())
         device_id = torch.device("cuda", local_rank())
+    init_kwargs: dict[str, Any] = {}
+    if timeout_seconds is not None:
+        init_kwargs["timeout"] = timedelta(seconds=timeout_seconds)
     torch.distributed.init_process_group(
         backend=_backend_for_device(device),
         init_method="env://",
         device_id=device_id,
+        **init_kwargs,
     )
     return True
 

@@ -35,6 +35,7 @@ def test_formal_fb_u4_keeps_optimized_u1_training_contract() -> None:
         assert u1[key] == u4[key], key
 
     assert "triton_fused_reader_incremental" in u4["model_config"]
+    assert u4["distributed_timeout_seconds"] == 1_800
     assert u4["resume"] is True
     assert u1["stateful_tbptt"] == {
         "enabled": True,
@@ -57,4 +58,10 @@ def test_formal_fb_u4_keeps_checkpoint_benchmark_contract() -> None:
     assert u1["checkpoint_benchmarks"]["interval"] == 15_000
     assert u1["checkpoint_benchmarks"]["reasoning"] == u4["checkpoint_benchmarks"]["reasoning"]
     assert u1["checkpoint_benchmarks"]["public"] == u4["checkpoint_benchmarks"]["public"]
+    assert u4["checkpoint_benchmarks"]["reasoning"]["config"].endswith(
+        "reasoning_eval_s600_incremental.yaml"
+    )
+    assert u4["post_train_benchmarks"]["reasoning"]["config"].endswith(
+        "reasoning_eval_s600_incremental.yaml"
+    )
     assert u1["checkpoint_retention"] == u4["checkpoint_retention"]

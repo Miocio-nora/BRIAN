@@ -1,12 +1,19 @@
 extends: cpbc_r125_5b_fb_u1_c128_grouped_mm_flex_ddp2_legacyval.yaml
 run_name: cpbc_r125_5b_fb_u1_c128_triton_fused_reader_incremental_ddp2_legacyval
 model_config: ../model/brian_r125_bdre_cpbc_fb_c128_triton_fused_reader_incremental.yaml
+distributed_timeout_seconds: 1800
 
 checkpoint_benchmarks:
   label: cpbc_r125_5b_fb_u1_c128_triton_fused_reader_incremental_ddp2_legacyval
+  reasoning:
+    enabled: true
+    config: configs/eval/reasoning_eval_s600_incremental.yaml
 
 post_train_benchmarks:
   label: cpbc_r125_5b_fb_u1_c128_triton_fused_reader_incremental_ddp2_legacyval
+  reasoning:
+    enabled: true
+    config: configs/eval/reasoning_eval_s600_incremental.yaml
 
 wandb:
   group: cpbc_fb_triton_fused_reader_c128_ddp2

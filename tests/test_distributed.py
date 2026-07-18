@@ -1,3 +1,5 @@
+from datetime import timedelta
+
 import pytest
 
 torch = pytest.importorskip("torch")
@@ -63,3 +65,21 @@ def test_mean_scalar_uses_all_reduce_sum_and_world_size(monkeypatch: pytest.Monk
     monkeypatch.setattr(distributed.torch.distributed, "all_reduce", fake_all_reduce)
 
     assert distributed.mean_scalar(99.0, device=torch.device("cpu")) == pytest.approx(5.0)
+
+
+def test_init_distributed_forwards_explicit_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("WORLD_SIZE", "2")
+    monkeypatch.setenv("RANK", "0")
+    monkeypatch.setenv("LOCAL_RANK", "0")
+    monkeypatch.setattr(distributed.torch.distributed, "is_available", lambda: True)
+    monkeypatch.setattr(distributed.torch.distributed, "is_initialized", lambda: False)
+    captured: dict[str, object] = {}
+
+    def fake_init_process_group(**kwargs) -> None:
+        captured.update(kwargs)
+
+    monkeypatch.setattr(distributed.torch.distributed, "init_process_group", fake_init_process_group)
+
+    assert distributed.init_distributed(torch.device("cpu"), timeout_seconds=1800) is True
+    assert captured["backend"] == "gloo"
+    assert captured["timeout"] == timedelta(seconds=1800)

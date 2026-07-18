@@ -111,6 +111,11 @@ def train_from_config(config_path: str | Path) -> Path:
         "ddp_broadcast_buffers",
         default=not bool(stateful_tbptt["enabled"]),
     )
+    distributed_timeout_seconds = (
+        _int_config(config, "distributed_timeout_seconds", minimum=1)
+        if "distributed_timeout_seconds" in config
+        else None
+    )
     set_seed(seed)
     _set_float32_matmul_precision(config)
 
@@ -123,7 +128,7 @@ def train_from_config(config_path: str | Path) -> Path:
     _set_activation_checkpointing(model, _bool_config(config, "activation_checkpointing", default=False))
     _validate_stateful_chunk_semantics(model, stateful_tbptt)
     device = _device(str(config.get("device", "auto")))
-    distributed = dist_utils.init_distributed(device)
+    distributed = dist_utils.init_distributed(device, timeout_seconds=distributed_timeout_seconds)
     try:
         distributed_batch_contract = _distributed_batch_contract(
             config,
@@ -163,6 +168,7 @@ def train_from_config(config_path: str | Path) -> Path:
             "static_graph": ddp_static_graph,
             "gradient_as_bucket_view": ddp_gradient_as_bucket_view,
             "broadcast_buffers": ddp_broadcast_buffers,
+            "timeout_seconds": distributed_timeout_seconds,
             "stateful_manual_gradient_sync": bool(distributed and stateful_tbptt["enabled"]),
             "stateful_gradient_sync_bucket_mb": int(stateful_tbptt["gradient_sync_bucket_mb"]),
             "batch_contract": distributed_batch_contract,
