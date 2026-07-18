@@ -117,3 +117,10 @@ The missing public result was recovered directly from
 benchmark log. `checkpoint_latest` and both rank-state files identify step
 15,000; the checkpoint contains model, optimizer, RNG, sampler epoch, and
 microbatch position state required to continue at step 15,001.
+
+The run resumed at `2026-07-18 10:34 JST` under the same W&B ID. The resume
+event confirms optimizer, RNG, rank-state, epoch, and microbatch-position
+restoration. The training log advances directly from step 15,000 to 15,001;
+initial post-resume acceptance reached step 15,013 at a 41.4k token/s median,
+with finite loss, approximately 0.99 normalized block entropy, and 16/16
+distinct monitored paths.
