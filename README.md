@@ -227,10 +227,15 @@ instead maps every head independently from `64 -> d_cache`, stores
 head's cache payload. Prepared `d_cache=16/32/64` CPBC-FB C128-U4 variants keep
 the Q2 250M training and benchmark contract. `d32` exactly matches the current
 shared model's parameter count, while `d64` removes forced dimensional
-compression per head. The current Triton reader remains shared-code-only, so
-per-head variants use the static BlockMask Flex reader. Architecture,
-checkpoint boundaries, correctness results, and B200 memory/throughput are in
-[reports/bdre_strict_per_head_cache_report.md](./reports/bdre_strict_per_head_cache_report.md).
+compression per head. A strict per-head Triton reader now supports all three
+cache dimensions and preserves isolated forward/backward head addressing.
+Together with the equivalent recompute prefix compiler, it improves d32
+throughput from about 10.5k to 14.1k token/s and reduces peak allocation from
+74,368 MiB to 51,621 MiB at BS16/S2048. Architecture
+and checkpoint boundaries are in
+[reports/bdre_strict_per_head_cache_report.md](./reports/bdre_strict_per_head_cache_report.md);
+matched-backend profiling and DDP acceptance are in
+[reports/bdre_per_head_triton_optimization_report.md](./reports/bdre_per_head_triton_optimization_report.md).
 
 The additive `synchronous_prefix` backend is now named **Chunkwise Progressive
 Bank Completion (CPBC)**. CPBC is an approximate prefill procedure in which each
@@ -345,6 +350,9 @@ configs/train/stage5_bdre_tiny_tbptt_debug.yaml
 configs/model/brian_r125_bdre_cpbc_fb_c128_per_head_flex_incremental_d16.yaml
 configs/model/brian_r125_bdre_cpbc_fb_c128_per_head_flex_incremental_d32.yaml
 configs/model/brian_r125_bdre_cpbc_fb_c128_per_head_flex_incremental_d64.yaml
+configs/model/brian_r125_bdre_cpbc_fb_c128_per_head_triton_recompute_d16.yaml
+configs/model/brian_r125_bdre_cpbc_fb_c128_per_head_triton_recompute_d32.yaml
+configs/model/brian_r125_bdre_cpbc_fb_c128_per_head_triton_recompute_d64.yaml
 configs/train/q7_cpbc_r125_250m_fb_u4_c128_per_head_d16_ddp2_legacyval.yaml
 configs/train/q7_cpbc_r125_250m_fb_u4_c128_per_head_d32_ddp2_legacyval.yaml
 configs/train/q7_cpbc_r125_250m_fb_u4_c128_per_head_d64_ddp2_legacyval.yaml

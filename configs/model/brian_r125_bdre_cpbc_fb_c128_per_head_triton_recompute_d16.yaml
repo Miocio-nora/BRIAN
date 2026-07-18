@@ -1,0 +1,7 @@
+extends: brian_r125_bdre_cpbc_fb_c128_per_head_flex_incremental_d16.yaml
+model_name: brian_r125_bdre_cpbc_fb_c128_per_head_triton_recompute_d16
+
+# Mathematically equivalent execution path tuned for the larger per-head payload.
+execution:
+  prefix_compile: recompute
+  reader_kernel: triton_fused

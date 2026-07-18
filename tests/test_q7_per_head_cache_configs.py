@@ -33,6 +33,26 @@ def test_q7_per_head_models_keep_fb_u4_execution_contract(cache_dim: int) -> Non
 
 
 @pytest.mark.parametrize("cache_dim", [16, 32, 64])
+def test_q7_optimized_models_use_equivalent_triton_recompute_path(cache_dim: int) -> None:
+    path = CONFIG_ROOT / (
+        "model/brian_r125_bdre_cpbc_fb_c128_"
+        f"per_head_triton_recompute_d{cache_dim}.yaml"
+    )
+    raw = load_config(path)
+    config = BDREConfig.from_dict(raw, config_dir=path.parent)
+
+    assert config.cache_layout == "per_head"
+    assert config.key_dim == config.value_dim == cache_dim
+    assert config.depth_visibility_policy == "full_bank"
+    assert config.chunk_size == 128
+    assert config.dispatch_mode == "grouped_mm_gpu"
+    assert config.synchronous_attention_backend == "shared_padded_flex_blockmask"
+    assert config.writer_projection_mode == "precomposed"
+    assert config.prefix_compile_mode == "recompute"
+    assert config.reader_kernel_mode == "triton_fused"
+
+
+@pytest.mark.parametrize("cache_dim", [16, 32, 64])
 def test_q7_per_head_training_changes_only_architecture_identity(cache_dim: int) -> None:
     reference = load_config(Q2_TRAIN)
     path = CONFIG_ROOT / (
@@ -62,7 +82,7 @@ def test_q7_per_head_training_changes_only_architecture_identity(cache_dim: int)
         assert candidate[key] == reference[key], key
 
     assert f"per_head_d{cache_dim}" in candidate["run_name"]
-    assert f"per_head_flex_incremental_d{cache_dim}.yaml" in candidate["model_config"]
+    assert f"per_head_triton_recompute_d{cache_dim}.yaml" in candidate["model_config"]
     assert candidate["max_steps"] * candidate["expected_global_batch_size"] * 2048 == 250_019_840
     assert candidate["checkpoint_benchmarks"]["reasoning"] == reference["checkpoint_benchmarks"]["reasoning"]
     assert candidate["checkpoint_benchmarks"]["public"] == reference["checkpoint_benchmarks"]["public"]

@@ -169,7 +169,7 @@ token $i$ 在 step $s$ 进入 block $b=b_{i,s}$。令 $\bm h_{i,s}$ 为路由前
 \end{align}
 compiler 的位置与 depth 权重仍只定义在 writer-step 轴，但分别作用于每个 head 的 payload，因此不发生 cross-head cache mixing。reader $r$ 的 head $h$ 只读取 $\bm c^{X,(h)}$，再以独立 $B^{X,(h)}_r$ 映射回 $d_h=64$。heads 仍通过共同 hidden state、attention output projection 与后续 blocks 间接交换信息。
 
-当前实现提供 $d_c\in\{16,32,64\}$。per-head-$d_c=32$ 与默认 shared-$r_K=r_V=32$ 的总参数量同为 $140{,}308{,}105$，构成 parameter-matched ablation；$d_c=64$ 不再施加强制的单 head 维度压缩。per-head cache 多一个 head 轴，当前使用 static BlockMask Flex reader；现有 Triton fused reader 仍只接受 shared code layout。
+当前实现提供 $d_c\in\{16,32,64\}$。per-head-$d_c=32$ 与默认 shared-$r_K=r_V=32$ 的总参数量同为 $140{,}308{,}105$，构成 parameter-matched ablation；$d_c=64$ 不再施加强制的单 head 维度压缩。per-head cache 多一个 head 轴；实现已将 differentiable Triton reader 扩展为严格 head-strided K/V 访问，并在反向中为每个 head 独立生成 cache gradient。结合等价的 recompute prefix compiler，$d_c=32$ 在 B200、BS16、S2048、FB-C128-U4 下由约 $1.05\times10^4$ 提升到 $1.41\times10^4$ token/s，peak allocated memory 由 $74{,}368$ MiB 降至 $51{,}621$ MiB。
 
 \subsection{BDRE compiler}
 对 reader block $r$、可选 reader step $\ell$ 与 writer step $s$，实现使用统一分数

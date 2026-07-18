@@ -143,8 +143,10 @@ if triton is not None:
         query_stride_h: tl.constexpr,
         key_code_stride_g: tl.constexpr,
         key_code_stride_k: tl.constexpr,
+        key_code_stride_h: tl.constexpr,
         value_code_stride_g: tl.constexpr,
         value_code_stride_k: tl.constexpr,
+        value_code_stride_h: tl.constexpr,
         key_read_stride_r: tl.constexpr,
         key_read_stride_h: tl.constexpr,
         key_read_stride_k: tl.constexpr,
@@ -237,6 +239,7 @@ if triton is not None:
                 key_code_ptr
                 + group_index * key_code_stride_g
                 + offsets_n[:, None] * key_code_stride_k
+                + head_index * key_code_stride_h
                 + offsets_key_dim[None, :],
                 mask=key_mask[:, None],
                 other=0.0,
@@ -278,6 +281,7 @@ if triton is not None:
                 value_code_ptr
                 + group_index * value_code_stride_g
                 + offsets_n[:, None] * value_code_stride_k
+                + head_index * value_code_stride_h
                 + offsets_value_dim[None, :],
                 mask=key_mask[:, None],
                 other=0.0,
@@ -480,8 +484,10 @@ if triton is not None:
         query_stride_h: tl.constexpr,
         key_code_stride_g: tl.constexpr,
         key_code_stride_k: tl.constexpr,
+        key_code_stride_h: tl.constexpr,
         value_code_stride_g: tl.constexpr,
         value_code_stride_k: tl.constexpr,
+        value_code_stride_h: tl.constexpr,
         key_read_stride_r: tl.constexpr,
         key_read_stride_h: tl.constexpr,
         key_read_stride_k: tl.constexpr,
@@ -586,6 +592,7 @@ if triton is not None:
                 key_code_ptr
                 + group_index * key_code_stride_g
                 + offsets_n[:, None] * key_code_stride_k
+                + head_index * key_code_stride_h
                 + offsets_key_dim[None, :],
                 mask=key_mask[:, None],
                 other=0.0,
@@ -625,6 +632,7 @@ if triton is not None:
                 value_code_ptr
                 + group_index * value_code_stride_g
                 + offsets_n[:, None] * value_code_stride_k
+                + head_index * value_code_stride_h
                 + offsets_value_dim[None, :],
                 mask=key_mask[:, None],
                 other=0.0,
@@ -677,8 +685,10 @@ if triton is not None:
         query_stride_h: tl.constexpr,
         key_code_stride_g: tl.constexpr,
         key_code_stride_k: tl.constexpr,
+        key_code_stride_h: tl.constexpr,
         value_code_stride_g: tl.constexpr,
         value_code_stride_k: tl.constexpr,
+        value_code_stride_h: tl.constexpr,
         key_read_stride_r: tl.constexpr,
         key_read_stride_h: tl.constexpr,
         key_read_stride_k: tl.constexpr,
@@ -719,6 +729,7 @@ if triton is not None:
             key_code_ptr
             + group_index * key_code_stride_g
             + offsets_n[:, None] * key_code_stride_k
+            + head_index * key_code_stride_h
             + offsets_key_dim[None, :],
             mask=key_mask[:, None],
             other=0.0,
@@ -759,6 +770,7 @@ if triton is not None:
             value_code_ptr
             + group_index * value_code_stride_g
             + offsets_n[:, None] * value_code_stride_k
+            + head_index * value_code_stride_h
             + offsets_value_dim[None, :],
             mask=key_mask[:, None],
             other=0.0,
@@ -901,6 +913,7 @@ if triton is not None:
         offsets_r = tl.arange(0, KEY_DIM)
         key_mask = offsets_k < KEY_LENGTH
         accumulator = tl.zeros((BLOCK_K, KEY_DIM), dtype=tl.float32)
+
         for head_index in range(HEADS):
             grad_decoded = tl.load(
                 grad_decoded_ptr
@@ -929,12 +942,68 @@ if triton is not None:
         )
 
     @triton.jit
+    def _bdre_per_head_key_code_backward_kernel(
+        grad_decoded_ptr,
+        key_read_ptr,
+        grad_key_code_ptr,
+        grad_decoded_stride_g: tl.constexpr,
+        grad_decoded_stride_h: tl.constexpr,
+        grad_decoded_stride_k: tl.constexpr,
+        key_read_stride_r: tl.constexpr,
+        key_read_stride_h: tl.constexpr,
+        key_read_stride_k: tl.constexpr,
+        grad_key_code_stride_g: tl.constexpr,
+        grad_key_code_stride_k: tl.constexpr,
+        grad_key_code_stride_h: tl.constexpr,
+        BATCH: tl.constexpr,
+        KEY_LENGTH: tl.constexpr,
+        HEAD_DIM: tl.constexpr,
+        KEY_DIM: tl.constexpr,
+        BLOCK_K: tl.constexpr,
+    ):
+        group_index = tl.program_id(0)
+        head_index = tl.program_id(1)
+        key_block = tl.program_id(2)
+        reader_index = group_index // BATCH
+        offsets_k = key_block * BLOCK_K + tl.arange(0, BLOCK_K)
+        offsets_d = tl.arange(0, HEAD_DIM)
+        offsets_r = tl.arange(0, KEY_DIM)
+        key_mask = offsets_k < KEY_LENGTH
+        grad_decoded = tl.load(
+            grad_decoded_ptr
+            + group_index * grad_decoded_stride_g
+            + head_index * grad_decoded_stride_h
+            + offsets_k[:, None] * grad_decoded_stride_k
+            + offsets_d[None, :],
+            mask=key_mask[:, None],
+            other=0.0,
+        )
+        key_read = tl.load(
+            key_read_ptr
+            + reader_index * key_read_stride_r
+            + head_index * key_read_stride_h
+            + offsets_r[:, None] * key_read_stride_k
+            + offsets_d[None, :]
+        )
+        grad_key_code = tl.dot(grad_decoded, tl.trans(key_read))
+        tl.store(
+            grad_key_code_ptr
+            + group_index * grad_key_code_stride_g
+            + offsets_k[:, None] * grad_key_code_stride_k
+            + head_index * grad_key_code_stride_h
+            + offsets_r[None, :],
+            grad_key_code,
+            mask=key_mask[:, None],
+        )
+
+    @triton.jit
     def _bdre_key_read_backward_kernel(
         key_code_ptr,
         grad_decoded_ptr,
         grad_key_read_ptr,
         key_code_stride_g: tl.constexpr,
         key_code_stride_k: tl.constexpr,
+        key_code_stride_h: tl.constexpr,
         grad_decoded_stride_g: tl.constexpr,
         grad_decoded_stride_h: tl.constexpr,
         grad_decoded_stride_k: tl.constexpr,
@@ -967,6 +1036,7 @@ if triton is not None:
                     key_code_ptr
                     + group_index * key_code_stride_g
                     + offsets_k[None, :] * key_code_stride_k
+                    + head_index * key_code_stride_h
                     + offsets_r[:, None],
                     mask=key_mask[None, :] & (offsets_r[:, None] < KEY_DIM),
                     other=0.0,
@@ -1015,28 +1085,60 @@ def triton_compact_reader_forward(
         raise RuntimeError("The Triton RC-KV reader requires PyTorch and Triton.")
     if not query.is_cuda or query.dtype != torch.bfloat16:
         raise ValueError("The Triton RC-KV reader currently requires CUDA BF16 queries.")
-    if query.ndim != 3 or key_codes.ndim != 4 or value_codes.ndim != 4:
+    if (
+        query.ndim != 3
+        or key_codes.ndim not in {4, 5}
+        or value_codes.ndim != key_codes.ndim
+    ):
         raise ValueError("Unexpected compact reader tensor rank.")
-    readers, cache_batch, key_length, key_dim = key_codes.shape
+    readers, cache_batch, key_length = key_codes.shape[:3]
+    per_head = key_codes.ndim == 5
+    heads, head_dim = query.shape[1:]
     if cache_batch != batch or value_codes.shape[:3] != key_codes.shape[:3]:
         raise ValueError("Canonical Key/Value cache shapes do not match.")
-    heads, head_dim = query.shape[1:]
+    if per_head:
+        if key_codes.size(3) != heads or value_codes.size(3) != heads:
+            raise ValueError("Strict per-head caches must match the query head count.")
+        if value_codes.shape[:4] != key_codes.shape[:4]:
+            raise ValueError("Per-head canonical Key/Value cache shapes do not match.")
+    key_dim = key_codes.size(-1)
     value_dim = value_codes.size(-1)
     if key_read.shape != (readers, heads, key_dim, head_dim):
         raise ValueError("Unexpected Key reader shape.")
     if value_read.shape != (readers, heads, value_dim, head_dim):
         raise ValueError("Unexpected Value reader shape.")
-    if head_dim % 2 or key_dim != 32 or value_dim != 32:
-        raise ValueError("The initial Triton reader supports even heads and rK=rV=32.")
+    if head_dim % 32 or key_dim not in {16, 32, 64} or value_dim not in {16, 32, 64}:
+        raise ValueError(
+            "The Triton reader requires head dimensions divisible by 32 and cache "
+            "dimensions in {16,32,64}."
+        )
     if block_m not in {16, 32, 64, 128} or block_n not in {16, 32, 64}:
         raise ValueError("Unsupported Triton reader block size.")
 
-    compact_key_codes = key_codes.contiguous().view(readers * batch, key_length, key_dim)
-    compact_value_codes = value_codes.contiguous().view(
-        readers * batch,
-        key_length,
-        value_dim,
-    )
+    if per_head:
+        compact_key_codes = key_codes.contiguous().view(
+            readers * batch,
+            key_length,
+            heads,
+            key_dim,
+        )
+        compact_value_codes = value_codes.contiguous().view(
+            readers * batch,
+            key_length,
+            heads,
+            value_dim,
+        )
+        key_code_head_stride = compact_key_codes.stride(2)
+        value_code_head_stride = compact_value_codes.stride(2)
+    else:
+        compact_key_codes = key_codes.contiguous().view(readers * batch, key_length, key_dim)
+        compact_value_codes = value_codes.contiguous().view(
+            readers * batch,
+            key_length,
+            value_dim,
+        )
+        key_code_head_stride = 0
+        value_code_head_stride = 0
     cosine = cosine.reshape(-1, head_dim).contiguous()
     sine = sine.reshape(-1, head_dim).contiguous()
     output = torch.zeros_like(query)
@@ -1073,8 +1175,10 @@ def triton_compact_reader_forward(
         query.stride(1),
         compact_key_codes.stride(0),
         compact_key_codes.stride(1),
+        key_code_head_stride,
         compact_value_codes.stride(0),
         compact_value_codes.stride(1),
+        value_code_head_stride,
         key_read.stride(0),
         key_read.stride(1),
         key_read.stride(2),
@@ -1203,17 +1307,37 @@ if torch is not None:
                 lse,
             ) = ctx.saved_tensors
             grad_output = grad_output.contiguous()
-            readers, batch, key_length, key_dim = key_codes.shape
+            readers, batch, key_length = key_codes.shape[:3]
             groups = readers * batch
             heads = query.size(1)
             head_dim = query.size(2)
+            per_head = key_codes.ndim == 5
+            key_dim = key_codes.size(-1)
             value_dim = value_codes.size(-1)
-            compact_key_codes = key_codes.contiguous().view(groups, key_length, key_dim)
-            compact_value_codes = value_codes.contiguous().view(
-                groups,
-                key_length,
-                value_dim,
-            )
+            if per_head:
+                compact_key_codes = key_codes.contiguous().view(
+                    groups,
+                    key_length,
+                    heads,
+                    key_dim,
+                )
+                compact_value_codes = value_codes.contiguous().view(
+                    groups,
+                    key_length,
+                    heads,
+                    value_dim,
+                )
+                key_code_head_stride = compact_key_codes.stride(2)
+                value_code_head_stride = compact_value_codes.stride(2)
+            else:
+                compact_key_codes = key_codes.contiguous().view(groups, key_length, key_dim)
+                compact_value_codes = value_codes.contiguous().view(
+                    groups,
+                    key_length,
+                    value_dim,
+                )
+                key_code_head_stride = 0
+                value_code_head_stride = 0
             cosine = cosine.reshape(-1, head_dim).contiguous()
             sine = sine.reshape(-1, head_dim).contiguous()
 
@@ -1297,8 +1421,10 @@ if torch is not None:
                 query.stride(1),
                 compact_key_codes.stride(0),
                 compact_key_codes.stride(1),
+                key_code_head_stride,
                 compact_value_codes.stride(0),
                 compact_value_codes.stride(1),
+                value_code_head_stride,
                 key_read.stride(0),
                 key_read.stride(1),
                 key_read.stride(2),
@@ -1366,8 +1492,10 @@ if torch is not None:
                 query.stride(1),
                 compact_key_codes.stride(0),
                 compact_key_codes.stride(1),
+                key_code_head_stride,
                 compact_value_codes.stride(0),
                 compact_value_codes.stride(1),
+                value_code_head_stride,
                 key_read.stride(0),
                 key_read.stride(1),
                 key_read.stride(2),
@@ -1400,29 +1528,54 @@ if torch is not None:
 
             grad_key_codes_compact = torch.empty_like(compact_key_codes)
             key_code_block = 32
-            _bdre_key_code_backward_kernel[
-                (groups, triton.cdiv(key_length, key_code_block))
-            ](
-                grad_decoded_key,
-                key_read,
-                grad_key_codes_compact,
-                grad_decoded_key.stride(0),
-                grad_decoded_key.stride(1),
-                grad_decoded_key.stride(2),
-                key_read.stride(0),
-                key_read.stride(1),
-                key_read.stride(2),
-                grad_key_codes_compact.stride(0),
-                grad_key_codes_compact.stride(1),
-                BATCH=batch,
-                HEADS=heads,
-                KEY_LENGTH=key_length,
-                HEAD_DIM=head_dim,
-                KEY_DIM=key_dim,
-                BLOCK_K=key_code_block,
-                num_warps=2,
-                num_stages=2,
-            )
+            if per_head:
+                _bdre_per_head_key_code_backward_kernel[
+                    (groups, heads, triton.cdiv(key_length, key_code_block))
+                ](
+                    grad_decoded_key,
+                    key_read,
+                    grad_key_codes_compact,
+                    grad_decoded_key.stride(0),
+                    grad_decoded_key.stride(1),
+                    grad_decoded_key.stride(2),
+                    key_read.stride(0),
+                    key_read.stride(1),
+                    key_read.stride(2),
+                    grad_key_codes_compact.stride(0),
+                    grad_key_codes_compact.stride(1),
+                    grad_key_codes_compact.stride(2),
+                    BATCH=batch,
+                    KEY_LENGTH=key_length,
+                    HEAD_DIM=head_dim,
+                    KEY_DIM=key_dim,
+                    BLOCK_K=key_code_block,
+                    num_warps=2,
+                    num_stages=2,
+                )
+            else:
+                _bdre_key_code_backward_kernel[
+                    (groups, triton.cdiv(key_length, key_code_block))
+                ](
+                    grad_decoded_key,
+                    key_read,
+                    grad_key_codes_compact,
+                    grad_decoded_key.stride(0),
+                    grad_decoded_key.stride(1),
+                    grad_decoded_key.stride(2),
+                    key_read.stride(0),
+                    key_read.stride(1),
+                    key_read.stride(2),
+                    grad_key_codes_compact.stride(0),
+                    grad_key_codes_compact.stride(1),
+                    BATCH=batch,
+                    HEADS=heads,
+                    KEY_LENGTH=key_length,
+                    HEAD_DIM=head_dim,
+                    KEY_DIM=key_dim,
+                    BLOCK_K=key_code_block,
+                    num_warps=2,
+                    num_stages=2,
+                )
             grad_key_codes = grad_key_codes_compact.view_as(key_codes)
             grad_key_read = torch.empty_like(key_read)
             key_read_tiles = math.ceil(key_dim / 16) * math.ceil(head_dim / 32)
@@ -1432,6 +1585,7 @@ if torch is not None:
                 grad_key_read,
                 compact_key_codes.stride(0),
                 compact_key_codes.stride(1),
+                key_code_head_stride,
                 grad_decoded_key.stride(0),
                 grad_decoded_key.stride(1),
                 grad_decoded_key.stride(2),
@@ -1448,13 +1602,22 @@ if torch is not None:
                 num_warps=4,
                 num_stages=2,
             )
-            grad_value_codes = grad_value_head.view(
-                readers,
-                batch,
-                heads,
-                key_length,
-                value_dim,
-            ).sum(dim=2)
+            if per_head:
+                grad_value_codes = grad_value_head.view(
+                    readers,
+                    batch,
+                    heads,
+                    key_length,
+                    value_dim,
+                ).permute(0, 1, 3, 2, 4).contiguous()
+            else:
+                grad_value_codes = grad_value_head.view(
+                    readers,
+                    batch,
+                    heads,
+                    key_length,
+                    value_dim,
+                ).sum(dim=2)
             return (
                 grad_query,
                 grad_key_codes,

@@ -1,0 +1,5 @@
+extends: brian_r125_bdre_cpbc_fb_c128_per_head_triton_recompute_d16.yaml
+model_name: brian_r125_bdre_cpbc_fb_c128_per_head_triton_recompute_d32
+
+bdre_key_dim: 32
+bdre_value_dim: 32

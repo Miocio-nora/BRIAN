@@ -96,6 +96,9 @@ Prepared CPBC-FB C128 U4 variants:
 configs/model/brian_r125_bdre_cpbc_fb_c128_per_head_flex_incremental_d16.yaml
 configs/model/brian_r125_bdre_cpbc_fb_c128_per_head_flex_incremental_d32.yaml
 configs/model/brian_r125_bdre_cpbc_fb_c128_per_head_flex_incremental_d64.yaml
+configs/model/brian_r125_bdre_cpbc_fb_c128_per_head_triton_recompute_d16.yaml
+configs/model/brian_r125_bdre_cpbc_fb_c128_per_head_triton_recompute_d32.yaml
+configs/model/brian_r125_bdre_cpbc_fb_c128_per_head_triton_recompute_d64.yaml
 
 configs/train/q7_cpbc_r125_250m_fb_u4_c128_per_head_d16_ddp2_legacyval.yaml
 configs/train/q7_cpbc_r125_250m_fb_u4_c128_per_head_d32_ddp2_legacyval.yaml
@@ -130,19 +133,21 @@ Implemented paths:
 - exact token-serial training/incremental inference;
 - CPBC-DP and CPBC-FB reference execution;
 - incremental-exact prefix compilation with a rank-specialized per-head graph;
+- vectorized recompute compilation, selected by default for the larger payload;
 - grouped-GPU route-step dispatch;
 - precomposed strict per-head writer projection;
 - static BlockMask FlexAttention reader;
+- differentiable per-head Triton reader for cache dimensions 16, 32, and 64;
 - stateful TBPTT and manual DDP gradient synchronization.
 
 The precomposed writer preserves strict head ownership. For each head, only
 that head's slice of the local K/V projection is composed with its writer
 matrix. No dense all-head writer is introduced by the optimization.
 
-The current Triton fused reader accepts shared `[reader,batch,token,d]` codes
-and does not accept the additional head axis. Per-head configurations therefore
-require `execution.reader_kernel: flex`. Existing shared Triton behavior is
-unchanged.
+The Triton reader accepts shared `[reader,batch,token,d]` and strict per-head
+`[reader,batch,token,head,d]` codes. A cache head stride of zero preserves the
+existing shared kernel; a real head stride enforces isolated per-head access.
+The Flex path remains the small-shape and FP32 evaluation fallback.
 
 ## 6. Correctness Results
 
@@ -154,15 +159,17 @@ Validated properties:
 - CPBC-FB with `chunk=1` matches exact token-serial logits;
 - gradients reach every independent writer-head tensor;
 - static GPU BlockMask forward/backward matches the explicit reader within BF16 tolerance;
+- per-head Triton forward/backward matches BlockMask for d16, d32, and d64;
+- recompute and incremental-exact compilation agree for both cache layouts;
 - two-process stateful TBPTT gradients match a merged global batch;
 - existing shared execution remains green.
 
 Verification summary:
 
 ```text
-tests/test_bdre_shared_kv.py:       61 passed on CUDA
+tests/test_bdre_shared_kv.py:       65 passed on CUDA
 tests/test_stateful_ddp.py:          2 passed
-Q7 configs + config inventory:      30 passed
+Q7 configs + config inventory:      33 passed
 Python compileall:                   passed
 ```
 
@@ -175,21 +182,22 @@ local batch = 16
 sequence = 2048
 CPBC-FB C128 U4
 BF16 autocast
-warmup = 1
-measured repeats = 1
+warmup = 2
+measured repeats = 3
 ```
 
-| Layout | Reader | token/s | Slowdown vs shared | Peak allocated | Peak reserved |
+| Layout | Execution | token/s | Slowdown vs shared | Peak allocated | Peak reserved |
 | --- | --- | ---: | ---: | ---: | ---: |
-| shared-d32 | Triton fused | 20,479 | 1.00x | 15,710 MiB | 16,686 MiB |
-| per-head-d16 | Flex | 11,622 | 1.76x | 54,347 MiB | 67,120 MiB |
-| per-head-d32 | Flex | 10,198 | 2.01x | 74,370 MiB | 94,226 MiB |
-| per-head-d64 | Flex | 8,439 | 2.43x | 114,870 MiB | 161,694 MiB |
+| shared-d32 | Triton + incremental | 20,341 | 1.00x | 15,710 MiB | 16,686 MiB |
+| per-head-d16 | Triton + recompute | 16,590 | 1.23x | 31,913 MiB | 45,516 MiB |
+| per-head-d32 | Triton + recompute | 14,135 | 1.44x | 51,621 MiB | 78,234 MiB |
+| per-head-d64 | Triton + recompute | 10,642 | 1.91x | 90,858 MiB | 145,456 MiB |
 
-All three per-head variants completed a full local-BS16 backward on B200.
-`d64` has limited allocator headroom and is more exposed to fragmentation or
-additional trainer allocations. These numbers measure implementation cost,
-not model quality or final DDP throughput.
+All three per-head variants completed a full local-BS16 backward on B200. The
+optimized path improves throughput by 25.5-38.9% and cuts allocated memory by
+20.9-41.3% relative to matched per-head Flex baselines. `d64` remains exposed
+to allocator fragmentation. Detailed matched-backend and DDP results are in
+[`bdre_per_head_triton_optimization_report.md`](./bdre_per_head_triton_optimization_report.md).
 
 ## 8. Checkpoint Boundary
 

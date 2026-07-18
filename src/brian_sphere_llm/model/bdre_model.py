@@ -631,10 +631,6 @@ class BDREConfig:
                 "covering all route blocks."
             )
         if self.cache_layout == "per_head":
-            if self.reader_kernel_mode == "triton_fused":
-                raise ValueError(
-                    "Strict per-head BDRE cache currently requires reader_kernel=flex."
-                )
             if self.synchronous_attention_backend in {
                 "shared_padded_flex",
                 "ragged_flex_blockmask",
@@ -2922,13 +2918,17 @@ class BrianBDRERouteCore(BrianRouteCore):
             if historical_state.step_keys is None or historical_state.step_values is None:
                 raise ValueError("Synchronous-prefix history is missing step cache tensors.")
             key_parts.append(
-                historical_state.step_keys[:, :, reader_step, :, :].permute(2, 0, 1, 3)
+                self._reader_major_cache(
+                    historical_state.step_keys[:, :, reader_step]
+                )
             )
             value_parts.append(
-                historical_state.step_values[:, :, reader_step, :, :].permute(2, 0, 1, 3)
+                self._reader_major_cache(
+                    historical_state.step_values[:, :, reader_step]
+                )
             )
-        key_parts.append(current_keys.permute(2, 0, 1, 3))
-        value_parts.append(current_values.permute(2, 0, 1, 3))
+        key_parts.append(self._reader_major_cache(current_keys))
+        value_parts.append(self._reader_major_cache(current_values))
         key_codes = torch.cat(key_parts, dim=2)
         value_codes = torch.cat(value_parts, dim=2)
         key_read = torch.stack([projection.key_read for projection in self.bdre_projections]).to(

@@ -282,11 +282,15 @@ def test_per_head_compiler_matches_independent_head_compilation() -> None:
     assert torch.allclose(per_head.values, torch.stack(value_references, dim=2))
 
 
-def test_incremental_prefix_compile_mode_matches_recompute_model() -> None:
+@pytest.mark.parametrize("cache_layout", ["shared", "per_head"])
+def test_incremental_prefix_compile_mode_matches_recompute_model(
+    cache_layout: str,
+) -> None:
     torch.manual_seed(20)
     reference_config = _synchronous_config(
         chunk_size=8,
         attention_backend="shared_padded_explicit",
+        cache_layout=cache_layout,
     )
     incremental_config = replace(reference_config, prefix_compile_mode="incremental_exact")
     reference = BrianBDRERouteCore(reference_config).train()
@@ -1412,6 +1416,68 @@ def test_per_head_gpu_static_blockmask_matches_explicit_reader_within_rounding()
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is required")
+@pytest.mark.parametrize("cache_dim", [16, 32, 64])
+def test_per_head_triton_reader_matches_static_blockmask_within_rounding(
+    cache_dim: int,
+) -> None:
+    torch.manual_seed(715 + cache_dim)
+    static_config = replace(
+        _cuda_flex_synchronous_config(chunk_size=8, flex_reader_group_size=2),
+        cache_layout="per_head",
+        key_dim=cache_dim,
+        value_dim=cache_dim,
+        synchronous_attention_backend="shared_padded_flex_blockmask",
+        dispatch_mode="grouped_mm_gpu",
+        flex_kernel_variant="bwd32_fwd32",
+        decoded_key_rope_mode="compiled",
+        writer_projection_mode="precomposed",
+        route_pointwise_mode="compiled",
+        prefix_compile_mode="incremental_exact",
+    )
+    static_config = replace(
+        static_config,
+        route=replace(
+            static_config.route,
+            base=replace(static_config.route.base, d_model=128, n_heads=4),
+        ),
+    )
+    triton_config = replace(static_config, reader_kernel_mode="triton_fused")
+    static = BrianBDRERouteCore(static_config).cuda().train()
+    candidate = BrianBDRERouteCore(triton_config).cuda().train()
+    candidate.load_state_dict(static.state_dict())
+    input_ids = torch.randint(0, 64, (3, 8), device="cuda")
+
+    with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+        static_output = static(
+            input_ids,
+            targets=input_ids,
+            route_mode="free",
+            summarize_routing=False,
+        )
+        candidate_output = candidate(
+            input_ids,
+            targets=input_ids,
+            route_mode="free",
+            summarize_routing=False,
+        )
+    static_output["loss"].backward()
+    candidate_output["loss"].backward()
+
+    logit_diff = (static_output["logits"].float() - candidate_output["logits"].float()).abs()
+    assert logit_diff.max().item() <= 0.3
+    assert logit_diff.mean().item() <= 0.04
+    assert torch.allclose(static_output["loss"], candidate_output["loss"], atol=3e-3, rtol=3e-3)
+    for static_parameter, candidate_parameter in (
+        (static.token_embedding.weight, candidate.token_embedding.weight),
+        (static.bdre_projections[0].key_write.weight, candidate.bdre_projections[0].key_write.weight),
+        (static.bdre_projections[1].key_read, candidate.bdre_projections[1].key_read),
+        (static.bdre_projections[1].value_read, candidate.bdre_projections[1].value_read),
+    ):
+        assert static_parameter.grad is not None and candidate_parameter.grad is not None
+        assert torch.allclose(static_parameter.grad, candidate_parameter.grad, atol=3e-2, rtol=3e-2)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is required")
 @pytest.mark.parametrize("depth_visibility_policy", ["depth_prefix", "full_bank"])
 @pytest.mark.parametrize("dispatch_mode", ["grouped_mm", "grouped_mm_gpu"])
 def test_flex_reader_cuda_is_suffix_invariant_and_stream_consistent(
@@ -1623,8 +1689,7 @@ def test_bdre_rejects_invalid_fused_reader_and_full_bank_execution_options() -> 
         writer_projection_mode="precomposed",
     )
     per_head_config.validate()
-    with pytest.raises(ValueError, match="requires reader_kernel=flex"):
-        replace(per_head_config, reader_kernel_mode="triton_fused").validate()
+    replace(per_head_config, reader_kernel_mode="triton_fused").validate()
     with pytest.raises(ValueError, match="requires grouped_mm_gpu"):
         replace(per_head_config, dispatch_mode="grouped_mm").validate()
     with pytest.raises(ValueError, match="requires writer_projection=precomposed"):

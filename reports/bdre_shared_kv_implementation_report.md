@@ -2,8 +2,8 @@
 
 **Status:** RC-KV exact oracle, CPBC approximate prefill, stateful TBPTT/DDP,
 grouped-MM, exact BlockMask reader grouping, online prefix compilation,
-GPU-static route-step execution, and an optional strict per-head cache layout
-are implemented and validated
+GPU-static route-step execution, an optional strict per-head cache layout, and
+its head-strided Triton reader are implemented and validated
 
 **Date:** 2026-07-18
 
@@ -13,6 +13,9 @@ are implemented and validated
 
 **Strict per-head cache report:**
 [`bdre_strict_per_head_cache_report.md`](./bdre_strict_per_head_cache_report.md)
+
+**Strict per-head Triton optimization:**
+[`bdre_per_head_triton_optimization_report.md`](./bdre_per_head_triton_optimization_report.md)
 
 **Academic report:**
 [`BRIAN_RC_KV_Implementation_Report.tex`](./BRIAN_RC_KV_Implementation_Report.tex)
@@ -51,7 +54,9 @@ The original and default layout still concatenates all local heads into one
 canonical code. An additive `bdre_cache_layout: per_head` ablation now stores
 one independent canonical code per head. It does not change existing shared
 configs or checkpoints; see the strict per-head report for formulas, supported
-execution paths, checkpoint boundaries, and B200 calibration.
+execution paths, checkpoint boundaries, and B200 calibration. The prepared Q7
+configs use the equivalent recompute compiler and strict per-head Triton reader;
+the Flex/incremental configs remain correctness oracles.
 
 The implementation now has two distinct execution contracts:
 
@@ -114,6 +119,9 @@ configs/model/brian_r125_bdre_cpbc_fb_c128_grouped_mm_flex.yaml
 configs/model/brian_r125_bdre_cpbc_fb_c128_per_head_flex_incremental_d16.yaml
 configs/model/brian_r125_bdre_cpbc_fb_c128_per_head_flex_incremental_d32.yaml
 configs/model/brian_r125_bdre_cpbc_fb_c128_per_head_flex_incremental_d64.yaml
+configs/model/brian_r125_bdre_cpbc_fb_c128_per_head_triton_recompute_d16.yaml
+configs/model/brian_r125_bdre_cpbc_fb_c128_per_head_triton_recompute_d32.yaml
+configs/model/brian_r125_bdre_cpbc_fb_c128_per_head_triton_recompute_d64.yaml
 ```
 
 Current training and ablation configurations:

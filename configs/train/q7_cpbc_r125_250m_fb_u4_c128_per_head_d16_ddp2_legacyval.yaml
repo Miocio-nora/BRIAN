@@ -1,6 +1,6 @@
 extends: q2_cpbc_r125_250m_fb_u4_c128_triton_ddp2_legacyval.yaml
 run_name: q7_cpbc_r125_250m_fb_u4_c128_per_head_d16_ddp2_legacyval
-model_config: ../model/brian_r125_bdre_cpbc_fb_c128_per_head_flex_incremental_d16.yaml
+model_config: ../model/brian_r125_bdre_cpbc_fb_c128_per_head_triton_recompute_d16.yaml
 
 checkpoint_benchmarks:
   output_dir: runs/q7_cpbc_r125_250m_fb_u4_c128_per_head_d16_ddp2_legacyval/benchmarks

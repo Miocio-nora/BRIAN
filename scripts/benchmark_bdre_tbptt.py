@@ -34,6 +34,7 @@ def main() -> None:
     parser.add_argument("--writer-projection-mode", default=None)
     parser.add_argument("--route-pointwise-mode", default=None)
     parser.add_argument("--prefix-compile-mode", default=None)
+    parser.add_argument("--reader-kernel", choices=("flex", "triton_fused"), default=None)
     parser.add_argument("--seed", type=int, default=123)
     parser.add_argument("--warmup-steps", type=int, default=0)
     parser.add_argument("--repeats", type=int, default=1)
@@ -81,6 +82,7 @@ def main() -> None:
             args.writer_projection_mode,
             args.route_pointwise_mode,
             args.prefix_compile_mode,
+            args.reader_kernel,
         )
     ):
         model.bdre_config = replace(
@@ -114,6 +116,11 @@ def main() -> None:
                 args.prefix_compile_mode
                 if args.prefix_compile_mode is not None
                 else model.bdre_config.prefix_compile_mode
+            ),
+            reader_kernel_mode=(
+                args.reader_kernel
+                if args.reader_kernel is not None
+                else model.bdre_config.reader_kernel_mode
             ),
         )
         model.bdre_config.validate()
@@ -203,6 +210,8 @@ def main() -> None:
         "writer_projection_mode": model.bdre_config.writer_projection_mode,
         "route_pointwise_mode": model.bdre_config.route_pointwise_mode,
         "prefix_compile_mode": model.bdre_config.prefix_compile_mode,
+        "reader_kernel": model.bdre_config.reader_kernel_mode,
+        "cache_layout": model.bdre_config.cache_layout,
         "warmup_steps": args.warmup_steps,
         "repeats": args.repeats,
         "elapsed_seconds": median_elapsed,
