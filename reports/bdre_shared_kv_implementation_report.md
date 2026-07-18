@@ -1,14 +1,18 @@
 # BRIAN RC-KV / CPBC Implementation Report
 
 **Status:** RC-KV exact oracle, CPBC approximate prefill, stateful TBPTT/DDP,
-grouped-MM, exact BlockMask reader grouping, online prefix compilation, and
-GPU-static route-step execution are implemented and validated
+grouped-MM, exact BlockMask reader grouping, online prefix compilation,
+GPU-static route-step execution, and an optional strict per-head cache layout
+are implemented and validated
 
-**Date:** 2026-07-16
+**Date:** 2026-07-18
 
 **Working model:** `BRIAN-R125-BDRE-RCKV-v1`
 
-**Current acceleration branch:** `rc-kv-static-route-step`
+**Current experimental branch:** `rc-kv-per-head-cache`
+
+**Strict per-head cache report:**
+[`bdre_strict_per_head_cache_report.md`](./bdre_strict_per_head_cache_report.md)
 
 **Academic report:**
 [`BRIAN_RC_KV_Implementation_Report.tex`](./BRIAN_RC_KV_Implementation_Report.tex)
@@ -42,6 +46,12 @@ levels:
 "Shared KV" means that readers use a common canonical cache interface. It does
 not mean that Q/K/V projections, writer canonicalizers, or reader decoders are
 shared across blocks.
+
+The original and default layout still concatenates all local heads into one
+canonical code. An additive `bdre_cache_layout: per_head` ablation now stores
+one independent canonical code per head. It does not change existing shared
+configs or checkpoints; see the strict per-head report for formulas, supported
+execution paths, checkpoint boundaries, and B200 calibration.
 
 The implementation now has two distinct execution contracts:
 
@@ -101,6 +111,9 @@ configs/model/brian_r125_bdre_cpbc_dp_c2048_grouped_mm_flex_blockmask.yaml
 configs/model/brian_r125_bdre_cpbc_dp_c2048_grouped_mm_flex_blockmask_group8_incremental.yaml
 configs/model/brian_r125_bdre_cpbc_dp_c2048_grouped_mm_gpu_static_blockmask_incremental.yaml
 configs/model/brian_r125_bdre_cpbc_fb_c128_grouped_mm_flex.yaml
+configs/model/brian_r125_bdre_cpbc_fb_c128_per_head_flex_incremental_d16.yaml
+configs/model/brian_r125_bdre_cpbc_fb_c128_per_head_flex_incremental_d32.yaml
+configs/model/brian_r125_bdre_cpbc_fb_c128_per_head_flex_incremental_d64.yaml
 ```
 
 Current training and ablation configurations:
@@ -118,6 +131,9 @@ configs/train/cpbc_r125_5b_dp_u1_c2048_grouped_mm_gpu_static_blockmask_increment
 configs/train/cpbc_r125_5b_fb_u1_c128_grouped_mm_flex_ddp2_legacyval.yaml
 configs/train/bdre_rckv_r125_5b_ddp2_legacyval.yaml
 configs/train/bdre_rckv_r125_5b_tbptt_bs32_legacyval.yaml
+configs/train/q7_cpbc_r125_250m_fb_u4_c128_per_head_d16_ddp2_legacyval.yaml
+configs/train/q7_cpbc_r125_250m_fb_u4_c128_per_head_d32_ddp2_legacyval.yaml
+configs/train/q7_cpbc_r125_250m_fb_u4_c128_per_head_d64_ddp2_legacyval.yaml
 ```
 
 Related engineering reports remain useful for historical calibration details:

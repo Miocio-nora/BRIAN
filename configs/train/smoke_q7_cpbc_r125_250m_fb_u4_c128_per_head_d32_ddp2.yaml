@@ -1,0 +1,4 @@
+extends: smoke_q7_cpbc_r125_250m_fb_u4_c128_per_head_d16_ddp2.yaml
+run_name: smoke_q7_cpbc_r125_250m_fb_u4_c128_per_head_d32_ddp2
+model_config: ../model/brian_r125_bdre_cpbc_fb_c128_per_head_flex_incremental_d32.yaml
+output_root: tmp/runs_q7_cpbc_per_head_d32_smoke

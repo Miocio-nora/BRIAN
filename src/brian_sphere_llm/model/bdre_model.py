@@ -375,6 +375,7 @@ class BDREConfig:
     route: BrianRouteConfig
     key_dim: int = 32
     value_dim: int = 32
+    cache_layout: str = "shared"
     depth_mode: str = "none"
     step_lambda: float = 0.0
     position_tau: float = 1.0
@@ -420,6 +421,7 @@ class BDREConfig:
             route=route,
             key_dim=_int_value(data.get("bdre_key_dim", 32), "bdre_key_dim", minimum=1),
             value_dim=_int_value(data.get("bdre_value_dim", 32), "bdre_value_dim", minimum=1),
+            cache_layout=str(data.get("bdre_cache_layout", "shared")),
             depth_mode=str(data.get("bdre_depth_mode", "none")),
             step_lambda=_float_value(data.get("bdre_step_lambda", 0.0), "bdre_step_lambda", minimum=0.0),
             position_tau=_float_value(data.get("bdre_position_tau", 1.0), "bdre_position_tau", minimum=0.0),
@@ -492,6 +494,8 @@ class BDREConfig:
         return config
 
     def validate(self) -> None:
+        if self.cache_layout not in {"shared", "per_head"}:
+            raise ValueError("bdre_cache_layout must be 'shared' or 'per_head'.")
         if self.depth_mode not in {"none", "reader_step", "synchronous_prefix"}:
             raise ValueError("bdre_depth_mode must be 'none', 'reader_step', or 'synchronous_prefix'.")
         if self.reader_step_cache not in {"eager", "lazy", "dynamic"}:
@@ -626,6 +630,30 @@ class BDREConfig:
                 "The Triton fused reader requires static grouped_mm_gpu BlockMask dispatch "
                 "covering all route blocks."
             )
+        if self.cache_layout == "per_head":
+            if self.reader_kernel_mode == "triton_fused":
+                raise ValueError(
+                    "Strict per-head BDRE cache currently requires reader_kernel=flex."
+                )
+            if self.synchronous_attention_backend in {
+                "shared_padded_flex",
+                "ragged_flex_blockmask",
+            }:
+                raise ValueError(
+                    "Strict per-head BDRE cache supports per_query_reference, "
+                    "shared_padded_explicit, or shared_padded_flex_blockmask attention."
+                )
+            if self.dispatch_mode == "grouped_mm":
+                raise ValueError(
+                    "Strict per-head grouped execution currently requires grouped_mm_gpu."
+                )
+            if (
+                self.dispatch_mode == "grouped_mm_gpu"
+                and self.writer_projection_mode != "precomposed"
+            ):
+                raise ValueError(
+                    "Strict per-head grouped_mm_gpu requires writer_projection=precomposed."
+                )
         if not self.position_geometry_normalize:
             raise ValueError("BDRE v1 requires normalized position geometry.")
         if self.route.top_k != 1 or self.route.later_top_k != 1:
@@ -670,24 +698,91 @@ class _SynchronousGroupedMMWeights:
     ffn_down: torch.Tensor
 
 
-class BDREBlockProjection(ModuleBase):
-    """Independent writer canonicalizers and per-head reader decoders for one free block."""
+class BDREPerHeadWrite(ModuleBase):
+    """Strictly map each attention head into its own canonical cache code."""
 
-    def __init__(self, d_model: int, n_heads: int, key_dim: int, value_dim: int) -> None:
+    def __init__(self, n_heads: int, head_dim: int, code_dim: int) -> None:
+        if torch is None:
+            raise ModuleNotFoundError("PyTorch is required for BDRE projections.")
+        super().__init__()
+        self.n_heads = int(n_heads)
+        self.head_dim = int(head_dim)
+        self.code_dim = int(code_dim)
+        self.weight = nn.Parameter(torch.empty(n_heads, code_dim, head_dim))
+        for head_weight in self.weight:
+            nn.init.xavier_uniform_(head_weight)
+
+    def forward(self, head_values: torch.Tensor) -> torch.Tensor:
+        if head_values.shape[-2:] != (self.n_heads, self.head_dim):
+            raise ValueError(
+                "Strict per-head BDRE writes require [..., n_heads, head_dim] input."
+            )
+        return torch.einsum("...hd,hcd->...hc", head_values, self.weight)
+
+
+class BDREBlockProjection(ModuleBase):
+    """Writer canonicalizers and per-head reader decoders for one free block."""
+
+    def __init__(
+        self,
+        d_model: int,
+        n_heads: int,
+        key_dim: int,
+        value_dim: int,
+        *,
+        cache_layout: str = "shared",
+    ) -> None:
         if torch is None:
             raise ModuleNotFoundError("PyTorch is required for BDRE projections.")
         super().__init__()
         if d_model % n_heads != 0:
             raise ValueError("d_model must be divisible by n_heads.")
         head_dim = d_model // n_heads
-        self.key_write = nn.Linear(d_model, key_dim, bias=False)
-        self.value_write = nn.Linear(d_model, value_dim, bias=False)
+        if cache_layout not in {"shared", "per_head"}:
+            raise ValueError("cache_layout must be 'shared' or 'per_head'.")
+        self.cache_layout = cache_layout
+        self.n_heads = int(n_heads)
+        self.head_dim = int(head_dim)
+        if cache_layout == "shared":
+            self.key_write = nn.Linear(d_model, key_dim, bias=False)
+            self.value_write = nn.Linear(d_model, value_dim, bias=False)
+            nn.init.xavier_uniform_(self.key_write.weight)
+            nn.init.xavier_uniform_(self.value_write.weight)
+        else:
+            self.key_write = BDREPerHeadWrite(n_heads, head_dim, key_dim)
+            self.value_write = BDREPerHeadWrite(n_heads, head_dim, value_dim)
         self.key_read = nn.Parameter(torch.empty(n_heads, key_dim, head_dim))
         self.value_read = nn.Parameter(torch.empty(n_heads, value_dim, head_dim))
-        nn.init.xavier_uniform_(self.key_write.weight)
-        nn.init.xavier_uniform_(self.value_write.weight)
         nn.init.xavier_uniform_(self.key_read)
         nn.init.xavier_uniform_(self.value_read)
+
+    def encode_key(self, key: torch.Tensor) -> torch.Tensor:
+        if key.shape[-2:] != (self.n_heads, self.head_dim):
+            raise ValueError("BDRE Key writes require [..., n_heads, head_dim] input.")
+        if self.cache_layout == "shared":
+            return self.key_write(key.flatten(start_dim=-2))
+        return self.key_write(key)
+
+    def encode_value(self, value: torch.Tensor) -> torch.Tensor:
+        if value.shape[-2:] != (self.n_heads, self.head_dim):
+            raise ValueError("BDRE Value writes require [..., n_heads, head_dim] input.")
+        if self.cache_layout == "shared":
+            return self.value_write(value.flatten(start_dim=-2))
+        return self.value_write(value)
+
+    def decode_keys(self, key_codes: torch.Tensor) -> torch.Tensor:
+        if self.cache_layout == "shared":
+            return torch.einsum("...nr,hrd->...hnd", key_codes, self.key_read)
+        return torch.einsum("...nhr,hrd->...hnd", key_codes, self.key_read)
+
+    def aggregate_values(
+        self,
+        weights: torch.Tensor,
+        value_codes: torch.Tensor,
+    ) -> torch.Tensor:
+        if self.cache_layout == "shared":
+            return torch.einsum("...hn,...nr->...hr", weights, value_codes)
+        return torch.einsum("...hn,...nhr->...hr", weights, value_codes)
 
 
 @dataclass(frozen=True)
@@ -847,14 +942,9 @@ class _BDREDiagnostics:
             }
         compiled_state_count = 0
         if state.step_keys is not None:
-            compiled_state_count = (
-                state.tokens
-                * state.step_keys.size(0)
-                * state.step_keys.size(2)
-                * state.step_keys.size(3)
-            )
+            compiled_state_count = state.step_keys.numel() // state.step_keys.size(-1)
         elif state.block_keys is not None:
-            compiled_state_count = state.tokens * state.block_keys.size(0) * state.block_keys.size(2)
+            compiled_state_count = state.block_keys.numel() // state.block_keys.size(-1)
         return {
             "bdre_compile_time_ms": self.compile_seconds * 1000.0,
             "bdre_compile_fraction": self.compile_seconds / elapsed,
@@ -891,6 +981,7 @@ class BrianBDRERouteCore(BrianRouteCore):
                     self.config.base.n_heads,
                     bdre_config.key_dim,
                     bdre_config.value_dim,
+                    cache_layout=bdre_config.cache_layout,
                 )
                 for _ in range(self.config.route_pool_blocks)
             ]
@@ -904,6 +995,63 @@ class BrianBDRERouteCore(BrianRouteCore):
             normalize_step_distance=bdre_config.normalize_step_distance,
             late_step_weight=bdre_config.late_step_weight,
             compile_top_k=bdre_config.compile_top_k,
+        )
+
+    def _cache_code_shape(self, code_dim: int) -> tuple[int, ...]:
+        if self.bdre_config.cache_layout == "per_head":
+            return (self.config.base.n_heads, code_dim)
+        return (code_dim,)
+
+    def _empty_cache_code(
+        self,
+        reference: torch.Tensor,
+        *leading_shape: int,
+        code_dim: int,
+    ) -> torch.Tensor:
+        return reference.new_zeros((*leading_shape, *self._cache_code_shape(code_dim)))
+
+    def _reshape_compiled_code(
+        self,
+        code: torch.Tensor,
+        batch: int,
+        chunk: int,
+        readers: int,
+        code_dim: int,
+    ) -> torch.Tensor:
+        return code.view(batch, chunk, readers, *self._cache_code_shape(code_dim))
+
+    @staticmethod
+    def _reader_major_cache(code: torch.Tensor) -> torch.Tensor:
+        """Move `[batch,tokens,reader,...]` caches to `[reader,batch,tokens,...]`."""
+
+        return code.permute(2, 0, 1, *range(3, code.dim()))
+
+    def _decode_reader_major_keys(
+        self,
+        key_codes: torch.Tensor,
+        key_read: torch.Tensor,
+    ) -> torch.Tensor:
+        """Decode `[reader,batch,tokens,...]` into per-head full Keys."""
+
+        if self.bdre_config.cache_layout == "shared":
+            return torch.einsum("abkr,ahrd->abhkd", key_codes, key_read)
+        return torch.einsum("abkhr,ahrd->abhkd", key_codes, key_read)
+
+    def _expand_reader_major_values(self, value_codes: torch.Tensor) -> torch.Tensor:
+        """Return `[reader*batch,heads,tokens,value_dim]` latent Values."""
+
+        readers, batch, tokens = value_codes.shape[:3]
+        if self.bdre_config.cache_layout == "shared":
+            return value_codes.reshape(
+                readers * batch,
+                tokens,
+                self.bdre_config.value_dim,
+            ).unsqueeze(1).expand(-1, self.config.base.n_heads, -1, -1)
+        return value_codes.permute(0, 1, 3, 2, 4).reshape(
+            readers * batch,
+            self.config.base.n_heads,
+            tokens,
+            self.bdre_config.value_dim,
         )
 
     def empty_incremental_state(self) -> BDREIncrementalState:
@@ -1600,11 +1748,22 @@ class BrianBDRERouteCore(BrianRouteCore):
                         grouped_mm_weights,
                     )
                     if dispatch.valid is not None:
-                        writer_mask = dispatch.valid.unsqueeze(1)
+                        writer_mask = dispatch.valid.view(
+                            -1,
+                            *((1,) * (canonical_key.dim() - 1)),
+                        )
                         canonical_key = canonical_key * writer_mask
                         canonical_value = canonical_value * writer_mask
-                    step_key = canonical_key.new_zeros((batch * chunk, self.bdre_config.key_dim))
-                    step_value = canonical_value.new_zeros((batch * chunk, self.bdre_config.value_dim))
+                    step_key = self._empty_cache_code(
+                        canonical_key,
+                        batch * chunk,
+                        code_dim=self.bdre_config.key_dim,
+                    )
+                    step_value = self._empty_cache_code(
+                        canonical_value,
+                        batch * chunk,
+                        code_dim=self.bdre_config.value_dim,
+                    )
                     step_key = step_key.index_copy(0, dispatch.indexes, canonical_key)
                     step_value = step_value.index_copy(0, dispatch.indexes, canonical_value)
                     grouped_mm_prepared = (dispatch, routed_input, query)
@@ -1639,14 +1798,22 @@ class BrianBDRERouteCore(BrianRouteCore):
                     attention = block.block.attn
                     dim = attn_input.size(-1)
                     query, key, value = attention.qkv(attn_input).chunk(3, dim=-1)
-                    query = query.view(-1, 1, attention.n_heads, attention.head_dim).transpose(1, 2).squeeze(2)
-                    key = key.view(-1, 1, attention.n_heads, attention.head_dim).transpose(1, 2)
-                    value = value.view(-1, 1, attention.n_heads, attention.head_dim).transpose(1, 2)
-                    canonical_key = projection.key_write(key.transpose(1, 2).reshape(-1, 1, dim)).squeeze(1)
-                    canonical_value = projection.value_write(value.transpose(1, 2).reshape(-1, 1, dim)).squeeze(1)
+                    query = query.view(-1, attention.n_heads, attention.head_dim)
+                    key = key.view(-1, attention.n_heads, attention.head_dim)
+                    value = value.view(-1, attention.n_heads, attention.head_dim)
+                    canonical_key = projection.encode_key(key)
+                    canonical_value = projection.encode_value(value)
                     if step_key is None or step_value is None:
-                        step_key = canonical_key.new_zeros((batch * chunk, self.bdre_config.key_dim))
-                        step_value = canonical_value.new_zeros((batch * chunk, self.bdre_config.value_dim))
+                        step_key = self._empty_cache_code(
+                            canonical_key,
+                            batch * chunk,
+                            code_dim=self.bdre_config.key_dim,
+                        )
+                        step_value = self._empty_cache_code(
+                            canonical_value,
+                            batch * chunk,
+                            code_dim=self.bdre_config.value_dim,
+                        )
                     step_key = step_key.index_copy(0, indexes, canonical_key)
                     step_value = step_value.index_copy(0, indexes, canonical_value)
                     prepared.append((action, indexes, routed_input, query, pack_group))
@@ -1654,10 +1821,22 @@ class BrianBDRERouteCore(BrianRouteCore):
             if step_key is None or step_value is None:
                 if not writer_keys or not writer_values:
                     raise RuntimeError("The first synchronous-prefix route step must produce a writer.")
-                step_key = writer_keys[0].new_zeros((batch * chunk, self.bdre_config.key_dim))
-                step_value = writer_values[0].new_zeros((batch * chunk, self.bdre_config.value_dim))
-            writer_keys.append(step_key.view(batch, chunk, -1))
-            writer_values.append(step_value.view(batch, chunk, -1))
+                step_key = self._empty_cache_code(
+                    writer_keys[0],
+                    batch * chunk,
+                    code_dim=self.bdre_config.key_dim,
+                )
+                step_value = self._empty_cache_code(
+                    writer_values[0],
+                    batch * chunk,
+                    code_dim=self.bdre_config.value_dim,
+                )
+            writer_keys.append(
+                step_key.view(batch, chunk, *self._cache_code_shape(self.bdre_config.key_dim))
+            )
+            writer_values.append(
+                step_value.view(batch, chunk, *self._cache_code_shape(self.bdre_config.value_dim))
+            )
             writer_blocks.append(selected.clamp(min=0, max=self.config.route_pool_blocks - 1))
             writer_valid.append(valid)
             if use_incremental_compile:
@@ -1684,13 +1863,15 @@ class BrianBDRERouteCore(BrianRouteCore):
                     diagnostics=diagnostics,
                 )
             step_compile_outputs.append(compile_output)
-            current_keys = compile_output.keys.view(
+            current_keys = self._reshape_compiled_code(
+                compile_output.keys,
                 batch,
                 chunk,
                 self.config.route_pool_blocks,
                 self.bdre_config.key_dim,
             )
-            current_values = compile_output.values.view(
+            current_values = self._reshape_compiled_code(
+                compile_output.values,
                 batch,
                 chunk,
                 self.config.route_pool_blocks,
@@ -1829,13 +2010,15 @@ class BrianBDRERouteCore(BrianRouteCore):
         )
         diagnostics.record_compile(final_compile, time.perf_counter() - started)
         diagnostics.writer_counts.append(flat_valid.sum(dim=-1))
-        block_keys = final_compile.keys.view(
+        block_keys = self._reshape_compiled_code(
+            final_compile.keys,
             batch,
             chunk,
             self.config.route_pool_blocks,
             self.bdre_config.key_dim,
         )
-        block_values = final_compile.values.view(
+        block_values = self._reshape_compiled_code(
+            final_compile.values,
             batch,
             chunk,
             self.config.route_pool_blocks,
@@ -1875,7 +2058,8 @@ class BrianBDRERouteCore(BrianRouteCore):
                     historical_step_outputs.append(output)
         step_keys = torch.stack(
             [
-                output.keys.view(
+                self._reshape_compiled_code(
+                    output.keys,
                     batch,
                     chunk,
                     self.config.route_pool_blocks,
@@ -1887,7 +2071,8 @@ class BrianBDRERouteCore(BrianRouteCore):
         )
         step_values = torch.stack(
             [
-                output.values.view(
+                self._reshape_compiled_code(
+                    output.values,
                     batch,
                     chunk,
                     self.config.route_pool_blocks,
@@ -1977,11 +2162,45 @@ class BrianBDRERouteCore(BrianRouteCore):
             value_write_stack = torch.stack(
                 [projection.value_write.weight for projection in self.bdre_projections]
             ).to(dtype=grouped_dtype)
+            if self.bdre_config.cache_layout == "per_head":
+                heads = self.config.base.n_heads
+                head_dim = dim // heads
+                key_projection = qkv_stack[:, dim : 2 * dim, :].view(
+                    len(self.route_blocks),
+                    heads,
+                    head_dim,
+                    dim,
+                )
+                value_projection = qkv_stack[:, 2 * dim :, :].view(
+                    len(self.route_blocks),
+                    heads,
+                    head_dim,
+                    dim,
+                )
+                composed_key = torch.einsum(
+                    "bhcr,bhri->bhci",
+                    key_write_stack,
+                    key_projection,
+                ).reshape(len(self.route_blocks), heads * self.bdre_config.key_dim, dim)
+                composed_value = torch.einsum(
+                    "bhcr,bhri->bhci",
+                    value_write_stack,
+                    value_projection,
+                ).reshape(len(self.route_blocks), heads * self.bdre_config.value_dim, dim)
+            else:
+                composed_key = torch.bmm(
+                    key_write_stack,
+                    qkv_stack[:, dim : 2 * dim, :],
+                )
+                composed_value = torch.bmm(
+                    value_write_stack,
+                    qkv_stack[:, 2 * dim :, :],
+                )
             query_key_value_write = torch.cat(
                 (
                     qkv_stack[:, :dim, :],
-                    torch.bmm(key_write_stack, qkv_stack[:, dim : 2 * dim, :]),
-                    torch.bmm(value_write_stack, qkv_stack[:, 2 * dim :, :]),
+                    composed_key,
+                    composed_value,
                 ),
                 dim=1,
             ).transpose(-1, -2).contiguous()
@@ -2188,11 +2407,31 @@ class BrianBDRERouteCore(BrianRouteCore):
                 weights.query_key_value_write,
                 dispatch.offsets,
             )
+            cache_heads = (
+                self.config.base.n_heads
+                if self.bdre_config.cache_layout == "per_head"
+                else 1
+            )
             query, canonical_key, canonical_value = torch.split(
                 projected,
-                (dim, self.bdre_config.key_dim, self.bdre_config.value_dim),
+                (
+                    dim,
+                    cache_heads * self.bdre_config.key_dim,
+                    cache_heads * self.bdre_config.value_dim,
+                ),
                 dim=-1,
             )
+            if self.bdre_config.cache_layout == "per_head":
+                canonical_key = canonical_key.view(
+                    -1,
+                    self.config.base.n_heads,
+                    self.bdre_config.key_dim,
+                )
+                canonical_value = canonical_value.view(
+                    -1,
+                    self.config.base.n_heads,
+                    self.bdre_config.value_dim,
+                )
         else:
             if weights.qkv is None or weights.key_write is None or weights.value_write is None:
                 raise RuntimeError("Staged grouped writer projection weights are incomplete.")
@@ -2397,13 +2636,17 @@ class BrianBDRERouteCore(BrianRouteCore):
             if historical_state.step_keys is None or historical_state.step_values is None:
                 raise ValueError("Synchronous-prefix history is missing step cache tensors.")
             key_parts.append(
-                historical_state.step_keys[:, :, reader_step, :, :].permute(2, 0, 1, 3)
+                self._reader_major_cache(
+                    historical_state.step_keys[:, :, reader_step]
+                )
             )
             value_parts.append(
-                historical_state.step_values[:, :, reader_step, :, :].permute(2, 0, 1, 3)
+                self._reader_major_cache(
+                    historical_state.step_values[:, :, reader_step]
+                )
             )
-        key_parts.append(current_keys.permute(2, 0, 1, 3))
-        value_parts.append(current_values.permute(2, 0, 1, 3))
+        key_parts.append(self._reader_major_cache(current_keys))
+        value_parts.append(self._reader_major_cache(current_values))
         key_codes = torch.cat(key_parts, dim=2)
         value_codes = torch.cat(value_parts, dim=2)
         key_length = key_codes.size(2)
@@ -2565,13 +2808,17 @@ class BrianBDRERouteCore(BrianRouteCore):
             if historical_state.step_keys is None or historical_state.step_values is None:
                 raise ValueError("Synchronous-prefix history is missing step cache tensors.")
             key_parts.append(
-                historical_state.step_keys[:, :, reader_step, :, :].permute(2, 0, 1, 3)
+                self._reader_major_cache(
+                    historical_state.step_keys[:, :, reader_step]
+                )
             )
             value_parts.append(
-                historical_state.step_values[:, :, reader_step, :, :].permute(2, 0, 1, 3)
+                self._reader_major_cache(
+                    historical_state.step_values[:, :, reader_step]
+                )
             )
-        key_parts.append(current_keys.permute(2, 0, 1, 3))
-        value_parts.append(current_values.permute(2, 0, 1, 3))
+        key_parts.append(self._reader_major_cache(current_keys))
+        value_parts.append(self._reader_major_cache(current_values))
         key_codes = torch.cat(key_parts, dim=2)
         value_codes = torch.cat(value_parts, dim=2)
         key_positions = torch.arange(key_codes.size(2), device=query.device)
@@ -2594,8 +2841,7 @@ class BrianBDRERouteCore(BrianRouteCore):
             padded_valid,
             key_codes.size(2),
         )
-        decoded_key = torch.einsum(
-            "abkr,ahrd->abhkd",
+        decoded_key = self._decode_reader_major_keys(
             key_codes.to(dtype=query.dtype),
             key_read,
         ).reshape(
@@ -2605,11 +2851,9 @@ class BrianBDRERouteCore(BrianRouteCore):
             attention.head_dim,
         )
         decoded_key = self._apply_decoded_key_rope(decoded_key, key_cosine, key_sine)
-        expanded_values = value_codes.to(dtype=query.dtype).reshape(
-            readers * batch,
-            key_codes.size(2),
-            self.bdre_config.value_dim,
-        ).unsqueeze(1).expand(-1, attention.n_heads, -1, -1)
+        expanded_values = self._expand_reader_major_values(
+            value_codes.to(dtype=query.dtype)
+        )
         latent_value = _compiled_bdre_batched_blockmask_flex_reader(
             padded_query,
             decoded_key,
@@ -2932,12 +3176,26 @@ class BrianBDRERouteCore(BrianRouteCore):
         if padding < 0:
             raise ValueError("Synchronous-prefix writer history exceeds max_route_steps.")
         if padding:
-            key = F.pad(key, (0, 0, 0, padding))
-            value = F.pad(value, (0, 0, 0, padding))
+            key = torch.cat(
+                (key, key.new_zeros((*key.shape[:2], padding, *key.shape[3:]))),
+                dim=2,
+            )
+            value = torch.cat(
+                (value, value.new_zeros((*value.shape[:2], padding, *value.shape[3:]))),
+                dim=2,
+            )
             block = F.pad(block, (0, padding))
             valid = F.pad(valid, (0, padding), value=False)
-        flat_key = key.reshape(batch * chunk, self.config.max_route_steps, self.bdre_config.key_dim)
-        flat_value = value.reshape(batch * chunk, self.config.max_route_steps, self.bdre_config.value_dim)
+        flat_key = key.reshape(
+            batch * chunk,
+            self.config.max_route_steps,
+            *self._cache_code_shape(self.bdre_config.key_dim),
+        )
+        flat_value = value.reshape(
+            batch * chunk,
+            self.config.max_route_steps,
+            *self._cache_code_shape(self.bdre_config.value_dim),
+        )
         flat_block = block.reshape(batch * chunk, self.config.max_route_steps)
         flat_valid = valid.reshape(batch * chunk, self.config.max_route_steps)
         return flat_key, flat_value, flat_block, flat_valid
@@ -2996,10 +3254,8 @@ class BrianBDRERouteCore(BrianRouteCore):
         key_codes = torch.cat(key_parts, dim=1)
         value_codes = torch.cat(value_parts, dim=1)
         attention = block.block.attn
-        decoded_key = torch.einsum(
-            "nkr,hrd->nhkd",
-            key_codes.to(dtype=projection.key_read.dtype),
-            projection.key_read,
+        decoded_key = projection.decode_keys(
+            key_codes.to(dtype=projection.key_read.dtype)
         ).to(dtype=query.dtype)
         key_positions = torch.arange(key_codes.size(1), device=query.device)
         key_cosine = attention.rope.cos[:, :, key_positions, :].to(device=query.device, dtype=query.dtype)
@@ -3014,8 +3270,7 @@ class BrianBDRERouteCore(BrianRouteCore):
         scores = scores.masked_fill(~allowed.unsqueeze(1), torch.finfo(scores.dtype).min)
         weights = F.softmax(scores.float(), dim=-1).to(dtype=query.dtype)
         weights = F.dropout(weights, p=attention.dropout, training=block.training)
-        latent_value = torch.einsum(
-            "nhk,nkr->nhr",
+        latent_value = projection.aggregate_values(
             weights,
             value_codes.to(dtype=weights.dtype),
         )
@@ -3145,7 +3400,8 @@ class BrianBDRERouteCore(BrianRouteCore):
         key_cosine = attention.rope.cos[:, :, key_positions, :].to(device=query.device, dtype=query.dtype)
         key_sine = attention.rope.sin[:, :, key_positions, :].to(device=query.device, dtype=query.dtype)
         use_flex = (
-            self.bdre_config.synchronous_attention_backend
+            self.bdre_config.cache_layout == "shared"
+            and self.bdre_config.synchronous_attention_backend
             in {
                 "shared_padded_flex",
                 "shared_padded_flex_blockmask",
@@ -3187,19 +3443,9 @@ class BrianBDRERouteCore(BrianRouteCore):
                 )
             attended = attended.index_select(0, flat_slots).to(dtype=routed_input.dtype)
         else:
-            key_read_weight = projection.key_read.permute(0, 2, 1).reshape(
-                attention.n_heads * attention.head_dim,
-                self.bdre_config.key_dim,
-            )
-            decoded_key = F.linear(
-                key_codes.to(dtype=projection.key_read.dtype),
-                key_read_weight,
-            ).view(
-                active_batches.numel(),
-                key_codes.size(1),
-                attention.n_heads,
-                attention.head_dim,
-            ).permute(0, 2, 1, 3).to(dtype=query.dtype)
+            decoded_key = projection.decode_keys(
+                key_codes.to(dtype=projection.key_read.dtype)
+            ).to(dtype=query.dtype)
             decoded_key = apply_rotary(decoded_key, key_cosine, key_sine)
             allowed = key_positions.view(1, 1, 1, -1) <= padded_positions.view(
                 active_batches.numel(),
@@ -3213,11 +3459,18 @@ class BrianBDRERouteCore(BrianRouteCore):
             scores = scores.masked_fill(~allowed, torch.finfo(scores.dtype).min)
             weights = F.softmax(scores.float(), dim=-1).to(dtype=query.dtype)
             weights = F.dropout(weights, p=attention.dropout, training=block.training)
-            latent_value = torch.einsum(
-                "bhqk,bkr->bhqr",
-                weights,
-                value_codes.to(dtype=weights.dtype),
-            )
+            if self.bdre_config.cache_layout == "shared":
+                latent_value = torch.einsum(
+                    "bhqk,bkr->bhqr",
+                    weights,
+                    value_codes.to(dtype=weights.dtype),
+                )
+            else:
+                latent_value = torch.einsum(
+                    "bhqk,bkhr->bhqr",
+                    weights,
+                    value_codes.to(dtype=weights.dtype),
+                )
             latent_value = latent_value.transpose(1, 2).reshape(
                 active_batches.numel() * max_selected,
                 attention.n_heads,
@@ -3338,8 +3591,24 @@ class BrianBDRERouteCore(BrianRouteCore):
 
             exit_now = selected == self.out_action
             next_hidden = hidden
-            step_key = writer_keys[0].new_zeros((batch, self.bdre_config.key_dim)) if writer_keys else None
-            step_value = writer_values[0].new_zeros((batch, self.bdre_config.value_dim)) if writer_values else None
+            step_key = (
+                self._empty_cache_code(
+                    writer_keys[0],
+                    batch,
+                    code_dim=self.bdre_config.key_dim,
+                )
+                if writer_keys
+                else None
+            )
+            step_value = (
+                self._empty_cache_code(
+                    writer_values[0],
+                    batch,
+                    code_dim=self.bdre_config.value_dim,
+                )
+                if writer_values
+                else None
+            )
             valid = (selected != self.out_action) & ~exited
             has_writer = has_writer | valid
             previous_key_all = torch.stack(writer_keys, dim=1) if writer_keys else None
@@ -3378,15 +3647,31 @@ class BrianBDRERouteCore(BrianRouteCore):
                     diagnostics=diagnostics,
                 )
                 if step_key is None or step_value is None:
-                    step_key = canonical_key.new_zeros((batch, self.bdre_config.key_dim))
-                    step_value = canonical_value.new_zeros((batch, self.bdre_config.value_dim))
+                    step_key = self._empty_cache_code(
+                        canonical_key,
+                        batch,
+                        code_dim=self.bdre_config.key_dim,
+                    )
+                    step_value = self._empty_cache_code(
+                        canonical_value,
+                        batch,
+                        code_dim=self.bdre_config.value_dim,
+                    )
                 next_hidden = next_hidden.index_copy(0, indexes, block_output)
                 step_key = step_key.index_copy(0, indexes, canonical_key)
                 step_value = step_value.index_copy(0, indexes, canonical_value)
 
             if step_key is None or step_value is None:
-                step_key = hidden.new_zeros((batch, self.bdre_config.key_dim))
-                step_value = hidden.new_zeros((batch, self.bdre_config.value_dim))
+                step_key = self._empty_cache_code(
+                    hidden,
+                    batch,
+                    code_dim=self.bdre_config.key_dim,
+                )
+                step_value = self._empty_cache_code(
+                    hidden,
+                    batch,
+                    code_dim=self.bdre_config.value_dim,
+                )
             writer_keys.append(step_key)
             writer_values.append(step_value)
             writer_blocks.append(selected.clamp(min=0, max=self.config.route_pool_blocks - 1))
@@ -3593,8 +3878,12 @@ class BrianBDRERouteCore(BrianRouteCore):
             batch = indexes.numel()
             reference = self.position_table.embeddings
             return (
-                reference.new_empty((batch, 0, self.bdre_config.key_dim)),
-                reference.new_empty((batch, 0, self.bdre_config.value_dim)),
+                reference.new_empty(
+                    (batch, 0, *self._cache_code_shape(self.bdre_config.key_dim))
+                ),
+                reference.new_empty(
+                    (batch, 0, *self._cache_code_shape(self.bdre_config.value_dim))
+                ),
             )
         if self.bdre_config.depth_mode == "none":
             keys, values = state.stacked_blocks()
@@ -3654,8 +3943,8 @@ class BrianBDRERouteCore(BrianRouteCore):
         query = query.view(batch, 1, attention.n_heads, attention.head_dim).transpose(1, 2)
         key = key.view(batch, 1, attention.n_heads, attention.head_dim).transpose(1, 2)
         value = value.view(batch, 1, attention.n_heads, attention.head_dim).transpose(1, 2)
-        canonical_key = projection.key_write(key.transpose(1, 2).reshape(batch, 1, dim)).squeeze(1)
-        canonical_value = projection.value_write(value.transpose(1, 2).reshape(batch, 1, dim)).squeeze(1)
+        canonical_key = projection.encode_key(key.squeeze(2))
+        canonical_value = projection.encode_value(value.squeeze(2))
 
         self_key: torch.Tensor | None
         self_value: torch.Tensor | None
@@ -3723,10 +4012,8 @@ class BrianBDRERouteCore(BrianRouteCore):
         if key_codes.size(1) == 0:
             attention_output = torch.zeros_like(routed_input)
         else:
-            decoded_key = torch.einsum(
-                "bnr,hrd->bhnd",
-                key_codes.to(dtype=projection.key_read.dtype),
-                projection.key_read,
+            decoded_key = projection.decode_keys(
+                key_codes.to(dtype=projection.key_read.dtype)
             ).to(dtype=query.dtype)
             key_positions = torch.arange(key_codes.size(1), device=hidden.device)
             key_cosine = attention.rope.cos[:, :, key_positions, :].to(device=hidden.device, dtype=query.dtype)
@@ -3744,8 +4031,7 @@ class BrianBDRERouteCore(BrianRouteCore):
             scores = torch.einsum("bhd,bhnd->bhn", query, decoded_key) * (attention.head_dim**-0.5)
             weights = F.softmax(scores.float(), dim=-1).to(dtype=query.dtype)
             weights = F.dropout(weights, p=attention.dropout, training=block.training)
-            latent_value = torch.einsum(
-                "bhn,bnr->bhr",
+            latent_value = projection.aggregate_values(
                 weights,
                 value_codes.to(dtype=weights.dtype),
             )
@@ -3780,8 +4066,14 @@ class BrianBDRERouteCore(BrianRouteCore):
         if padding < 0:
             raise ValueError("BDRE token route exceeded max_route_steps.")
         if padding:
-            key = F.pad(key, (0, 0, 0, padding))
-            value = F.pad(value, (0, 0, 0, padding))
+            key = torch.cat(
+                (key, key.new_zeros((key.size(0), padding, *key.shape[2:]))),
+                dim=1,
+            )
+            value = torch.cat(
+                (value, value.new_zeros((value.size(0), padding, *value.shape[2:]))),
+                dim=1,
+            )
             block = F.pad(block, (0, padding))
             valid = F.pad(valid, (0, padding), value=False)
         diagnostics.writer_counts.append(valid.sum(dim=-1))
@@ -4022,6 +4314,7 @@ class BrianBDRERouteCore(BrianRouteCore):
                 "bdre_shared_kv": "True",
                 "bdre_key_dim": self.bdre_config.key_dim,
                 "bdre_value_dim": self.bdre_config.value_dim,
+                "bdre_cache_layout": self.bdre_config.cache_layout,
                 "bdre_depth_mode": self.bdre_config.depth_mode,
                 "bdre_reader_step_cache": self.bdre_config.reader_step_cache,
                 "bdre_self_kv_mode": self.bdre_config.self_kv_mode,

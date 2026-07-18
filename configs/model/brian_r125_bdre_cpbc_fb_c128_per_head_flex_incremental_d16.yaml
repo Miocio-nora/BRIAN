@@ -1,0 +1,10 @@
+extends: brian_r125_bdre_cpbc_fb_c128_triton_fused_reader_incremental.yaml
+model_name: brian_r125_bdre_cpbc_fb_c128_per_head_flex_incremental_d16
+
+# Strict head isolation: each head writes and reads its own canonical code.
+bdre_cache_layout: per_head
+bdre_key_dim: 16
+bdre_value_dim: 16
+
+execution:
+  reader_kernel: flex

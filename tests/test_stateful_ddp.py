@@ -15,7 +15,7 @@ from brian_sphere_llm.train.trainer import (
 )
 
 
-def _tiny_synchronous_config() -> BDREConfig:
+def _tiny_synchronous_config(*, cache_layout: str = "shared") -> BDREConfig:
     base = BaselineConfig(
         model_name="tiny_stateful_ddp_test",
         layers=4,
@@ -44,6 +44,7 @@ def _tiny_synchronous_config() -> BDREConfig:
         route=route,
         key_dim=8,
         value_dim=8,
+        cache_layout=cache_layout,
         depth_mode="synchronous_prefix",
         step_lambda=0.25,
         normalize_step_distance=True,
@@ -174,6 +175,81 @@ def _stateful_ddp_worker(rank: int, world_size: int, init_file: str) -> None:
         torch.distributed.destroy_process_group()
 
 
+def _per_head_stateful_ddp_worker(rank: int, world_size: int, init_file: str) -> None:
+    torch.distributed.init_process_group(
+        backend="gloo",
+        init_method=f"file://{init_file}",
+        rank=rank,
+        world_size=world_size,
+    )
+    try:
+        torch.manual_seed(102)
+        distributed_model = BrianBDRERouteCore(
+            _tiny_synchronous_config(cache_layout="per_head")
+        ).train()
+        ddp_model = torch.nn.parallel.DistributedDataParallel(
+            distributed_model,
+            broadcast_buffers=False,
+            find_unused_parameters=True,
+        )
+        reference_model = BrianBDRERouteCore(
+            _tiny_synchronous_config(cache_layout="per_head")
+        ).train()
+        reference_model.load_state_dict(ddp_model.module.state_dict())
+
+        batches = (
+            torch.tensor([[1, 2, 3, 4, 5, 6]]),
+            torch.tensor([[7, 8, 9, 10, 11, 12]]),
+        )
+        reference_output = _backward_stateful_tbptt_microbatch(
+            reference_model,
+            torch.cat(batches, dim=0),
+            config=_stateful_train_config(),
+            route_mode="fixed",
+            global_step=1,
+            chunk_size=3,
+            detach_interval_chunks=2,
+            gradient_scale=1.0,
+            device=torch.device("cpu"),
+            summarize_routing=False,
+        )
+        with ddp_model.no_sync():
+            local_output = _backward_stateful_tbptt_microbatch(
+                ddp_model,
+                batches[rank],
+                config=_stateful_train_config(),
+                route_mode="fixed",
+                global_step=1,
+                chunk_size=3,
+                detach_interval_chunks=2,
+                gradient_scale=1.0,
+                device=torch.device("cpu"),
+                summarize_routing=False,
+            )
+        _sync_stateful_ddp_gradients(ddp_model, bucket_cap_mb=1)
+
+        distributed_loss = local_output["loss"].detach().clone()
+        torch.distributed.all_reduce(distributed_loss)
+        distributed_loss /= world_size
+        assert torch.allclose(distributed_loss, reference_output["loss"], atol=1e-6, rtol=1e-6)
+        for distributed_parameter, reference_parameter in zip(
+            ddp_model.module.parameters(),
+            reference_model.parameters(),
+        ):
+            if reference_parameter.grad is None:
+                assert distributed_parameter.grad is None
+                continue
+            assert distributed_parameter.grad is not None
+            assert torch.allclose(
+                distributed_parameter.grad,
+                reference_parameter.grad,
+                atol=2e-5,
+                rtol=2e-5,
+            )
+    finally:
+        torch.distributed.destroy_process_group()
+
+
 @pytest.mark.skipif(
     not torch.distributed.is_available(),
     reason="PyTorch distributed support is required",
@@ -184,6 +260,20 @@ def test_stateful_tbptt_ddp_matches_merged_batch_and_handles_rank_local_unused_p
     init_file = tmp_path / "stateful_ddp_init"
     torch.multiprocessing.spawn(
         _stateful_ddp_worker,
+        args=(2, str(init_file)),
+        nprocs=2,
+        join=True,
+    )
+
+
+@pytest.mark.skipif(
+    not torch.distributed.is_available(),
+    reason="PyTorch distributed support is required",
+)
+def test_per_head_stateful_tbptt_ddp_matches_merged_batch(tmp_path: Path) -> None:
+    init_file = tmp_path / "per_head_stateful_ddp_init"
+    torch.multiprocessing.spawn(
+        _per_head_stateful_ddp_worker,
         args=(2, str(init_file)),
         nprocs=2,
         join=True,

@@ -56,7 +56,7 @@
 
 \title{\vspace{-1.0em}\textbf{BRIAN--\RCKV{}：自由路由下的 Reader-Compiled KV 缓存\\与 Chunkwise Progressive Bank Completion}}
 \author{YMH-Latent-Sphere}
-\date{实现报告，2026 年 7 月 16 日}
+\date{实现报告，2026 年 7 月 18 日}
 
 \begin{document}
 \maketitle
@@ -64,6 +64,8 @@
 
 \begin{abstract}
 自由路由使不同 token 在同一计算深度访问不同 block，并允许重复访问同一 block；因此，固定层 Transformer 中以 layer identity 为索引的 KV cache 无法直接迁移到 BRIAN。本文给出已经实现的 Reader-Compiled KV Cache（\RCKV{}）系统，而非早期理论规格的复述。系统首先由每个 writer block 独立地将其多头 K/V 压缩到 canonical latent，再由 Block--Depth Relative Encoding（\BDRE{}）按照 reader block、可选 reader step 及球面几何编译 reader-specific cache；reader head 使用独立映射恢复 Key 视角，并在压缩 Value 空间中完成等价聚合。实现同时提供精确 token-serial oracle、三种 current-token self-KV、三类 reader-step cache policy、可选 hard top-$k$ 与独立 K/V 温度。
+
+默认 writer 将全部 heads 拼接后写入一个共享 canonical code。实现另提供严格 per-head cache ablation：每个 head 独立执行 $64\rightarrow d_c$ 写入、独立存储且禁止跨 head cache 读取。$d_c=16,32,64$ 均已通过因果、CPBC oracle、反向和 DDP 验收；其中 per-head-$d_c=32$ 与默认模型参数量严格相同。
 
 为解决精确 teacher-forced 训练的串行瓶颈，本文进一步定义 Chunkwise Progressive Bank Completion（\CPBC{}）：chunk 内 token 并行、route depth 串行，cache bank 随 recurrent step 渐进补全，并以严格 token-causal mask 阻止未来信息。实现包含 depth-prefix visibility（\DP{}）和 full-bank visibility（\FB{}）、跨 chunk 的 stateful TBPTT，以及 rank-local state 下的显式 DDP 梯度同步。完整测试验证了因果性、incremental consistency、cache policy 等价性和分布式更新一致性。grouped expert GEMM、exact BlockMask、在线 prefix softmax、GPU-static route workspace、预组合 writer projection 与 compiled pointwise kernels 将单卡 \DP{} C2048 提升到约 $7.84\times10^4$ token/s，并将两卡 smoke 提升到约 $1.51\times10^5$ token/s；匹配的普通 Transformer 约为 $6.19\times10^5$ token/s。该优化没有创建新模型版本，当前 $4.10\times$ 差距主要来自 FlexAttention backward、workspace copy/scatter、elementwise work 与 route-depth 串行控制。
 \end{abstract}
@@ -77,7 +79,7 @@
 
 \begin{enumerate}
   \item 默认 persistent cache 仅按 reader block 编译；reader-step 维度是可选语义，而非强制的 depth--block 笛卡尔积。
-  \item free blocks 的 $W_Q,W_K,W_V$、writer canonicalizer 和 reader decoder 均不共享；``shared'' 只表示 canonical cache interface 共享。
+  \item free blocks 的 $W_Q,W_K,W_V$、block-specific writer canonicalizer 和 reader decoder 不在 blocks 间共享；默认 canonical code 在 heads 间共享，另提供严格 per-head layout。
   \item temporal RoPE 在 decoded Key 上显式执行；只有 Value 路径使用严格等价的低维聚合。
   \item 精确 token-by-token 执行永久保留为因果性与 incremental inference oracle。
   \item 并行训练采用独立的 \CPBC{} 语义，并显式报告 visibility policy 与梯度截断边界。
@@ -155,6 +157,19 @@ token $i$ 在 step $s$ 进入 block $b=b_{i,s}$。令 $\bm h_{i,s}$ 为路由前
   \label{eq:writer-code}
 \end{align}
 实现中的 $A^K_b,A^V_b$ 是每个 free block 独立的无 bias linear。它们不在 block 间共享；canonical space 的可组合性由训练学习，而不是由参数 tying 强制获得。
+
+\subsection{严格 per-head cache ablation}
+可选配置 \code{bdre\_cache\_layout: per\_head} 不再拼接 heads，而是对每个 head 独立写入：
+\begin{align}
+  \bm c^{K,(h)}_{i,s}&=A^{K,(h)}_b\bm k^{(h)}_{i,s}
+  \in\mathbb R^{d_c},\\
+  \bm c^{V,(h)}_{i,s}&=A^{V,(h)}_b\bm v^{(h)}_{i,s}
+  \in\mathbb R^{d_c}.
+  \label{eq:per-head-writer-code}
+\end{align}
+compiler 的位置与 depth 权重仍只定义在 writer-step 轴，但分别作用于每个 head 的 payload，因此不发生 cross-head cache mixing。reader $r$ 的 head $h$ 只读取 $\bm c^{X,(h)}$，再以独立 $B^{X,(h)}_r$ 映射回 $d_h=64$。heads 仍通过共同 hidden state、attention output projection 与后续 blocks 间接交换信息。
+
+当前实现提供 $d_c\in\{16,32,64\}$。per-head-$d_c=32$ 与默认 shared-$r_K=r_V=32$ 的总参数量同为 $140{,}308{,}105$，构成 parameter-matched ablation；$d_c=64$ 不再施加强制的单 head 维度压缩。per-head cache 多一个 head 轴，当前使用 static BlockMask Flex reader；现有 Triton fused reader 仍只接受 shared code layout。
 
 \subsection{BDRE compiler}
 对 reader block $r$、可选 reader step $\ell$ 与 writer step $s$，实现使用统一分数

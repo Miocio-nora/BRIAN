@@ -17,7 +17,7 @@ ModuleBase = nn.Module if nn is not None else object
 if torch is not None:
 
     @torch.compile(fullgraph=True, dynamic=True)
-    def _compiled_incremental_prefix_step(
+    def _compiled_incremental_prefix_step_shared(
         writer_key: torch.Tensor,
         writer_value: torch.Tensor,
         writer_block: torch.Tensor,
@@ -107,8 +107,101 @@ if torch is not None:
             values,
         )
 
+    @torch.compile(fullgraph=True, dynamic=True)
+    def _compiled_incremental_prefix_step_per_head(
+        writer_key: torch.Tensor,
+        writer_value: torch.Tensor,
+        writer_block: torch.Tensor,
+        writer_valid: torch.Tensor,
+        block_positions: torch.Tensor,
+        writer_step: torch.Tensor,
+        key_max: torch.Tensor,
+        key_denom: torch.Tensor,
+        key_numerator: torch.Tensor,
+        value_max: torch.Tensor,
+        value_denom: torch.Tensor,
+        value_numerator: torch.Tensor,
+        position_tau: float,
+        step_lambda: float,
+        step_scale: float,
+        late_step_weight: float,
+        max_route_steps: int,
+        key_temperature: float,
+        value_temperature: float,
+    ) -> tuple[torch.Tensor, ...]:
+        normalized_positions = F.normalize(block_positions, dim=-1)
+        safe_blocks = writer_block.clamp(min=0, max=normalized_positions.size(0) - 1)
+        writer_position = F.embedding(safe_blocks, normalized_positions)
+        scores = position_tau * torch.einsum(
+            "rp,np->nr",
+            normalized_positions,
+            writer_position,
+        )
+        step = writer_step.to(device=scores.device, dtype=scores.dtype)
+        if step_lambda != 0.0:
+            scores = scores + step_lambda * step / step_scale
+        if late_step_weight != 0.0:
+            scores = scores + late_step_weight * (step + 1.0) / float(max_route_steps)
+        valid = writer_valid.unsqueeze(1)
+
+        def update(
+            logits: torch.Tensor,
+            previous_max: torch.Tensor,
+            previous_denom: torch.Tensor,
+            previous_numerator: torch.Tensor,
+            writer: torch.Tensor,
+        ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+            candidate = torch.where(valid, logits, torch.full_like(logits, -float("inf")))
+            next_max = torch.maximum(previous_max, candidate)
+            previous_scale = torch.where(
+                torch.isfinite(previous_max),
+                torch.exp(previous_max - next_max),
+                torch.zeros_like(previous_max),
+            )
+            writer_scale = torch.where(
+                valid,
+                torch.exp(logits - next_max),
+                torch.zeros_like(logits),
+            )
+            next_denom = previous_denom * previous_scale + writer_scale
+            next_numerator = (
+                previous_numerator * previous_scale.unsqueeze(-1).unsqueeze(-1)
+                + writer.float().unsqueeze(1) * writer_scale.unsqueeze(-1).unsqueeze(-1)
+            )
+            compiled = (
+                next_numerator
+                / next_denom.clamp_min(1e-20).unsqueeze(-1).unsqueeze(-1)
+            ).to(dtype=writer.dtype)
+            return next_max, next_denom, next_numerator, compiled
+
+        key_max, key_denom, key_numerator, keys = update(
+            scores / key_temperature,
+            key_max,
+            key_denom,
+            key_numerator,
+            writer_key,
+        )
+        value_max, value_denom, value_numerator, values = update(
+            scores / value_temperature,
+            value_max,
+            value_denom,
+            value_numerator,
+            writer_value,
+        )
+        return (
+            key_max,
+            key_denom,
+            key_numerator,
+            value_max,
+            value_denom,
+            value_numerator,
+            keys,
+            values,
+        )
+
 else:  # pragma: no cover - exercised only without PyTorch.
-    _compiled_incremental_prefix_step = None
+    _compiled_incremental_prefix_step_shared = None
+    _compiled_incremental_prefix_step_per_head = None
 
 
 @dataclass
@@ -322,12 +415,14 @@ class BDRECompiler(ModuleBase):
         reader_actions: torch.Tensor | None = None,
         collect_metrics: bool = True,
     ) -> BDRECompileOutput:
-        """Compile `[B,S,r]` writer codes for all readers or selected readers."""
+        """Compile `[B,S,...]` writer codes for all readers or selected readers."""
 
-        if writer_keys.dim() != 3 or writer_values.dim() != 3:
-            raise ValueError("BDRE writer codes must have shape [batch, steps, code_dim].")
+        if writer_keys.dim() < 3 or writer_values.dim() < 3:
+            raise ValueError("BDRE writer codes must have shape [batch, steps, ...].")
         if writer_blocks.shape != writer_valid.shape or writer_blocks.shape != writer_keys.shape[:2]:
             raise ValueError("BDRE writer block and validity tensors must match [batch, steps].")
+        if writer_values.shape[:2] != writer_keys.shape[:2]:
+            raise ValueError("BDRE Key and Value writer tensors must share batch and step dimensions.")
         if writer_keys.size(1) > self.max_route_steps:
             raise ValueError("BDRE writer history exceeds max_route_steps.")
         normalized_positions = F.normalize(block_positions, dim=-1)
@@ -344,8 +439,8 @@ class BDRECompiler(ModuleBase):
         support = self._support_mask(scores, writer_valid)
         key_weights = self._weights(scores, support, self.key_temperature)
         value_weights = self._weights(scores, support, self.value_temperature)
-        keys = torch.einsum("brs,bsk->brk", key_weights.to(writer_keys.dtype), writer_keys)
-        values = torch.einsum("brs,bsv->brv", value_weights.to(writer_values.dtype), writer_values)
+        keys = torch.einsum("brs,bs...->br...", key_weights.to(writer_keys.dtype), writer_keys)
+        values = torch.einsum("brs,bs...->br...", value_weights.to(writer_values.dtype), writer_values)
         metrics = (
             self._metrics(key_weights, value_weights, writer_valid, support)
             if collect_metrics
@@ -397,14 +492,23 @@ class BDRECompiler(ModuleBase):
     ) -> tuple[BDRECompileOutput, BDREIncrementalCompileState]:
         """Exactly update an unrestricted synchronous-prefix softmax online."""
 
-        if _compiled_incremental_prefix_step is None:
-            raise RuntimeError("Incremental BDRE compilation requires PyTorch.")
         if self.compile_top_k is not None:
             raise ValueError("Incremental prefix compilation does not support compile_top_k.")
-        if writer_key.dim() != 2 or writer_value.dim() != 2:
-            raise ValueError("Incremental writer codes must have shape [batch, code_dim].")
+        if writer_key.dim() not in {2, 3} or writer_value.dim() != writer_key.dim():
+            raise ValueError(
+                "Incremental writer codes must have shape [batch, dim] or [batch, heads, dim]."
+            )
+        compiled_step = (
+            _compiled_incremental_prefix_step_shared
+            if writer_key.dim() == 2
+            else _compiled_incremental_prefix_step_per_head
+        )
+        if compiled_step is None:
+            raise RuntimeError("Incremental BDRE compilation requires PyTorch.")
         if writer_block.shape != writer_valid.shape or writer_block.shape != writer_key.shape[:1]:
             raise ValueError("Incremental writer block and validity tensors must match [batch].")
+        if writer_value.shape[:1] != writer_key.shape[:1]:
+            raise ValueError("Incremental Key and Value writer tensors must share the batch dimension.")
         if writer_step < 0 or writer_step >= self.max_route_steps:
             raise ValueError("writer_step must be within max_route_steps.")
 
@@ -421,7 +525,7 @@ class BDRECompiler(ModuleBase):
                 ),
                 key_denom=torch.zeros(score_shape, device=writer_key.device, dtype=torch.float32),
                 key_numerator=torch.zeros(
-                    (*score_shape, writer_key.size(-1)),
+                    (*score_shape, *writer_key.shape[1:]),
                     device=writer_key.device,
                     dtype=torch.float32,
                 ),
@@ -437,7 +541,7 @@ class BDRECompiler(ModuleBase):
                     dtype=torch.float32,
                 ),
                 value_numerator=torch.zeros(
-                    (*score_shape, writer_value.size(-1)),
+                    (*score_shape, *writer_value.shape[1:]),
                     device=writer_value.device,
                     dtype=torch.float32,
                 ),
@@ -447,7 +551,7 @@ class BDRECompiler(ModuleBase):
             if self.normalize_step_distance and self.max_route_steps > 1
             else 1.0
         )
-        result = _compiled_incremental_prefix_step(
+        result = compiled_step(
             writer_key,
             writer_value,
             writer_block,
@@ -515,10 +619,12 @@ class BDRECompiler(ModuleBase):
     ) -> tuple[BDRECompileOutput, ...]:
         """Compile every reader depth in one batched, full-bank operation."""
 
-        if writer_keys.dim() != 3 or writer_values.dim() != 3:
-            raise ValueError("BDRE writer codes must have shape [batch, steps, code_dim].")
+        if writer_keys.dim() < 3 or writer_values.dim() < 3:
+            raise ValueError("BDRE writer codes must have shape [batch, steps, ...].")
         if writer_blocks.shape != writer_valid.shape or writer_blocks.shape != writer_keys.shape[:2]:
             raise ValueError("BDRE writer block and validity tensors must match [batch, steps].")
+        if writer_values.shape[:2] != writer_keys.shape[:2]:
+            raise ValueError("BDRE Key and Value writer tensors must share batch and step dimensions.")
         if writer_keys.size(1) > self.max_route_steps:
             raise ValueError("BDRE writer history exceeds max_route_steps.")
         if not bool(writer_valid.any(dim=-1).all()):
@@ -582,8 +688,8 @@ class BDRECompiler(ModuleBase):
             self.value_temperature,
         ).view(batch, self.max_route_steps, readers, writer_keys.size(1))
         support = flat_support.view(batch, self.max_route_steps, readers, writer_keys.size(1))
-        keys = torch.einsum("blrs,bsk->blrk", key_weights.to(writer_keys.dtype), writer_keys)
-        values = torch.einsum("blrs,bsv->blrv", value_weights.to(writer_values.dtype), writer_values)
+        keys = torch.einsum("blrs,bs...->blr...", key_weights.to(writer_keys.dtype), writer_keys)
+        values = torch.einsum("blrs,bs...->blr...", value_weights.to(writer_values.dtype), writer_values)
 
         outputs: list[BDRECompileOutput] = []
         for reader_step in range(self.max_route_steps):
@@ -619,12 +725,15 @@ class BDRECompiler(ModuleBase):
         reader_action: int,
         reader_step: int,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Dynamically compile `[B,T,S,r]` histories for one reader state."""
+        """Dynamically compile `[B,T,S,...]` histories for one reader state."""
 
-        if writer_keys.dim() != 4:
-            raise ValueError("BDRE writer history must have shape [batch, tokens, steps, code_dim].")
-        batch, tokens, steps, key_dim = writer_keys.shape
-        value_dim = writer_values.size(-1)
+        if writer_keys.dim() < 4 or writer_values.dim() < 4:
+            raise ValueError("BDRE writer history must have shape [batch, tokens, steps, ...].")
+        batch, tokens, steps = writer_keys.shape[:3]
+        key_shape = writer_keys.shape[3:]
+        value_shape = writer_values.shape[3:]
+        if writer_values.shape[:3] != writer_keys.shape[:3]:
+            raise ValueError("BDRE Key and Value histories must share batch, token, and step dimensions.")
         flat_actions = torch.full(
             (batch * tokens,),
             int(reader_action),
@@ -632,8 +741,8 @@ class BDRECompiler(ModuleBase):
             device=writer_keys.device,
         )
         output = self.compile(
-            writer_keys.reshape(batch * tokens, steps, key_dim),
-            writer_values.reshape(batch * tokens, steps, value_dim),
+            writer_keys.reshape(batch * tokens, steps, *key_shape),
+            writer_values.reshape(batch * tokens, steps, *value_shape),
             writer_blocks.reshape(batch * tokens, steps),
             writer_valid.reshape(batch * tokens, steps),
             block_positions,
@@ -641,8 +750,8 @@ class BDRECompiler(ModuleBase):
             reader_actions=flat_actions,
         )
         return (
-            output.keys[:, 0].reshape(batch, tokens, key_dim),
-            output.values[:, 0].reshape(batch, tokens, value_dim),
+            output.keys[:, 0].reshape(batch, tokens, *key_shape),
+            output.values[:, 0].reshape(batch, tokens, *value_shape),
         )
 
     def _add_step_terms(self, scores: torch.Tensor, reader_step: int | torch.Tensor | None) -> torch.Tensor:

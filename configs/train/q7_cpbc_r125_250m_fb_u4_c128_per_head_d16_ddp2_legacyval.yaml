@@ -1,0 +1,21 @@
+extends: q2_cpbc_r125_250m_fb_u4_c128_triton_ddp2_legacyval.yaml
+run_name: q7_cpbc_r125_250m_fb_u4_c128_per_head_d16_ddp2_legacyval
+model_config: ../model/brian_r125_bdre_cpbc_fb_c128_per_head_flex_incremental_d16.yaml
+
+checkpoint_benchmarks:
+  output_dir: runs/q7_cpbc_r125_250m_fb_u4_c128_per_head_d16_ddp2_legacyval/benchmarks
+  label: q7_cpbc_r125_250m_fb_u4_c128_per_head_d16_ddp2_legacyval
+
+wandb:
+  group: q7_cpbc_per_head_cache_dim_r125_250m
+  tags:
+    - q7_per_head_cache_dim
+    - strict_per_head_cache
+    - d16
+    - cpbc_fb
+    - c128
+    - u4
+    - ddp2
+    - r125
+    - token_budget_250m
+    - legacy_val

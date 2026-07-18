@@ -1,0 +1,30 @@
+extends: q7_cpbc_r125_250m_fb_u4_c128_per_head_d16_ddp2_legacyval.yaml
+run_name: smoke_q7_cpbc_r125_250m_fb_u4_c128_per_head_d16_ddp2
+output_root: tmp/runs_q7_cpbc_per_head_d16_smoke
+
+max_steps: 20
+eval_interval: 20
+eval_max_batches: 1
+save_interval: 20
+save_best_checkpoint: false
+
+checkpoint_retention:
+  enabled: false
+
+checkpoint_benchmarks:
+  enabled: false
+
+route_path_visualization:
+  enabled: false
+
+router_space_visualization:
+  enabled: false
+
+bdre_cache_visualization:
+  enabled: false
+
+terminal_dashboard:
+  enabled: false
+
+wandb:
+  enabled: false

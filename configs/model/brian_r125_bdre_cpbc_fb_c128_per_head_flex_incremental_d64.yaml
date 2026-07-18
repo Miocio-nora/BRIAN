@@ -1,0 +1,5 @@
+extends: brian_r125_bdre_cpbc_fb_c128_per_head_flex_incremental_d16.yaml
+model_name: brian_r125_bdre_cpbc_fb_c128_per_head_flex_incremental_d64
+
+bdre_key_dim: 64
+bdre_value_dim: 64
