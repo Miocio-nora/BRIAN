@@ -181,10 +181,10 @@ measured repeats = 1
 
 | Layout | Reader | token/s | Slowdown vs shared | Peak allocated | Peak reserved |
 | --- | --- | ---: | ---: | ---: | ---: |
-| shared-d32 | Triton fused | 20,479 | 1.00x | 15.71 GiB | 16.69 GiB |
-| per-head-d16 | Flex | 11,622 | 1.76x | 54.35 GiB | 67.12 GiB |
-| per-head-d32 | Flex | 10,198 | 2.01x | 74.37 GiB | 94.23 GiB |
-| per-head-d64 | Flex | 8,439 | 2.43x | 114.87 GiB | 161.69 GiB |
+| shared-d32 | Triton fused | 20,479 | 1.00x | 15,710 MiB | 16,686 MiB |
+| per-head-d16 | Flex | 11,622 | 1.76x | 54,347 MiB | 67,120 MiB |
+| per-head-d32 | Flex | 10,198 | 2.01x | 74,370 MiB | 94,226 MiB |
+| per-head-d64 | Flex | 8,439 | 2.43x | 114,870 MiB | 161,694 MiB |
 
 All three per-head variants completed a full local-BS16 backward on B200.
 `d64` has limited allocator headroom and is more exposed to fragmentation or
