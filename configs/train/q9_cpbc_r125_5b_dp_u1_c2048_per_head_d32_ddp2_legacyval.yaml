@@ -1,0 +1,44 @@
+extends: cpbc_r125_5b_dp_u1_c2048_triton_fused_reader_incremental_ddp2_legacyval.yaml
+run_name: q9_cpbc_r125_5b_dp_u1_c2048_per_head_d32_ddp2_legacyval
+model_config: ../model/brian_r125_bdre_cpbc_dp_c2048_per_head_triton_recompute_d32.yaml
+resume: true
+
+# Keep the six capability-selection boundaries without retaining every 5k
+# validation checkpoint. checkpoint_latest is still refreshed every 5k.
+checkpoint_retention:
+  enabled: true
+  interval: 15000
+  keep_last: 6
+  include_optimizer: false
+  include_rng_state: false
+
+# Capability suites are run from retained checkpoints after DDP exits.
+checkpoint_benchmarks:
+  enabled: false
+  output_dir: runs/q9_cpbc_r125_5b_dp_u1_c2048_per_head_d32_ddp2_legacyval/benchmarks
+  label: q9_cpbc_r125_5b_dp_u1_c2048_per_head_d32_ddp2_legacyval
+
+post_train_benchmarks:
+  enabled: false
+
+wandb:
+  group: q9_cpbc_per_head_dp_c2048_r125_5b
+  tags:
+    - q9_per_head_dp_c2048
+    - strict_per_head_cache
+    - parameter_matched
+    - d32
+    - cpbc_dp
+    - depth_prefix_visibility
+    - triton_fused_reader
+    - recompute_prefix
+    - c2048
+    - u1
+    - ddp2
+    - local_batch16
+    - global_batch32
+    - r125
+    - 5b
+    - balanced_data
+    - legacy_val
+    - benchmark_out_of_process

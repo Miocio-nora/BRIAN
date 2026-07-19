@@ -236,11 +236,15 @@ and checkpoint boundaries are in
 [reports/bdre_strict_per_head_cache_report.md](./reports/bdre_strict_per_head_cache_report.md);
 matched-backend profiling and DDP acceptance are in
 [reports/bdre_per_head_triton_optimization_report.md](./reports/bdre_per_head_triton_optimization_report.md).
-The parameter-matched per-head d32 cache is also prepared on the faster
-CPBC-DP C2048-U1 path. Its DDP2 production smoke reaches approximately 147.3k
-global token/s at local BS16/S2048 with 74.3 GiB peak allocation per rank, so
-the 250M pilot retains global batch 32 without accumulation. Configuration,
-benchmark-safe out-of-process evaluation policy, and launch evidence are in
+The parameter-matched per-head d32 cache is also available on the faster
+CPBC-DP C2048-U1 path. Its DDP2 250M pilot completed in 27 minutes 37 seconds
+at local BS16/S2048 with 74.3 GiB peak allocation per rank. It finished at PPL
+8.290, 21.17% reasoning exact, 74.45% teacher accuracy, and 32.83% public S600.
+These early results are a systems/learning-signal screen rather than an
+architecture conclusion because the historical C128 comparison changes four
+mechanisms at once. A matched 5B follow-up is prepared with six retained model
+boundaries and out-of-process capability evaluation. Configuration, complete
+Q8 results, limitations, and the Q9 contract are in
 [reports/q8_per_head_dp_c2048_250m_launch.md](./reports/q8_per_head_dp_c2048_250m_launch.md).
 
 The additive `synchronous_prefix` backend is now named **Chunkwise Progressive

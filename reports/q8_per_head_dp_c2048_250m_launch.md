@@ -102,3 +102,56 @@ Startup acceptance reached step 79 with a 149,887 token/s median after step 5,
 74,279 MiB peak allocation per rank, finite loss, normalized block entropy
 0.9934, full monitored path diversity, and zero locally missing gradient
 parameters. No OOM, NCCL error, or data/config mismatch was observed.
+
+## 7. Completed 250M Result
+
+Q8 completed all 3,815 updates at `2026-07-19 17:15 JST`. End-to-end runtime
+was 27 minutes 37 seconds, including compilation, three legacy validations,
+checkpoint I/O, visualizations, and W&B synchronization.
+
+| Step | Validation loss | PPL |
+| ---: | ---: | ---: |
+| 1,272 | 2.7252 | 15.259 |
+| 2,544 | 2.3166 | 10.142 |
+| 3,815 | **2.1151** | **8.290** |
+
+Final out-of-process capability results:
+
+| Metric | Result |
+| --- | ---: |
+| Reasoning S600 exact | 21.17% |
+| Teacher-forced token accuracy | 74.45% |
+| Public S600 average | 32.83% |
+| PIQA | 44.0% |
+| HellaSwag | 28.0% |
+| ARC-Easy | 26.5% |
+
+Final validation routing remained broad with 0.9536 normalized block entropy
+and 0.9922 path diversity. On reasoning S600, however, normalized block-load
+entropy fell to 0.5947 while mean route length was 13.97. This is a real
+distribution-specific concentration signal to track, but not a single-block or
+single-path collapse.
+
+At 250M, the result is weaker than the historical FB C128-U4 point (PPL 7.994,
+37.67% reasoning exact, 83.06% teacher accuracy, and 33.33% public average).
+That comparison is not architecture-identifying: it changes cache layout,
+visibility, completion stride, and gradient horizon together. Historical C512
+also showed poor early reasoning despite matched PPL, while the completed
+shared DP-C2048 5B run recovered strong reasoning. Q8 is therefore accepted as
+an execution and learning-signal pilot, not evidence against strict per-head
+cache.
+
+## 8. 5B Follow-Up
+
+The parameter-matched 5B follow-up uses the same model and execution path:
+
+```text
+configs/train/q9_cpbc_r125_5b_dp_u1_c2048_per_head_d32_ddp2_legacyval.yaml
+```
+
+It retains the matched shared DP-C2048 global batch, data, optimizer, routing
+schedule, validation split, and 5B token budget. In-process capability suites
+remain disabled. Model-only checkpoints are retained at 15k, 30k, 45k, 60k,
+75k, and final; `checkpoint_latest` continues to preserve resumable optimizer
+state every 5k. At Q8 steady throughput, pure 5B training is approximately 8.3
+hours and end-to-end runtime is expected near 9 hours.

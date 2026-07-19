@@ -8,6 +8,7 @@ CONFIG_ROOT = Path("configs")
 MODEL = CONFIG_ROOT / "model/brian_r125_bdre_cpbc_dp_c2048_per_head_triton_recompute_d32.yaml"
 TRAIN = CONFIG_ROOT / "train/q8_cpbc_r125_250m_dp_u1_c2048_per_head_d32_ddp2_legacyval.yaml"
 SMOKE = CONFIG_ROOT / "train/smoke_q8_cpbc_r125_250m_dp_u1_c2048_per_head_d32_ddp2.yaml"
+Q9_TRAIN = CONFIG_ROOT / "train/q9_cpbc_r125_5b_dp_u1_c2048_per_head_d32_ddp2_legacyval.yaml"
 
 
 def test_q8_model_combines_strict_per_head_cache_with_dp_c2048() -> None:
@@ -48,3 +49,23 @@ def test_q8_smoke_disables_external_side_effects() -> None:
     assert config["checkpoint_retention"]["enabled"] is False
     assert config["checkpoint_benchmarks"]["enabled"] is False
     assert config["wandb"]["enabled"] is False
+
+
+def test_q9_uses_the_matched_5b_dp_contract_without_inline_benchmarks() -> None:
+    config = load_config(Q9_TRAIN)
+
+    assert config["max_steps"] == 76294
+    assert config["batch_size"] == 16
+    assert config["gradient_accumulation_steps"] == 1
+    assert config["expected_world_size"] == 2
+    assert config["expected_global_batch_size"] == 32
+    assert config["stateful_tbptt"]["chunk_size"] == 2048
+    assert config["stateful_tbptt"]["detach_interval_chunks"] == 1
+    assert config["model_config"].endswith(
+        "brian_r125_bdre_cpbc_dp_c2048_per_head_triton_recompute_d32.yaml"
+    )
+    assert config["max_steps"] * config["expected_global_batch_size"] * 2048 == 5_000_003_584
+    assert config["checkpoint_benchmarks"]["enabled"] is False
+    assert config["post_train_benchmarks"]["enabled"] is False
+    assert config["checkpoint_retention"]["interval"] == 15000
+    assert config["checkpoint_retention"]["keep_last"] == 6
