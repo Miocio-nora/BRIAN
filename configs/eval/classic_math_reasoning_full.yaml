@@ -1,0 +1,15 @@
+eval_name: classic_math_reasoning
+checkpoint: checkpoint_latest
+seed: 1
+device: auto
+batch_size: 16
+prompt_style: zero_shot_cot
+tasks:
+  - gsm8k
+  - math500
+sample_counts:
+  gsm8k: null
+  math500: null
+max_new_tokens:
+  gsm8k: 128
+  math500: 256

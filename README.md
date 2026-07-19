@@ -130,6 +130,17 @@ includes a token-budget-matched plain Transformer baseline
 (`configs/train/corrected_package_a_r125_5b_baseline.yaml`) so routed scale-up
 results have a valid reference.
 
+The legacy S600 contracts remain unchanged for historical comparisons. A
+separate capability-v2 layer is prepared in
+`configs/eval/public_benchmark_full_v2.yaml` and
+`configs/eval/classic_math_reasoning_full.yaml`. The public suite evaluates full
+labeled splits across the original three tasks, five additional commonsense and
+science tasks, and five MMLU math/logic subjects. The generation suite adds
+GSM8K and MATH-500 with pinned dataset revisions and Math-Verify grading. These
+new reports are supplementary; they do not rewrite prior S600 scores. The exact
+contract and rollout guidance are recorded in
+[reports/capability_benchmark_v2_preparation.md](./reports/capability_benchmark_v2_preparation.md).
+
 An additional fine-grained route-pool branch was implemented:
 `configs/train/finegrained_r125_2b_pool16_ain_coverage_no23.yaml`. The initial
 16-block run OOMed at batch 32, and the batch-16/accum-2 retry showed obvious
@@ -811,6 +822,32 @@ This writes a reasoning report with exact-match accuracy, teacher-forced target 
 visible-CoT token estimates, per-task/per-difficulty summaries, routed compute diagnostics,
 `checks`, and `overall_status`. Downstream Go/No-Go and OUT-by-difficulty reports require
 passing reasoning reports before using reasoning accuracy or visible-CoT evidence.
+
+Run the expanded full-split public suite without changing the legacy S600
+report:
+
+```bash
+CUDA_VISIBLE_DEVICES=<gpu> PYTHONPATH=src:. python scripts/eval.py \
+  --config configs/eval/public_benchmark_full_v2.yaml \
+  --run <run_dir> \
+  --checkpoint checkpoint_step_00075000 \
+  --output <run_dir>/public_benchmark_full_v2_step75000.json
+```
+
+Run the classic generative math suite:
+
+```bash
+CUDA_VISIBLE_DEVICES=<gpu> PYTHONPATH=src:. python scripts/eval.py \
+  --config configs/eval/classic_math_reasoning_full.yaml \
+  --run <run_dir> \
+  --checkpoint checkpoint_step_00075000 \
+  --output <run_dir>/classic_math_step75000.json
+```
+
+Use `configs/eval/classic_math_reasoning_smoke.yaml` for an evaluator smoke.
+GSM8K and MATH-500 use strict generated-answer equivalence; their zero-shot CoT
+protocol is fixed for BRIAN model comparisons but is not presented as a
+drop-in reproduction of an external leaderboard prompt contract.
 
 Summarize whether the OUT action reduces routed compute on easy samples:
 

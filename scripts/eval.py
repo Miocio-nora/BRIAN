@@ -10,6 +10,7 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from brian_sphere_llm.eval.compute_report import make_compute_report
 from brian_sphere_llm.eval.cost_control_report import make_cost_control_report
+from brian_sphere_llm.eval.classic_math import make_classic_math_report
 from brian_sphere_llm.eval.determinism_report import make_eval_determinism_report
 from brian_sphere_llm.eval.difficulty_report import make_baseline_difficulty_report, make_difficulty_report
 from brian_sphere_llm.eval.experiment_coverage import make_experiment_coverage_report
@@ -430,19 +431,41 @@ def main() -> None:
             device_name=str(config.get("device", "auto")),
             max_points=_int_config(config, "max_points", default=2048),
         )
+    elif eval_name == "classic_math_reasoning":
+        run_dir = args.run or config.get("run")
+        if not run_dir:
+            raise SystemExit("classic_math_reasoning requires --run")
+        report = make_classic_math_report(
+            run_dir,
+            output_path=args.output or config.get("output_path"),
+            samples_output_path=config.get("samples_output_path"),
+            checkpoint=str(args.checkpoint or config.get("checkpoint", "checkpoint_latest")),
+            tasks=list(config.get("tasks", ["gsm8k", "math500"])),
+            sample_counts=dict(config.get("sample_counts") or {}),
+            max_new_tokens=dict(config.get("max_new_tokens") or {}),
+            seed=_int_config(config, "seed", default=1),
+            device_name=str(config.get("device", "auto")),
+            batch_size=_int_arg_or_config(args.batch_size, config, "batch_size", default=16),
+            prompt_style=str(config.get("prompt_style", "zero_shot_cot")),
+        )
     elif eval_name == "public_benchmark":
         from public_benchmark import run_public_benchmark
 
         run_dir = args.run or config.get("run")
         if not run_dir:
             raise SystemExit("public_benchmark requires --run")
+        full_dataset = _bool_config(config, "full_dataset", default=False)
         report = run_public_benchmark(
             run_dir,
             output_path=args.output or config.get("output_path"),
             samples_output_path=config.get("samples_output_path"),
             checkpoint=str(args.checkpoint or config.get("checkpoint", "checkpoint_latest")),
             tasks=list(config.get("tasks", ["piqa", "hellaswag", "arc_easy"])),
-            sample_count=_int_arg_or_config(args.sample_count, config, "sample_count", default=50),
+            sample_count=(
+                None
+                if full_dataset
+                else _int_arg_or_config(args.sample_count, config, "sample_count", default=50)
+            ),
             seed=_int_config(config, "seed", default=1),
             device_name=str(config.get("device", "auto")),
             batch_size=_int_arg_or_config(args.batch_size, config, "batch_size", default=1),

@@ -1,0 +1,7 @@
+extends: classic_math_reasoning_full.yaml
+sample_counts:
+  gsm8k: 8
+  math500: 8
+max_new_tokens:
+  gsm8k: 32
+  math500: 64

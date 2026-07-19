@@ -1,0 +1,21 @@
+eval_name: public_benchmark
+checkpoint: checkpoint_latest
+seed: 1
+device: auto
+batch_size: 64
+length_normalized: true
+full_dataset: true
+tasks:
+  - piqa
+  - hellaswag
+  - arc_easy
+  - arc_challenge
+  - openbookqa
+  - winogrande
+  - boolq
+  - commonsense_qa
+  - mmlu_elementary_mathematics
+  - mmlu_high_school_mathematics
+  - mmlu_college_mathematics
+  - mmlu_abstract_algebra
+  - mmlu_formal_logic

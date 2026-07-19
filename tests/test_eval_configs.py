@@ -49,6 +49,21 @@ def test_rc_kv_inference_eval_profiles_are_explicit() -> None:
     assert public_fast["batch_size"] == 64
 
 
+def test_expanded_capability_suite_configs_keep_fixed_contracts() -> None:
+    public = load_config("configs/eval/public_benchmark_full_v2.yaml")
+    math = load_config("configs/eval/classic_math_reasoning_full.yaml")
+    smoke = load_config("configs/eval/classic_math_reasoning_smoke.yaml")
+
+    assert public["full_dataset"] is True
+    assert public["tasks"][:3] == ["piqa", "hellaswag", "arc_easy"]
+    assert "arc_challenge" in public["tasks"]
+    assert "mmlu_elementary_mathematics" in public["tasks"]
+    assert math["tasks"] == ["gsm8k", "math500"]
+    assert math["sample_counts"] == {"gsm8k": None, "math500": None}
+    assert math["prompt_style"] == "zero_shot_cot"
+    assert smoke["sample_counts"] == {"gsm8k": 8, "math500": 8}
+
+
 def _eval_names_supported_by_cli(path: Path) -> set[str]:
     tree = ast.parse(path.read_text(encoding="utf-8"))
     supported = {"routing_eval"}

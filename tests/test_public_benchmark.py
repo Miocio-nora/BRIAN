@@ -64,6 +64,47 @@ def test_exact_length_batched_choice_scores_match_reference(
     assert summarize_calls == [True, True, True, False, True]
 
 
+def test_expanded_task_adapters_preserve_labels_and_completion_shape() -> None:
+    public_benchmark = _load_public_benchmark_module()
+
+    assert public_benchmark.TASKS == ("piqa", "hellaswag", "arc_easy")
+    assert "mmlu_formal_logic" in public_benchmark.SUPPORTED_TASKS
+
+    winogrande = public_benchmark._winogrande(
+        {"sentence": "Alice thanked Bob because _ helped.", "option1": "Alice", "option2": "Bob", "answer": "2"}
+    )
+    assert winogrande == {
+        "prompt": "Alice thanked Bob because ",
+        "choices": ["Alice helped.", "Bob helped."],
+        "label": 1,
+    }
+
+    boolq = public_benchmark._boolq(
+        {"passage": "Water freezes.", "question": "does water freeze", "answer": True}
+    )
+    assert boolq["choices"] == [" no", " yes"]
+    assert boolq["label"] == 1
+
+    mmlu = public_benchmark._mmlu(
+        {"question": "2 + 2 = ?", "choices": ["3", "4", "5", "6"], "answer": 1}
+    )
+    assert "A. 3\nB. 4\nC. 5\nD. 6" in mmlu["prompt"]
+    assert mmlu["choices"] == [" A", " B", " C", " D"]
+    assert mmlu["label"] == 1
+
+
+def test_public_summary_includes_count_and_confidence_interval() -> None:
+    public_benchmark = _load_public_benchmark_module()
+    summary = public_benchmark._summarize(
+        [{"correct": True}, {"correct": True}, {"correct": False}, {"correct": False}]
+    )
+
+    assert summary["correct"] == 2
+    assert summary["accuracy"] == 0.5
+    assert 0.0 < summary["accuracy_ci95_low"] < 0.5
+    assert 0.5 < summary["accuracy_ci95_high"] < 1.0
+
+
 def _load_public_benchmark_module():
     path = Path("scripts/public_benchmark.py")
     spec = importlib.util.spec_from_file_location("public_benchmark_for_tests", path)
