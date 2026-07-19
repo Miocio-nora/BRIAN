@@ -215,6 +215,41 @@ gain and recovers 9.33 points of reverse. Per-head is therefore a second-stage
 redistribution inside an existing DP/RC-KV capability profile, not the sole
 source of the baseline reasoning gap.
 
+### 5.4 Arithmetic Error Audit
+
+Arithmetic failures at 75k are predominantly plausible nearby integers rather
+than malformed generations:
+
+| Error statistic | Plain baseline | Shared DP | Per-head DP |
+| --- | ---: | ---: | ---: |
+| Correct / 150 | 104 | 73 | 60 |
+| Wrong | 46 | 77 | 90 |
+| Numeric wrong | 45 | 77 | 87 |
+| Absolute error = 1 | 36 | 42 | 46 |
+| Absolute error <= 3 | 44 | 56 | 68 |
+| Mean absolute error | 1.56 | 3.64 | 3.30 |
+| Under / over estimate | 34 / 11 | 24 / 53 | 58 / 29 |
+| Exactly skips last addend | 2 | 4 | 9 |
+| Non-numeric/format error | 1 | 0 | 3 |
+
+For per-head DP, 87 of 90 wrong outputs are still integers, 68 of those are
+within three of the true answer, and 58 preserve every leading decimal digit
+while changing the final digit. Typical errors are `73 -> 72`, `44 -> 43`, or
+`68 -> 66`. Only three outputs contain format spillover such as `99 re`.
+
+The error sign depends on cache layout. Shared DP overestimates in 53 of 77
+numeric errors, while per-head DP underestimates in 58 of 87. Nine per-head
+outputs exactly equal the proper prefix sum before the final addend, compared
+with four for shared DP and two for the baseline. This is behaviorally
+consistent with occasionally failing to incorporate an addend, but output-only
+evidence cannot establish that the cache itself dropped the value.
+
+Per-head errors also change with difficulty. At 75k it misses 9/50 easy, 38/50
+medium, and 43/50 hard examples. Of the 41 numeric hard errors, 38 are within
+three of the correct total. The low hard exact score therefore combines many
+near-sum errors with the all-or-nothing exact criterion; it is not dominated by
+arbitrary or malformed output.
+
 ## 6. Routing and Systems Cost
 
 Validation routing remains broad, but reasoning routing is more concentrated
