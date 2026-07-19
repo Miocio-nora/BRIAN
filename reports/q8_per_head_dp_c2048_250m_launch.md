@@ -155,3 +155,26 @@ remain disabled. Model-only checkpoints are retained at 15k, 30k, 45k, 60k,
 75k, and final; `checkpoint_latest` continues to preserve resumable optimizer
 state every 5k. At Q8 steady throughput, pure 5B training is approximately 8.3
 hours and end-to-end runtime is expected near 9 hours.
+
+## 9. 5B Launch Status
+
+Q9 started on GPU 0-1 at `2026-07-19 17:23 JST` in tmux session
+`brian_q9_per_head_dp_c2048_5b_g01`:
+
+```bash
+bash scripts/run_q9_per_head_dp_c2048_5b.sh
+```
+
+W&B run: `mio_nora/brian-sphere-llm/glshdyh4`
+
+Startup acceptance passed step 170 with approximately 164k token/s sustained
+throughput, 0.399 seconds per optimizer step, and 74,279 MiB peak allocation per
+rank. Loss remained finite, all 135 expected parameters participated in DDP,
+and no OOM, NCCL, or data/config mismatch was observed. At this measured rate,
+pure training is approximately 8.5 hours; legacy validation, checkpoint I/O,
+and synchronization put the expected end-to-end runtime near 9 hours.
+
+Capability benchmarks remain intentionally outside the active DDP process.
+After training exits, reasoning S600 and public S600 will be evaluated against
+the retained 15k/30k/45k/60k/75k/final model-only checkpoints so benchmark
+latency cannot leave the second rank blocked in a collective operation.
