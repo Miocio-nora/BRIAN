@@ -443,9 +443,15 @@ The C128-U16 endpoint has passed a bounded DDP2 smoke but its formal run is held
 because U8 did not improve over U4. Its prepared contract and resource
 measurements are recorded in
 [reports/q6_fb_c128_u16_250m_preparation.md](./reports/q6_fb_c128_u16_250m_preparation.md).
-The selected formal C128-U4 run keeps global batch 32 on two B200 GPUs and uses
-the accepted Triton fused-reader/incremental backend. Its launch contract,
-checkpoint schedule, expected cost, and operational commands are recorded in
+The formal C128-U4 run reached step 75,000 of 76,294 before a rank-0-only
+benchmark exceeded the post-benchmark NCCL barrier timeout. Its checkpoint was
+intact and the missing S600 suites were recovered after a node reboot. At 75k,
+FB reached 1.3780 validation loss, 81.67% reasoning exact, 94.00% teacher
+accuracy, and 39.33% public average. This is effectively tied with DP C2048 on
+validation and public S600, slightly worse on both reasoning metrics, and much
+slower to train. The final 1,294 updates are therefore not resumed; DP C2048 is
+the default platform for subsequent cache and routing ablations. The complete
+trajectory, failure diagnosis, aligned comparison, and decision are recorded in
 [reports/cpbc_fb_c128_u4_5b_launch.md](./reports/cpbc_fb_c128_u4_5b_launch.md).
 
 ## Live Route Sphere

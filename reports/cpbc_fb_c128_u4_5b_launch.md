@@ -1,6 +1,6 @@
 # CPBC-FB C128-U4 Formal 5B Launch
 
-**Date:** 2026-07-18
+**Date:** 2026-07-18 to 2026-07-19
 
 **Branch:** `rc-kv-triton-reader`
 
@@ -124,3 +124,62 @@ restoration. The training log advances directly from step 15,000 to 15,001;
 initial post-resume acceptance reached step 15,013 at a 41.4k token/s median,
 with finite loss, approximately 0.99 normalized block entropy, and 16/16
 distinct monitored paths.
+
+## 7. Step-75k Boundary And Driver Recovery
+
+The resumed run completed update 75,000 of 76,294, or 98.3% of the nominal 5B
+budget. Validation, `checkpoint_latest`, and the retained model-only
+`checkpoint_step_00075000` were written successfully. Only 1,294 updates
+remained.
+
+The process then failed in benchmark orchestration rather than model compute.
+Rank 1 entered the post-benchmark NCCL barrier while rank 0 performed
+validation, checkpoint I/O, and the rank-0-only capability suite. The wait
+exceeded the configured 1,800-second process-group timeout. NCCL terminated
+both ranks while CUDA teardown was active, leaving them blocked in the NVIDIA
+UVM write lock and making `nvidia-smi` itself unresponsive until the node was
+rebooted.
+
+After reboot, reasoning S600 and public S600 were rerun directly from the
+retained 75k checkpoint as independent single-GPU processes. No DDP process
+group or training resume was involved. Both suites completed normally. Future
+training jobs must not keep a rank in an active NCCL barrier while another rank
+runs an unbounded external benchmark; checkpoint capability evaluation should
+be an out-of-process post-checkpoint job.
+
+## 8. Capability Matrix And Decision
+
+| Step | Val loss | PPL | Reason exact | Teacher acc | Public avg |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 15,000 | 1.6380 | 5.1448 | 0.6767 | 0.8985 | 0.3717 |
+| 30,000 | 1.5120 | 4.5356 | 0.7783 | 0.9187 | 0.3617 |
+| 45,000 | 1.4505 | 4.2652 | 0.7533 | 0.9292 | 0.3700 |
+| 60,000 | 1.4062 | 4.0804 | 0.7900 | 0.9349 | 0.3883 |
+| 75,000 | **1.3780** | **3.9671** | **0.8167** | **0.9400** | **0.3933** |
+
+The 75k public result consists of 59.5% PIQA, 26.0% HellaSwag, and 32.5%
+ARC-Easy. Routing remained active: validation normalized block entropy was
+0.9890, path diversity was 0.9766, and mean route length was 13.125. The run
+therefore did not end in numerical or aggregate routing collapse.
+
+At the aligned 75k checkpoint:
+
+| Model | Val loss | PPL | Reason exact | Teacher acc | Public avg |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Matched Transformer baseline | **1.3737** | **3.9499** | **0.8767** | **0.9668** | 0.3883 |
+| CPBC-DP C2048-U1 | 1.3791 | 3.9713 | 0.8217 | 0.9484 | 0.3900 |
+| CPBC-FB C128-U4 | 1.3780 | 3.9671 | 0.8167 | 0.9400 | **0.3933** |
+
+FB is effectively tied with DP on validation and the 600-example public suite,
+but is 0.50 percentage points lower on reasoning exact and 0.84 points lower
+on teacher accuracy. Both routed variants remain materially behind the matched
+baseline on reasoning. The small public differences are only a few examples
+and are not evidence of an FB capability advantage.
+
+Continuing the final 1.7% of updates is not justified. The 75k checkpoint is
+sufficient for this comparison, and FB C128-U4 does not provide a quality gain
+that pays for its much lower training throughput. Further cache-layout,
+cache-dimension, and routing ablations should use the substantially faster
+CPBC-DP C2048 path first. FB remains a semantic reference for experiments that
+specifically require full-bank visibility, not the default development
+platform.
