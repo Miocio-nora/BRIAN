@@ -295,3 +295,19 @@ capability evaluation and final for LM/teacher-forced analysis.
 The complete checkpoint table is uploaded to the original W&B run under
 `benchmark_backfill/*`. Raw reports remain under the Q9 run directory's
 `benchmarks/` folder.
+
+## 8. Capability V2 Follow-Up
+
+The full-split step-75k evaluation adds 20,854 public examples. Strict per-head
+d32 reaches 35.52% micro accuracy, compared with 35.40% for the plain baseline
+and 34.60% for shared DP. A paired exact McNemar test finds no per-head versus
+baseline difference (`p=0.649`), while the per-head recovery over shared DP is
+significant (`p=0.00076`). The 1.84-point Public S600 lead over the baseline
+therefore does not generalize into a resolved full-suite lead.
+
+GSM8K and MATH-500 are at the floor for all three models: per-head d32 answers
+14/1,319 and 6/500 correctly, respectively. These results strengthen the Q9
+decision: retain per-head as the stronger RC-KV cache implementation, but do
+not promote it over the baseline on overall capability. Full task tables and
+paired statistics are recorded in
+[capability_benchmark_v2_5b_results.md](./capability_benchmark_v2_5b_results.md).

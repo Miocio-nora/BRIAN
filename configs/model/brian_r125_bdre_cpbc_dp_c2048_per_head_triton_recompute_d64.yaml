@@ -1,0 +1,6 @@
+extends: brian_r125_bdre_cpbc_dp_c2048_per_head_triton_recompute_d32.yaml
+model_name: brian_r125_bdre_cpbc_dp_c2048_per_head_triton_recompute_d64
+
+# No forced dimensional compression inside each 64-dimensional attention head.
+bdre_key_dim: 64
+bdre_value_dim: 64

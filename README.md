@@ -140,6 +140,14 @@ GSM8K and MATH-500 with pinned dataset revisions and Math-Verify grading. These
 new reports are supplementary; they do not rewrite prior S600 scores. The exact
 contract and rollout guidance are recorded in
 [reports/capability_benchmark_v2_preparation.md](./reports/capability_benchmark_v2_preparation.md).
+The first step-75k matrix is complete. Across all 20,854 public examples,
+strict per-head d32 scores 35.52%, the plain baseline 35.40%, and shared DP
+34.60%. Per-head is statistically tied with the baseline but significantly
+recovers the shared-cache deficit. GSM8K and MATH-500 remain near a 1% floor
+for all three models and are not used as the primary selector at this scale.
+The combined S600, PPL, full-task, paired-significance, and classic-math table
+is in
+[reports/capability_benchmark_v2_5b_results.md](./reports/capability_benchmark_v2_5b_results.md).
 
 An additional fine-grained route-pool branch was implemented:
 `configs/train/finegrained_r125_2b_pool16_ain_coverage_no23.yaml`. The initial
@@ -261,6 +269,13 @@ uses substantially more memory than shared cache. Complete Q8 context is in
 [reports/q8_per_head_dp_c2048_250m_launch.md](./reports/q8_per_head_dp_c2048_250m_launch.md).
 The final Q9 matrix, matched baseline comparison, systems cost, and decision are
 in [reports/q9_per_head_dp_c2048_5b_report.md](./reports/q9_per_head_dp_c2048_5b_report.md).
+The next controlled capacity ablation is Q10 strict per-head d64 on the same
+DP-C2048-U1 5B contract. It removes Q9's remaining 2x compression within each
+head while retaining head isolation. A production DDP2 smoke completed at
+134k token/s with 107,542 MiB peak allocation per rank and no missing
+gradients, so the run is accepted for B200. Configuration, cost, and launch
+status are tracked in
+[reports/q10_per_head_d64_dp_c2048_5b_launch.md](./reports/q10_per_head_d64_dp_c2048_5b_launch.md).
 
 The additive `synchronous_prefix` backend is now named **Chunkwise Progressive
 Bank Completion (CPBC)**. CPBC is an approximate prefill procedure in which each

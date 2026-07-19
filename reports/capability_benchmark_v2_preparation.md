@@ -2,7 +2,7 @@
 
 **Date:** 2026-07-20
 
-**Status:** implemented and validated; no model evaluation launched
+**Status:** implemented and validated; first three-model 5B matrix completed
 
 ## 1. Motivation
 
@@ -137,3 +137,17 @@ ablation.
 - The complete repository suite passes: `673 passed`.
 - The environment remains `torch 2.11.0+cu128`; Math-Verify is CPU-only and
   does not alter the B200 CUDA package contract.
+
+## 7. First Matrix Outcome
+
+The step-75k baseline, shared-DP d32, and strict per-head d32 matrix completed
+on 2026-07-20. Across all 20,854 public examples, strict per-head d32 scores
+35.52% versus 35.40% for the baseline (`p=0.649`) and 34.60% for shared DP
+(`p=0.00076` for per-head versus shared). Per-head therefore recovers the
+shared-cache degradation but does not establish an overall win over the plain
+Transformer.
+
+All three models score approximately 1% on the strict GSM8K/MATH-500 suite, so
+that suite is retained as a hard-tail guardrail rather than a primary selector
+at this scale. The full table and paired analysis are in
+[capability_benchmark_v2_5b_results.md](./capability_benchmark_v2_5b_results.md).

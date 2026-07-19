@@ -1,0 +1,29 @@
+extends: q9_cpbc_r125_5b_dp_u1_c2048_per_head_d32_ddp2_legacyval.yaml
+run_name: q10_cpbc_r125_5b_dp_u1_c2048_per_head_d64_ddp2_legacyval
+model_config: ../model/brian_r125_bdre_cpbc_dp_c2048_per_head_triton_recompute_d64.yaml
+
+checkpoint_benchmarks:
+  output_dir: runs/q10_cpbc_r125_5b_dp_u1_c2048_per_head_d64_ddp2_legacyval/benchmarks
+  label: q10_cpbc_r125_5b_dp_u1_c2048_per_head_d64_ddp2_legacyval
+
+wandb:
+  group: q10_cpbc_per_head_d64_dp_c2048_r125_5b
+  tags:
+    - q10_per_head_d64_dp_c2048
+    - strict_per_head_cache
+    - no_forced_head_compression
+    - d64
+    - cpbc_dp
+    - depth_prefix_visibility
+    - triton_fused_reader
+    - recompute_prefix
+    - c2048
+    - u1
+    - ddp2
+    - local_batch16
+    - global_batch32
+    - r125
+    - 5b
+    - balanced_data
+    - legacy_val
+    - benchmark_out_of_process
