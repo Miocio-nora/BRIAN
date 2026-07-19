@@ -84,6 +84,48 @@ the baseline.
 
 ## 5. Capability Shape
 
+### 5.1 Plain Baseline Versus Latest Per-Head DP
+
+Each cell below is `plain baseline / strict per-head DP`, evaluated on exactly
+the same generated samples and checkpoint step:
+
+| Step | Overall | Arithmetic | Copy | Reverse | Rewrite |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 15,000 | 73.50 / 67.67 | 38.67 / 17.33 | 98.67 / 97.33 | 91.33 / **98.67** | 65.33 / 57.33 |
+| 30,000 | 77.67 / 74.17 | 50.67 / 27.33 | 96.00 / 89.33 | 87.33 / **93.33** | 76.67 / **86.67** |
+| 45,000 | 80.50 / 71.33 | 52.67 / 36.00 | 98.00 / 84.00 | 88.00 / 85.33 | 83.33 / 80.00 |
+| 60,000 | 84.83 / 76.67 | 56.67 / 33.33 | 100.00 / 96.67 | 94.67 / **95.33** | 88.00 / 81.33 |
+| 75,000 | 87.67 / 79.50 | 69.33 / 40.00 | 100.00 / 97.33 | 99.33 / 93.33 | 82.00 / **87.33** |
+| 76,294 | 84.00 / 77.83 | 66.00 / 49.33 | 91.33 / **100.00** | 94.00 / 72.67 | 84.67 / **89.33** |
+
+The plain baseline wins overall reasoning at every boundary. The per-head DP
+model sometimes wins an individual family--early reverse, several rewrite
+boundaries, and final copy--but never converts those gains into a higher
+aggregate exact score. Arithmetic is the persistent deficit: per-head DP trails
+the baseline by 16.67 to 29.33 percentage points at every checkpoint.
+
+This gap is systematic rather than an unfavorable PPL checkpoint. From 30k
+onward per-head DP has lower validation PPL than the baseline, while reasoning
+exact remains 3.50 to 9.17 points lower:
+
+| Step | Baseline PPL | Per-head DP PPL | PPL delta | Baseline reason | Per-head DP reason | Reason delta |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 15,000 | **5.0902** | 5.1778 | +0.0876 | **73.50%** | 67.67% | -5.83 pp |
+| 30,000 | 4.4897 | **4.4683** | -0.0214 | **77.67%** | 74.17% | -3.50 pp |
+| 45,000 | 4.2283 | **4.1866** | -0.0417 | **80.50%** | 71.33% | -9.17 pp |
+| 60,000 | 4.0682 | **4.0321** | -0.0361 | **84.83%** | 76.67% | -8.17 pp |
+| 75,000 | 3.9499 | **3.9104** | -0.0395 | **87.67%** | 79.50% | -8.17 pp |
+| 76,294 | 3.9491 | **3.9022** | -0.0469 | **84.00%** | 77.83% | -6.17 pp |
+
+Teacher-forced results support the same distinction. At final, per-head DP
+beats the baseline on copy and rewrite token accuracy, but arithmetic remains
+82.06% versus 87.61%. The arithmetic gap is therefore a real next-token task
+gap, not only autoregressive exact-match amplification. In reverse, by contrast,
+the final teacher gap is only 1.15 points while exact is 21.33 points lower, so
+long-sequence error compounding explains most of that deficit.
+
+### 5.2 Evolution Within Per-Head DP
+
 The overall reasoning curve hides strong movement between task families:
 
 | Step | Overall | Arithmetic | Copy | Reverse | Rewrite |
@@ -138,6 +180,8 @@ materially instead of gently converging under a decay tail. This is a plausible
 source of the late family rebalancing, although the current checkpoints do not
 identify causality.
 
+### 5.3 Shared-DP Attribution
+
 At the selected 75k checkpoint, the reasoning-family comparison against the
 shared-cache model is not uniformly worse:
 
@@ -153,6 +197,23 @@ than producing a uniform gain. It strongly favors reverse at this checkpoint
 while losing arithmetic and rewrite exactness. Teacher accuracy continuing to
 rise as exact generation fluctuates also indicates sequence-level error
 propagation that PPL cannot expose.
+
+The three-way 75k comparison identifies which differences predate per-head
+cache:
+
+| Family | Plain baseline | Shared DP | Per-head DP |
+| --- | ---: | ---: | ---: |
+| Arithmetic | **69.33%** | 48.67% | 40.00% |
+| Copy | **100.00%** | **100.00%** | 97.33% |
+| Reverse | **99.33%** | 84.00% | 93.33% |
+| Rewrite | 82.00% | **96.00%** | 87.33% |
+
+Most of the arithmetic deficit is already present in shared DP relative to the
+plain Transformer; strict per-head isolation adds another 8.67-point loss.
+Shared DP strongly favors rewrite, while per-head gives back 8.67 points of that
+gain and recovers 9.33 points of reverse. Per-head is therefore a second-stage
+redistribution inside an existing DP/RC-KV capability profile, not the sole
+source of the baseline reasoning gap.
 
 ## 6. Routing and Systems Cost
 
