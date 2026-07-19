@@ -1,0 +1,11 @@
+extends: brian_r125_bdre_cpbc_dp_c2048_triton_fused_reader_incremental.yaml
+model_name: brian_r125_bdre_cpbc_dp_c2048_per_head_triton_recompute_d32
+
+# Strict head isolation with the parameter-matched cache dimension.
+bdre_cache_layout: per_head
+bdre_key_dim: 32
+bdre_value_dim: 32
+
+execution:
+  # Equivalent to incremental_exact, but faster for the larger per-head payload.
+  prefix_compile: recompute

@@ -1,0 +1,40 @@
+extends: q1_cpbc_r125_250m_dp_u1_c128_triton_ddp2_legacyval.yaml
+run_name: q8_cpbc_r125_250m_dp_u1_c2048_per_head_d32_ddp2_legacyval
+model_config: ../model/brian_r125_bdre_cpbc_dp_c2048_per_head_triton_recompute_d32.yaml
+resume: true
+
+stateful_tbptt:
+  chunk_size: 2048
+  detach_interval_chunks: 1
+
+# Capability suites run after training as independent single-GPU jobs. Keeping
+# them outside the active process group avoids rank-0 benchmark/NCCL timeouts.
+checkpoint_benchmarks:
+  enabled: false
+  output_dir: runs/q8_cpbc_r125_250m_dp_u1_c2048_per_head_d32_ddp2_legacyval/benchmarks
+  label: q8_cpbc_r125_250m_dp_u1_c2048_per_head_d32_ddp2_legacyval
+
+post_train_benchmarks:
+  enabled: false
+
+wandb:
+  group: q8_cpbc_per_head_dp_c2048_r125_250m
+  tags:
+    - q8_per_head_dp_c2048
+    - strict_per_head_cache
+    - parameter_matched
+    - d32
+    - cpbc_dp
+    - depth_prefix_visibility
+    - triton_fused_reader
+    - recompute_prefix
+    - c2048
+    - u1
+    - ddp2
+    - local_batch16
+    - global_batch32
+    - r125
+    - token_budget_250m
+    - balanced_data
+    - legacy_val
+    - benchmark_out_of_process

@@ -236,6 +236,12 @@ and checkpoint boundaries are in
 [reports/bdre_strict_per_head_cache_report.md](./reports/bdre_strict_per_head_cache_report.md);
 matched-backend profiling and DDP acceptance are in
 [reports/bdre_per_head_triton_optimization_report.md](./reports/bdre_per_head_triton_optimization_report.md).
+The parameter-matched per-head d32 cache is also prepared on the faster
+CPBC-DP C2048-U1 path. Its DDP2 production smoke reaches approximately 147.3k
+global token/s at local BS16/S2048 with 74.3 GiB peak allocation per rank, so
+the 250M pilot retains global batch 32 without accumulation. Configuration,
+benchmark-safe out-of-process evaluation policy, and launch evidence are in
+[reports/q8_per_head_dp_c2048_250m_launch.md](./reports/q8_per_head_dp_c2048_250m_launch.md).
 
 The additive `synchronous_prefix` backend is now named **Chunkwise Progressive
 Bank Completion (CPBC)**. CPBC is an approximate prefill procedure in which each
