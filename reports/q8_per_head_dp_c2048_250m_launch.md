@@ -178,3 +178,9 @@ Capability benchmarks remain intentionally outside the active DDP process.
 After training exits, reasoning S600 and public S600 will be evaluated against
 the retained 15k/30k/45k/60k/75k/final model-only checkpoints so benchmark
 latency cannot leave the second rank blocked in a collective operation.
+
+Q9 subsequently completed the full 5B budget and all six out-of-process
+benchmark boundaries. Its final PPL is 3.9022; checkpoint 75k reaches 79.50%
+reasoning exact and 40.67% public S600. The complete matched comparison,
+systems cost, and revised role of the 250M pilot are in
+[q9_per_head_dp_c2048_5b_report.md](./q9_per_head_dp_c2048_5b_report.md).

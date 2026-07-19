@@ -242,12 +242,14 @@ at local BS16/S2048 with 74.3 GiB peak allocation per rank. It finished at PPL
 8.290, 21.17% reasoning exact, 74.45% teacher accuracy, and 32.83% public S600.
 These early results are a systems/learning-signal screen rather than an
 architecture conclusion because the historical C128 comparison changes four
-mechanisms at once. The matched 5B follow-up started on GPU 0-1 on 2026-07-19;
-its accepted startup sustains about 164k token/s with 74.3 GiB peak allocation
-per rank. It retains six model boundaries for out-of-process capability
-evaluation after DDP exits. Configuration, complete Q8 results, limitations,
-and the live Q9 contract are in
+mechanisms at once. The matched 5B follow-up completed all 5B tokens and six
+out-of-process benchmark boundaries. Strict per-head d32 reaches final PPL
+3.9022 and a best public S600 of 40.67%, both ahead of shared-cache RC-KV, while
+its best reasoning exact remains lower at 79.50%. It is also 22.2% slower and
+uses substantially more memory than shared cache. Complete Q8 context is in
 [reports/q8_per_head_dp_c2048_250m_launch.md](./reports/q8_per_head_dp_c2048_250m_launch.md).
+The final Q9 matrix, matched baseline comparison, systems cost, and decision are
+in [reports/q9_per_head_dp_c2048_5b_report.md](./reports/q9_per_head_dp_c2048_5b_report.md).
 
 The additive `synchronous_prefix` backend is now named **Chunkwise Progressive
 Bank Completion (CPBC)**. CPBC is an approximate prefill procedure in which each
