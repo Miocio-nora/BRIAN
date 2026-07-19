@@ -4,7 +4,7 @@
 
 **Branch:** `rc-kv-per-head-cache`
 
-**Status:** production-shape smoke accepted; formal launch pending
+**Status:** formal 5B run active on GPU 0-1
 
 ## 1. Question
 
@@ -84,3 +84,18 @@ The 75k checkpoint remains the primary capability-selection boundary. The
 legacy S600 reports and Capability V2 full public suite should be run after DDP
 exits. Full GSM8K/MATH-500 is optional for Q10 because the completed three-way
 matrix established that it is at the accuracy floor for this scale.
+
+## 5. Launch Status
+
+Q10 started at `2026-07-20 06:03 JST` in tmux session
+`brian_q10_per_head_d64_dp_c2048_5b_g01` on physical GPU 0-1.
+
+W&B run: `mio_nora/brian-sphere-llm/n4y1oj27`
+
+Startup acceptance passed step 142. Post-compilation throughput reached
+approximately 137k token/s, loss remained finite, all 135 expected parameters
+participated in DDP, and no OOM or NCCL error occurred. NVIDIA reserved memory
+was approximately 120,748 MiB per rank; PyTorch peak allocated memory remained
+within the 107,542 MiB smoke bound. The run is resumable through
+`checkpoint_latest` and remains on the expected 10.5-11.5 hour end-to-end
+schedule.

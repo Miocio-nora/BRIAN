@@ -276,6 +276,8 @@ head while retaining head isolation. A production DDP2 smoke completed at
 gradients, so the run is accepted for B200. Configuration, cost, and launch
 status are tracked in
 [reports/q10_per_head_d64_dp_c2048_5b_launch.md](./reports/q10_per_head_d64_dp_c2048_5b_launch.md).
+The formal Q10 5B run is active on GPU 0-1 under tmux session
+`brian_q10_per_head_d64_dp_c2048_5b_g01` (W&B `n4y1oj27`).
 
 The additive `synchronous_prefix` backend is now named **Chunkwise Progressive
 Bank Completion (CPBC)**. CPBC is an approximate prefill procedure in which each
