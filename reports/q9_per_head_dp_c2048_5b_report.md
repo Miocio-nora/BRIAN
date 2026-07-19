@@ -84,6 +84,60 @@ the baseline.
 
 ## 5. Capability Shape
 
+The overall reasoning curve hides strong movement between task families:
+
+| Step | Overall | Arithmetic | Copy | Reverse | Rewrite |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 15,000 | 67.67% | 17.33% | 97.33% | **98.67%** | 57.33% |
+| 30,000 | 74.17% | 27.33% | 89.33% | 93.33% | 86.67% |
+| 45,000 | 71.33% | 36.00% | 84.00% | 85.33% | 80.00% |
+| 60,000 | 76.67% | 33.33% | 96.67% | **95.33%** | 81.33% |
+| 75,000 | **79.50%** | 40.00% | 97.33% | 93.33% | 87.33% |
+| 76,294 | 77.83% | **49.33%** | **100.00%** | 72.67% | **89.33%** |
+
+From 75k to final, arithmetic gains 14 correct samples, copy gains four, and
+rewrite gains three. Reverse alone loses 31 samples, producing the net
+10-sample overall regression. The final checkpoint is therefore not globally
+weaker; it shifts capability away from reverse while improving every other
+family.
+
+Difficulty aggregates are also non-monotonic:
+
+| Step | Easy | Medium | Hard |
+| ---: | ---: | ---: | ---: |
+| 15,000 | 69.00% | 71.50% | 62.50% |
+| 30,000 | 77.00% | 74.50% | 71.00% |
+| 45,000 | 79.50% | 72.00% | 62.50% |
+| 60,000 | 89.00% | 65.00% | **76.00%** |
+| 75,000 | 94.00% | **77.50%** | 67.00% |
+| 76,294 | **97.00%** | 74.00% | 62.50% |
+
+Easy performance improves almost monotonically, while medium and hard
+performance oscillate. In arithmetic specifically, easy rises from 30% to
+94%, but final medium and hard remain only 34% and 20%. The run learns the
+simple template reliably without establishing equally stable long-composition
+behavior.
+
+The final reverse regression is length-sensitive:
+
+| Reverse subset | 75k exact | Final exact | 75k teacher | Final teacher | Answer tokens |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Easy | 100% | 98% | 100% | 99.75% | 8 |
+| Medium | 100% | 76% | 100% | 98.50% | 16 |
+| Hard | 80% | 44% | 99.38% | 97.69% | 32 |
+
+For reverse-hard, the sequence-level change is almost fully explained by
+token-error compounding: `0.99375^32 = 81.8%` and `0.976875^32 = 47.3%`, close
+to the observed 80% and 44% exact rates. A 1.69-point teacher-token regression
+therefore becomes a 36-point exact regression. This is exposure sensitivity,
+not evidence of a global reasoning collapse.
+
+Q9 also keeps the learning rate at `3e-4` through the final update. The last
+1,294 steps are therefore still capable of moving task-specific behavior
+materially instead of gently converging under a decay tail. This is a plausible
+source of the late family rebalancing, although the current checkpoints do not
+identify causality.
+
 At the selected 75k checkpoint, the reasoning-family comparison against the
 shared-cache model is not uniformly worse:
 
@@ -107,6 +161,15 @@ than in the shared-cache run. The per-head reasoning block entropy rises from
 0.6896 at 15k to 0.8866 at final, compared with 0.9499 for shared cache at
 final. This is not path collapse, but it is a domain-specific concentration
 signal that may contribute to the uneven capability profile.
+
+For reverse-hard specifically, 75k to final leaves mean route length fixed at
+15 and leaves cache key/value weight entropy effectively unchanged
+(`1.640/1.835` to `1.633/1.835`). Block entropy declines modestly from 0.9005
+to 0.8805 and route entropy from 1.7816 to 1.6859. All checkpoint evaluations
+have zero routing noise and zero random-route overrides. The evidence therefore
+rules out stochastic evaluation and cache-weight collapse; it shows mild route
+concentration, but does not establish that concentration as the cause of the
+reverse-token regression.
 
 | System metric | Plain baseline | Shared RC-KV | Strict per-head RC-KV |
 | --- | ---: | ---: | ---: |
