@@ -269,15 +269,18 @@ uses substantially more memory than shared cache. Complete Q8 context is in
 [reports/q8_per_head_dp_c2048_250m_launch.md](./reports/q8_per_head_dp_c2048_250m_launch.md).
 The final Q9 matrix, matched baseline comparison, systems cost, and decision are
 in [reports/q9_per_head_dp_c2048_5b_report.md](./reports/q9_per_head_dp_c2048_5b_report.md).
-The next controlled capacity ablation is Q10 strict per-head d64 on the same
+The Q10 strict per-head d64 capacity ablation is complete on the same
 DP-C2048-U1 5B contract. It removes Q9's remaining 2x compression within each
-head while retaining head isolation. A production DDP2 smoke completed at
-134k token/s with 107,542 MiB peak allocation per rank and no missing
-gradients, so the run is accepted for B200. Configuration, cost, and launch
-status are tracked in
+head while retaining head isolation. Q10 finishes at PPL 3.9335 and reaches a
+best Reason S600 of 84.17%, recovering 4.67 points over d32, but matched 75k
+Public V2 is an exact tie at 7,408/20,854 (`35.52%`, paired `p=1.0`). d64 is
+16.4% slower than d32 and raises peak allocation from 72.5 GiB to 105.0 GiB,
+so d32 remains the practical default while d64 is retained as a high-capacity
+research variant. The checkpoint matrix, paired tests, routing audit, and
+systems result are in
 [reports/q10_per_head_d64_dp_c2048_5b_launch.md](./reports/q10_per_head_d64_dp_c2048_5b_launch.md).
-The formal Q10 5B run is active on GPU 0-1 under tmux session
-`brian_q10_per_head_d64_dp_c2048_5b_g01` (W&B `n4y1oj27`).
+The four-model Public V2 table is in
+[reports/capability_benchmark_v2_5b_results.md](./reports/capability_benchmark_v2_5b_results.md).
 
 The additive `synchronous_prefix` backend is now named **Chunkwise Progressive
 Bank Completion (CPBC)**. CPBC is an approximate prefill procedure in which each
